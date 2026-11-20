@@ -107,8 +107,11 @@ namespace HexEngine
 
 		void SetTexture(MaterialTexture type, const std::shared_ptr<ITexture2D>& texture);
 
-		void SetStandardShader(const std::shared_ptr<IShader>& shader);
+		void SetStandardShader(const std::shared_ptr<IShader>& shader);   // ignores nullptr (keeps the current shader)
 		void SetShadowMapShader(const std::shared_ptr<IShader>& shader);
+		// Explicitly drop the standard shader (SetStandardShader(nullptr) is a
+		// no-op by design) - used to force a graph recompile of a stale cache.
+		void ClearStandardShader();
 
 		std::shared_ptr<IShader> GetStandardShader() const;
 		std::shared_ptr<IShader> GetShadowMapShader() const;

@@ -246,6 +246,12 @@ namespace HexEngine
 		}
 	}
 
+	void Material::ClearStandardShader()
+	{
+		std::unique_lock lock(_lock);
+		_standardShader.reset();
+	}
+
 	void Material::SetShadowMapShader(const std::shared_ptr<IShader>& shader)
 	{
 		std::unique_lock lock(_lock);
