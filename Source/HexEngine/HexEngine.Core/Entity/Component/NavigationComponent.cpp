@@ -20,6 +20,16 @@
 
 namespace HexEngine
 {
+	namespace
+	{
+		NavigationComponent::SegmentGateFn s_segmentGate = nullptr;
+	}
+
+	void NavigationComponent::SetSegmentGate(SegmentGateFn gate)
+	{
+		s_segmentGate = gate;
+	}
+
 	NavigationComponent::NavigationComponent(Entity* entity) :
 		UpdateComponent(entity)
 	{
@@ -77,6 +87,7 @@ namespace HexEngine
 	{
 		_result.path.clear();
 		_pathIndex = 0;
+		_heldByGate = false;
 	}
 
 	void NavigationComponent::Serialize(json& data, JsonFile* file)
@@ -372,6 +383,15 @@ namespace HexEngine
 					delta = horizontalTo(_result.path[_pathIndex]);
 					length = delta.Length();
 				}
+
+				// Movement gate (e.g. a pedestrian crossing at a red signal): wait
+				// where we are until it opens. The path and index are kept.
+				if (s_segmentGate != nullptr && !s_segmentGate(currentPos, _result.path[_pathIndex]))
+				{
+					_heldByGate = true;
+					return;
+				}
+				_heldByGate = false;
 
 				if (length <= kMinDirectionEpsilon)
 					return;
