@@ -17,6 +17,7 @@
 #include "AmbientSoundscapeComponent.hpp"
 #include "AmbientZoneComponent.hpp"
 #include "AmbientEmitterComponent.hpp"
+#include "PathMoverComponent.hpp"
 #include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
 #include <algorithm>
 #include <cfloat>
@@ -45,6 +46,7 @@ namespace
 		"AmbientSoundscapeComponent",
 		"AmbientZoneComponent",
 		"AmbientEmitterComponent",
+		"PathMoverComponent",
 	};
 
 	math::Vector3 ResolveRoadForwardVector(RoadComponent::ForwardAxis axis)
@@ -95,6 +97,7 @@ bool CitySimulationInterface::Create()
 	REG_CLASS(AmbientSoundscapeComponent);
 	REG_CLASS(AmbientZoneComponent);
 	REG_CLASS(AmbientEmitterComponent);
+	REG_CLASS(PathMoverComponent);
 
 	// Walkers wait at signal-controlled crossings showing DON'T WALK.
 	NavigationComponent::SetSegmentGate(&TrafficSignalControllerComponent::IsPedestrianStepAllowed);

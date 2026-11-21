@@ -4,6 +4,8 @@
 #include "TrafficVehicleComponent.hpp"
 #include "CityAssetPins.hpp"
 #include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
+#include <HexEngine.Core/Entity/Component/DayNightCycleComponent.hpp>
+#include <cmath>
 
 namespace
 {
@@ -230,7 +232,43 @@ void TrafficManagerComponent::UpdateSpawner(TrafficSpawnerComponent* spawner, He
 	const math::Vector3 spawnerPosition = spawner->GetEntity()->GetWorldTM().Translation();
 	const float distanceToSpawner = (spawnerPosition - cameraPosition).Length();
 	const float activationDistance = std::min(spawner->GetActivationDistance(), _globalActivationDistance);
-	const bool active = distanceToSpawner <= std::max(activationDistance, 0.0f);
+	// Spawn only between the min distance (out of the player's sight, so cars
+	// don't pop into existence in front of them) and the activation distance.
+	const bool active = distanceToSpawner <= std::max(activationDistance, 0.0f) &&
+		distanceToSpawner >= spawner->GetMinActivationDistance();
+
+	// Day/night density: blend the spawner's caps by the scene clock. Spawned
+	// cars roam the network indefinitely, so when the cap drops (evening) trim
+	// the surplus - one car at a time, the farthest from the camera, and only
+	// once it is out of sight.
+	const int32_t dayCap = spawner->GetMaxActiveVehicles();
+	const int32_t nightCap = spawner->GetNightMaxActiveVehicles();
+	const int32_t cap = static_cast<int32_t>(std::lround(dayCap + (nightCap - dayCap) * _nightFactor));
+	auto& spawned = spawner->ActiveVehicles();
+	if (static_cast<int32_t>(spawned.size()) > cap)
+	{
+		const float hideDistance = std::max(120.0f, spawner->GetMinActivationDistance());
+		size_t farthest = spawned.size();
+		float farthestDist = hideDistance;
+		for (size_t i = 0; i < spawned.size(); ++i)
+		{
+			auto* v = spawned[i];
+			if (v == nullptr || v->IsPendingDeletion())
+				continue;
+			const float d = (v->GetWorldTM().Translation() - cameraPosition).Length();
+			if (d > farthestDist)
+			{
+				farthestDist = d;
+				farthest = i;
+			}
+		}
+		if (farthest < spawned.size())
+		{
+			spawned[farthest]->DeleteMe();
+			spawned.erase(spawned.begin() + farthest);
+			--activeGlobalCount;
+		}
+	}
 
 	if (!active)
 	{
@@ -258,7 +296,7 @@ void TrafficManagerComponent::UpdateSpawner(TrafficSpawnerComponent* spawner, He
 	int32_t spawnedThisFrame = 0;
 	while (timer >= interval && spawnedThisFrame < kMaxCatchUpSpawnsPerFrame)
 	{
-		if (static_cast<int32_t>(spawner->ActiveVehicles().size()) >= spawner->GetMaxActiveVehicles())
+		if (static_cast<int32_t>(spawner->ActiveVehicles().size()) >= cap)
 			break;
 		if (activeGlobalCount >= _globalMaxActiveVehicles)
 			break;
@@ -326,6 +364,18 @@ void TrafficManagerComponent::Update(float frameTime)
 	auto* camera = scene->GetMainCamera();
 	if (camera == nullptr || camera->GetEntity() == nullptr)
 		return;
+
+	// Night factor from the scene clock (dusk 17.5-18.5 h, dawn 5.5-6.5 h -
+	// the same ramps as the ambient soundscape).
+	{
+		std::vector<HexEngine::DayNightCycleComponent*> clocks;
+		scene->GetComponents<HexEngine::DayNightCycleComponent>(clocks);
+		const float h = (!clocks.empty() && clocks[0] != nullptr) ? clocks[0]->GetCurrentTimeHours() : 12.0f;
+		if (h >= 6.5f && h < 17.5f) _nightFactor = 0.0f;
+		else if (h >= 17.5f && h < 18.5f) _nightFactor = h - 17.5f;
+		else if (h >= 5.5f && h < 6.5f) _nightFactor = 1.0f - (h - 5.5f);
+		else _nightFactor = 1.0f;
+	}
 
 	// Rebuild the spatial grid ONCE per frame, before any vehicle ticks
 	// and before spawn-clearance checks. Drops per-vehicle avoidance

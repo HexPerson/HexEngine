@@ -184,6 +184,7 @@
     <ClInclude Include="AmbientSoundscapeComponent.hpp" />
     <ClInclude Include="AmbientZoneComponent.hpp" />
     <ClInclude Include="AmbientEmitterComponent.hpp" />
+    <ClInclude Include="PathMoverComponent.hpp" />
     <ClInclude Include="VehicleComponent.hpp" />
   </ItemGroup>
   <ItemGroup>
@@ -206,6 +207,7 @@
     <ClCompile Include="AmbientSoundscapeComponent.cpp" />
     <ClCompile Include="AmbientZoneComponent.cpp" />
     <ClCompile Include="AmbientEmitterComponent.cpp" />
+    <ClCompile Include="PathMoverComponent.cpp" />
     <ClCompile Include="VehicleComponent.cpp" />
   </ItemGroup>
 </Project>

@@ -23,6 +23,7 @@ private:
 private:
 	bool _enabled = true;
 	bool _wasGameRunning = false;
+	float _nightFactor = 0.0f;   // runtime: 0 day .. 1 night, from the scene clock
 	int32_t _globalMaxActiveVehicles = 200;
 	float _globalActivationDistance = 500.0f;
 	bool _drawDebug = true;
