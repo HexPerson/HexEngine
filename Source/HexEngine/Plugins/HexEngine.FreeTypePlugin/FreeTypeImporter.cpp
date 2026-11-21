@@ -29,11 +29,19 @@ void FreeTypeImporter::Destroy()
 {
 	HexEngine::g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 
-	FT_Done_FreeType(_library);
-
+	// The stroker allocates from the library's memory manager, so it must go first:
+	// FT_Stroker_Done after FT_Done_FreeType called through freed memory and crashed
+	// every editor shutdown.
 #if ENABLE_OUTLINE
-	FT_Stroker_Done(_stroker);
+	if (_stroker != nullptr)
+	{
+		FT_Stroker_Done(_stroker);
+		_stroker = nullptr;
+	}
 #endif
+
+	FT_Done_FreeType(_library);
+	_library = nullptr;
 }
 
 std::shared_ptr<HexEngine::IResource> FreeTypeImporter::LoadResourceFromFile(const fs::path& absolutePath, HexEngine::FileSystem* fileSystem, const HexEngine::ResourceLoadOptions* options /*= nullptr*/)

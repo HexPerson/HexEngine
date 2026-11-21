@@ -1,5 +1,7 @@
 
 #include "EditorUI.hpp"
+#include <HexEngine.Core/Environment/TimeManager.hpp>
+#include <HexEngine.Core/Scene/SceneManager.hpp>
 #include "../Editor.hpp"
 #include "Actions\ProjectManager.hpp"
 #include "Actions\ProjectGenerator.hpp"
@@ -1416,19 +1418,24 @@ namespace HexEditor
 		if (_prefabLoadCheckPending.exchange(false))
 			_prefabController.CheckLoadedScenesForOutOfDateInstances();
 
-		// RefreshList rebuilds the whole hierarchy. During play the game spawns and
-		// despawns entities every frame (traffic spawns a multi-entity car per
-		// frame at start), so rebuild at most every 0.25 s there; edit-mode
-		// changes still refresh on the next frame.
+		// RefreshList rebuilds the whole hierarchy (every entity -> a tree node,
+		// under the scene lock). Two cases must NOT trigger it as things change:
+		//  - while a scene is loading: the loader adds entities continuously, so a
+		//    per-frame rebuild is O(n) each frame (O(n^2) over the load) and holds
+		//    the scene lock the loader takes per entity - load got slower and
+		//    slower toward the end. Rebuild once when loading finishes.
+		//  - while the game runs: traffic spawns/despawns cars constantly; a full
+		//    rebuild of a ~13k-entity scene was a ~20 ms hitch every 0.25 s. The
+		//    list catches up when play is paused or stopped.
 		if (_entityList != nullptr && _entityListRefreshPending.load())
 		{
+			const bool loading = HexEngine::g_pEnv->_sceneManager != nullptr && HexEngine::g_pEnv->_sceneManager->IsLoadingScene();
 			const bool playing = _integrator.GetState() == GameTestState::Started;
-			_entityListRefreshCooldown = std::max(0.0f, _entityListRefreshCooldown - frameTime);
-			if (!playing || _entityListRefreshCooldown <= 0.0f)
+			const bool paused = HexEngine::g_pEnv->_timeManager != nullptr && HexEngine::g_pEnv->_timeManager->_simulationPaused;
+			if (!loading && (!playing || paused))
 			{
 				_entityListRefreshPending = false;
 				_entityList->RefreshList();
-				_entityListRefreshCooldown = playing ? 0.25f : 0.0f;
 			}
 		}
 

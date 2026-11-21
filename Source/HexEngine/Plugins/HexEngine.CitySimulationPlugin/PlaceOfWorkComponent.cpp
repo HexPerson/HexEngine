@@ -174,12 +174,12 @@ bool PlaceOfWorkComponent::OffersService(const std::string& tag) const
 
 std::string PlaceOfWorkComponent::ResolveEntryWaypointName() const
 {
-	return CityAnchors::ResolveName(GetEntity(), _entryWaypointEntityName);
+	return CityAnchors::ResolveNameCached(GetEntity(), _entryWaypointEntityName, _entryResolveCache);
 }
 
 std::string PlaceOfWorkComponent::ResolveParkingWaypointName() const
 {
-	return CityAnchors::ResolveName(GetEntity(), _parkingWaypointEntityName);
+	return CityAnchors::ResolveNameCached(GetEntity(), _parkingWaypointEntityName, _parkingResolveCache);
 }
 
 void PlaceOfWorkComponent::RebuildServiceTags()

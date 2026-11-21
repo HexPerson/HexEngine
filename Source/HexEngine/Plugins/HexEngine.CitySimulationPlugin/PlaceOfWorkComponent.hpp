@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HexEngine.Core/HexEngine.hpp>
+#include "CityAnchorUtils.hpp"
 
 class PlaceOfWorkComponent : public HexEngine::BaseComponent
 {
@@ -53,6 +54,10 @@ private:
 	std::vector<math::Vector2> _shiftWindows;
 	std::string _entryWaypointEntityName;
 	std::string _parkingWaypointEntityName;
+
+	// runtime memo for the Resolve*WaypointName calls (see CityAnchors::ResolveNameCached)
+	mutable CityAnchors::ResolveCache _entryResolveCache;
+	mutable CityAnchors::ResolveCache _parkingResolveCache;
 	std::string _serviceTagsCsv;
 	std::vector<std::string> _serviceTags;
 	int32_t _visitorCapacity = 12;

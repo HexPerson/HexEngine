@@ -96,10 +96,18 @@ namespace HexEngine
 
 		if (broadcast)
 		{
-			// Notify all entities first
+			// Only the parent acts on EntityDestroyed (it detaches us from its
+			// _children); scene-level listeners get it through the scene. This used
+			// to go to EVERY entity in the scene, each forwarding it to all its
+			// components and children - ~13k+ OnMessage calls per deleted entity,
+			// a visible hitch every time traffic despawned a car (one root + its
+			// generated parts) and ~3% of play-mode main-thread time.
 			EntityDestroyedMessage message(this);
 			message._entityId = GetId();
-			BroadcastMessage(&message);
+			if (_parent != nullptr)
+				_parent->OnMessage(&message, this);
+			if (_scene != nullptr)
+				_scene->BroadcastMessage(&message);
 		}
 
 		// Children are intentionally left attached. Scene::DestroyEntity walks our
@@ -278,7 +286,7 @@ namespace HexEngine
 		{
 			auto* component = _components.back().component;
 			const auto componentId = _components.back().id;
-			LOG_DEBUG("Destroying component with ID %d", componentId);
+			(void)componentId;
 			RemoveComponent(component);
 		}
 
@@ -292,6 +300,10 @@ namespace HexEngine
 		{
 			auto* child = _children.back();
 			_children.pop_back();
+			// We are being deleted: if the scene defers the child (mid-iteration) it
+			// must not keep a back-pointer to us.
+			if (child->_parent == this)
+				child->_parent = nullptr;
 			_scene->DestroyEntity(child);
 		}
 	}
@@ -1040,8 +1052,6 @@ namespace HexEngine
 
 			if (it != _children.end())
 			{
-				LOG_DEBUG("Removing child '%s' from parent '%s'", destroyMessage->_entity->GetName().c_str(), GetName().c_str());
-
 				// Detach both directions together. This message fires when the child is
 				// *marked* for removal (DeleteMe), not when it is finally deleted, so if
 				// we only drop it from our _children the child keeps a _parent pointer to
@@ -1201,15 +1211,13 @@ namespace HexEngine
 			component.component->Serialize(compData, file);
 
 			compsData.push_back(compData);
-
-			LOG_DEBUG("Saved component '%s::%s'", GetName().c_str(), component.component->GetComponentName())
 		}
 	}
 
 	Entity* Entity::LoadFromFile(json& data, const std::string& name, Scene* scene, JsonFile* file)
 	{
-		LOG_DEBUG("Loading entity '%s' from file", name.c_str());
-
+		// Per-entity / per-component load logging removed: on a 13k-entity scene
+		// it was ~20% of the loader thread (disk flush + log panel + bridge per line).
 		Entity* entity = scene->CreateEntity(name);
 
 		if (entity == nullptr)
@@ -1298,8 +1306,6 @@ namespace HexEngine
 		for(auto& comp : data["components"].items())
 		{
 			std::string componentName = comp.value()["name"];
-
-			LOG_DEBUG("Loading component id %s", componentName.c_str());
 
 			BaseComponent* component = GetComponentByClassName(componentName);			
 

@@ -10,6 +10,7 @@
 #include <HexEngine.Core/GUI/Elements/LineEdit.hpp>
 #include "CityAnchorUtils.hpp"
 #include "PlaceOfWorkComponent.hpp"
+#include "CityAssetPins.hpp"
 #include "ResidenceComponent.hpp"
 #include "RoutineAgentComponent.hpp"
 #include "TrafficLaneComponent.hpp"
@@ -389,6 +390,8 @@ void CityRoutineSystemComponent::Update(float frameTime)
 		// Play just stopped: the restore skips unchanged components, so an
 		// agent's NavigationComponent kept its runtime path and went on walking
 		// in the editor. Drop the paths and per-trip state.
+		if (_wasGameRunning)
+			CityAssetPins::Clear();
 		if (_wasGameRunning && GetEntity() != nullptr && GetEntity()->GetScene() != nullptr)
 		{
 			std::vector<RoutineAgentComponent*> agents;
@@ -1258,6 +1261,8 @@ HexEngine::Entity* CityRoutineSystemComponent::AcquireVehicleForTask(RoutineAgen
 	if (prefabPath.empty())
 		return nullptr;
 
+	// Commuter cars spawn all day: keep the prefab resident (see CityAssetPins).
+	CityAssetPins::Prefab(prefabPath);
 	auto spawned = HexEngine::g_pEnv->_prefabLoader->LoadPrefab(HexEngine::g_pEnv->_sceneManager->GetCurrentScene(), prefabPath);
 	// Transient like spawner traffic: never baked into a saved scene.
 	for (auto* ent : spawned)

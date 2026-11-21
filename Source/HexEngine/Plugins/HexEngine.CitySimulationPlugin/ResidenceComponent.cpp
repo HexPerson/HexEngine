@@ -70,10 +70,10 @@ bool ResidenceComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 
 std::string ResidenceComponent::ResolveEntryWaypointName() const
 {
-	return CityAnchors::ResolveName(GetEntity(), _entryWaypointEntityName);
+	return CityAnchors::ResolveNameCached(GetEntity(), _entryWaypointEntityName, _entryResolveCache);
 }
 
 std::string ResidenceComponent::ResolveParkingWaypointName() const
 {
-	return CityAnchors::ResolveName(GetEntity(), _parkingWaypointEntityName);
+	return CityAnchors::ResolveNameCached(GetEntity(), _parkingWaypointEntityName, _parkingResolveCache);
 }

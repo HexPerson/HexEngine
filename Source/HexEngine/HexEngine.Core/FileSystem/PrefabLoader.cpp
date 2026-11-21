@@ -844,8 +844,12 @@ namespace HexEngine
 		if (prefab == nullptr)
 			return;
 
+		// The entities live in (and die with) the prefab's private scene; resetting it
+		// releases the scene through its own deleter. Then free the prefab itself - it
+		// was leaked on every unload before.
 		prefab->_entities.clear();
 		prefab->_scene.reset();
+		delete prefab;
 	}
 
 	std::vector<std::string> PrefabLoader::GetSupportedResourceExtensions()

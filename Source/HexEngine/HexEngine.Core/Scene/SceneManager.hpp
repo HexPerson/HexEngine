@@ -2,6 +2,9 @@
 
 #pragma once
 
+#include <unordered_set>
+#include <mutex>
+
 #include <chrono>
 #include <atomic>
 #include "Scene.hpp"
@@ -77,6 +80,12 @@ namespace HexEngine
 		std::vector<std::shared_ptr<Scene>> _scenes;
 		std::recursive_mutex _mutex;
 		std::shared_ptr<Scene> _currentScene;
+		// Every scene CreateEmptyScene made that has not been freed yet. The scene's
+		// ResourceDeleter routes the last shared_ptr release to UnloadResource, which
+		// destroys + deletes it; Destroy() detaches the survivors so a release after
+		// the SceneManager is gone only leaks at exit instead of calling into freed memory.
+		std::unordered_set<Scene*> _ownedScenes;
+		std::mutex _ownedScenesLock;
 		std::atomic<int32_t> _scenesLoading{ 0 };
 		std::atomic<std::chrono::steady_clock::rep> _lastLoadEnd{ 0 };
 		std::atomic<int32_t> _settleBlockers{ 0 };

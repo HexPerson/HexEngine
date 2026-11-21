@@ -2,6 +2,7 @@
 #include "TrafficLaneComponent.hpp"
 #include "LanePathSmoothing.hpp"
 #include "TrafficSignalControllerComponent.hpp"
+#include "CityAssetPins.hpp"
 #include <HexEngine.Core/Audio/AudioManager.hpp>
 #include <HexEngine.Core/GUI/Elements/ArrayElement.hpp>
 #include <HexEngine.Core/GUI/Elements/AssetSearch.hpp>
@@ -246,7 +247,7 @@ void TrafficVehicleComponent::StartEngineSoundIfNeeded(const math::Vector3& worl
 		// then calls Loop on it, it stomps vehicle A's playback. Clone
 		// per vehicle to get an independent SoundEffectInstance backed
 		// by the shared loaded audio data.
-		auto master = HexEngine::SoundEffect::Create(_engineSoundPath);
+		auto master = CityAssetPins::Sound(_engineSoundPath);
 		if (!master)
 			return;
 		_engineSound = master->CreatePlaybackClone();
@@ -307,7 +308,7 @@ void TrafficVehicleComponent::TryHonk(const math::Vector3& worldPos)
 	// (vehicle A's honk cut off mid-way when vehicle B honks). Clone
 	// the master to get a fresh instance per honk - same loaded audio
 	// data, independent playback state.
-	auto master = HexEngine::SoundEffect::Create(chosenPath);
+	auto master = CityAssetPins::Sound(chosenPath);
 	if (!master) return;
 	auto honk = master->CreatePlaybackClone();
 	if (!honk) return;

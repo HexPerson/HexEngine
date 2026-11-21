@@ -77,4 +77,44 @@ namespace CityAnchors
 		auto* e = Resolve(owner, name);
 		return e != nullptr ? e->GetName() : std::string();
 	}
+
+	// Per-owner memo for ResolveName. The routine system asks for a building's
+	// entry/parking waypoint every frame per agent, and the uncached answer is a
+	// breadth-first walk of the whole building prefab (hundreds of entities) -
+	// ~10% of play-mode main-thread time. A hit is re-validated with an O(1)
+	// scene name lookup; a miss is retried only every kMissRetry calls so a
+	// waypoint added later is still picked up.
+	struct ResolveCache
+	{
+		std::string key;
+		std::string result;
+		uint32_t missCalls = 0;
+	};
+
+	inline std::string ResolveNameCached(HexEngine::Entity* owner, const std::string& name, ResolveCache& cache)
+	{
+		constexpr uint32_t kMissRetry = 240;
+		if (owner == nullptr || name.empty())
+			return std::string();
+
+		if (cache.key == name)
+		{
+			if (!cache.result.empty())
+			{
+				auto* scene = owner->GetScene();
+				auto* e = scene != nullptr ? scene->GetEntityByName(cache.result) : nullptr;
+				if (e != nullptr && !e->IsPendingDeletion())
+					return cache.result;
+			}
+			else if (++cache.missCalls < kMissRetry)
+			{
+				return std::string();
+			}
+		}
+
+		cache.key = name;
+		cache.result = ResolveName(owner, name);
+		cache.missCalls = 0;
+		return cache.result;
+	}
 }

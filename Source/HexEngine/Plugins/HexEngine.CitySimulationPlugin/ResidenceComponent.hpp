@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HexEngine.Core/HexEngine.hpp>
+#include "CityAnchorUtils.hpp"
 
 class ResidenceComponent : public HexEngine::BaseComponent
 {
@@ -29,4 +30,8 @@ private:
 	int32_t _householdCapacity = 4;
 	std::string _entryWaypointEntityName;
 	std::string _parkingWaypointEntityName;
+
+	// runtime memo for the Resolve*WaypointName calls (see CityAnchors::ResolveNameCached)
+	mutable CityAnchors::ResolveCache _entryResolveCache;
+	mutable CityAnchors::ResolveCache _parkingResolveCache;
 };

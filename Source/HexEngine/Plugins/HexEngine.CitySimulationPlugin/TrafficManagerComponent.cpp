@@ -2,6 +2,7 @@
 #include "TrafficLaneComponent.hpp"
 #include "TrafficSpawnerComponent.hpp"
 #include "TrafficVehicleComponent.hpp"
+#include "CityAssetPins.hpp"
 #include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
 
 namespace
@@ -134,6 +135,9 @@ int32_t TrafficManagerComponent::SpawnVehicleFromSpawner(TrafficSpawnerComponent
 
 	const int32_t randomIndex = HexEngine::GetRandomInt(0, static_cast<int32_t>(validPrefabPaths.size()) - 1);
 	const fs::path prefabPath = validPrefabPaths[static_cast<size_t>(randomIndex)];
+
+	// Keep the prefab resident between spawns (see CityAssetPins).
+	CityAssetPins::Prefab(prefabPath);
 
 	auto spawnedEntities = HexEngine::g_pEnv->_prefabLoader->LoadPrefab(HexEngine::g_pEnv->_sceneManager->GetCurrentScene(), prefabPath);
 	if (spawnedEntities.empty())
@@ -309,6 +313,7 @@ void TrafficManagerComponent::Update(float frameTime)
 					spawner->SpawnTimerRef() = 0.0f;
 				}
 			}
+			CityAssetPins::Clear();   // traffic is play-only; don't pin assets in the editor
 		}
 		_wasGameRunning = false;
 		return;

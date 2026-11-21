@@ -468,6 +468,11 @@ namespace HexEngine
 
 		std::set<Entity*> _pendingAdditions;
 		std::set<Entity*> _pendingRemovals;
+		// Entities inside RemoveEntityInternal (between the slot unlink and the slot
+		// free). A component teardown that destroys its own owner again must not run a
+		// second delete + slot free - that pushed the slot index onto the free list
+		// twice, so two later entities shared one slot.
+		std::unordered_set<Entity*> _entitiesBeingDeleted;
 
 		volatile bool _insideEntityIteration = false;
 		uint32_t _drawnEntities = 0;

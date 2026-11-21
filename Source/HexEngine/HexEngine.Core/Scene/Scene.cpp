@@ -222,12 +222,24 @@ namespace HexEngine
 	{
 		uint32_t index = 0;
 
-		if (!_freeEntitySlotIndices.empty())
+		bool reused = false;
+		while (!_freeEntitySlotIndices.empty())
 		{
 			index = _freeEntitySlotIndices.back();
 			_freeEntitySlotIndices.pop_back();
+			if (index < _entitySlots.size() && !_entitySlots[index].alive)
+			{
+				reused = true;
+				break;
+			}
+
+			// FreeEntityId refuses stale frees, so this means the free list was corrupted
+			// some other way - never hand a live slot to a second entity.
+			LOG_WARN("Scene: free entity slot %u is still alive (entity %p) - skipped", index,
+				index < _entitySlots.size() ? (void*)_entitySlots[index].entity : nullptr);
 		}
-		else
+
+		if (!reused)
 		{
 			index = static_cast<uint32_t>(_entitySlots.size());
 			_entitySlots.emplace_back();
@@ -256,6 +268,17 @@ namespace HexEngine
 			return;
 
 		EntitySlot& slot = _entitySlots[id.index];
+		if (!slot.alive || slot.generation != id.generation)
+		{
+			// A stale id (already freed, or an older generation). Freeing it anyway
+			// pushed the index onto the free list a second time and two entities
+			// later shared the slot: one ended up deleted-but-live (crash on the next
+			// scene walk), the other unreachable (survived play-stop teardown).
+			LOG_WARN("Scene: ignoring free of stale entity id %u:%u (slot alive %d, generation %u)",
+				id.index, id.generation, slot.alive ? 1 : 0, slot.generation);
+			return;
+		}
+
 		slot.alive = false;
 		slot.inLiveList = false;
 		slot.denseEntityIndex = InvalidDenseIndex;
@@ -1326,7 +1349,43 @@ namespace HexEngine
 		if (entity == nullptr)
 			return;
 
-		const EntityId id = entity->GetId();
+		if (entity->GetScene() != this && entity->GetScene() != nullptr)
+		{
+			LOG_WARN("Scene: entity [%p] '%s' removed through a scene that does not own it - forwarding",
+				entity, entity->GetName().c_str());
+			entity->GetScene()->RemoveEntityInternal(entity);
+			return;
+		}
+
+		if (!_entitiesBeingDeleted.insert(entity).second)
+		{
+			LOG_WARN("Scene: re-entrant removal of entity [%p] (already being deleted) ignored", entity);
+			return;
+		}
+
+		EntityId id = entity->GetId();
+		if (!IsValid(id) || _entitySlots[id.index].entity != entity)
+		{
+			// The entity's id does not point back at it. Never unlink/free whatever
+			// that id names now (another entity's slot); find the slot that really
+			// holds this pointer instead.
+			EntityId owned;
+			for (uint32_t i = 0; i < static_cast<uint32_t>(_entitySlots.size()); ++i)
+			{
+				if (_entitySlots[i].alive && _entitySlots[i].entity == entity)
+				{
+					owned.index = i;
+					owned.generation = _entitySlots[i].generation;
+					break;
+				}
+			}
+
+			LOG_WARN("Scene: entity [%p] '%s' id %u:%u does not own its slot (slot entity %p); real slot %d",
+				entity, entity->GetName().c_str(), id.index, id.generation,
+				id.index < _entitySlots.size() ? (void*)_entitySlots[id.index].entity : nullptr,
+				owned.IsValid() ? (int)owned.index : -1);
+			id = owned;
+		}
 
 		if (entity->GetComponent<DirectionalLight>() == _sunLight)
 		{
@@ -1374,6 +1433,7 @@ namespace HexEngine
 		{
 			FreeEntityId(id);
 		}
+		_entitiesBeingDeleted.erase(entity);
 		HEX_VALIDATE_SCENE_INVARIANTS();
 	}
 
@@ -1400,6 +1460,19 @@ namespace HexEngine
 		PROFILE();
 
 		if (entity == nullptr)
+			return;
+
+		if (entity->GetScene() != this && entity->GetScene() != nullptr)
+		{
+			LOG_WARN("Scene: DestroyEntity [%p] '%s' called on a scene that does not own it - forwarding",
+				entity, entity->GetName().c_str());
+			entity->GetScene()->DestroyEntity(entity, broadcast);
+			return;
+		}
+
+		// Already inside RemoveEntityInternal (a component teardown destroying its own
+		// owner, or a parent's destructor reaching a child mid-delete).
+		if (_entitiesBeingDeleted.count(entity) != 0)
 			return;
 
 		LOG_DEBUG("Removing entity [%p] %s. There will be %d entities remaining in the scene", entity, entity->GetName().c_str(), GetTotalNumberOfEntities() > 0 ? GetTotalNumberOfEntities() - 1 : 0);
