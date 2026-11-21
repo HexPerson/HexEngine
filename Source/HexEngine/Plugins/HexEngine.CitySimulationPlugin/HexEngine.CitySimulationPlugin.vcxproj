@@ -169,6 +169,8 @@
     <ClInclude Include="CitySimulationInterface.hpp" />
     <ClInclude Include="ITaskTravelService.hpp" />
     <ClInclude Include="PlaceOfWorkComponent.hpp" />
+    <ClInclude Include="TrafficSignalComponent.hpp" />
+    <ClInclude Include="TrafficSignalControllerComponent.hpp" />
     <ClInclude Include="Plugin.hpp" />
     <ClInclude Include="ResidenceComponent.hpp" />
     <ClInclude Include="LanePathSmoothing.hpp" />
@@ -187,6 +189,8 @@
     <ClCompile Include="CityRoutineSystemComponent.cpp" />
     <ClCompile Include="CitySimulationInterface.cpp" />
     <ClCompile Include="PlaceOfWorkComponent.cpp" />
+    <ClCompile Include="TrafficSignalComponent.cpp" />
+    <ClCompile Include="TrafficSignalControllerComponent.cpp" />
     <ClCompile Include="Plugin.cpp" />
     <ClCompile Include="ResidenceComponent.cpp" />
     <ClCompile Include="RoadComponent.cpp" />

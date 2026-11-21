@@ -1,6 +1,9 @@
 #include "CitySimulationInterface.hpp"
 #include "RoadComponent.hpp"
 #include "VehicleComponent.hpp"
+#include "TrafficSignalControllerComponent.hpp"
+#include "TrafficSignalComponent.hpp"
+#include <HexEngine.Core/Entity/Component/NavigationComponent.hpp>
 #include "TrafficLaneComponent.hpp"
 #include "TrafficManagerComponent.hpp"
 #include "TrafficSpawnerComponent.hpp"
@@ -34,6 +37,8 @@ namespace
 		"CityEmergencyDispatcherSystemComponent",
 		"RoadComponent",
 		"VehicleComponent",
+		"TrafficSignalControllerComponent",
+		"TrafficSignalComponent",
 	};
 
 	math::Vector3 ResolveRoadForwardVector(RoadComponent::ForwardAxis axis)
@@ -79,6 +84,11 @@ bool CitySimulationInterface::Create()
 	REG_CLASS(CityEmergencyDispatcherSystemComponent);
 	REG_CLASS(RoadComponent);
 	REG_CLASS(VehicleComponent);
+	REG_CLASS(TrafficSignalControllerComponent);
+	REG_CLASS(TrafficSignalComponent);
+
+	// Walkers wait at signal-controlled crossings showing DON'T WALK.
+	NavigationComponent::SetSegmentGate(&TrafficSignalControllerComponent::IsPedestrianStepAllowed);
 
 	LogRegistrationSummary();
 	_registered = true;
@@ -87,6 +97,7 @@ bool CitySimulationInterface::Create()
 
 void CitySimulationInterface::Destroy()
 {
+	HexEngine::NavigationComponent::SetSegmentGate(nullptr);
 	_registered = false;
 }
 

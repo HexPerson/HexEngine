@@ -189,6 +189,14 @@ private:
 	// leaves our look-ahead corridor. Identity only - never dereferenced.
 	const TrafficVehicleComponent* _gridlockBypass = nullptr;
 
+	// Waiting for a traffic signal (runtime): set when the signal's stop line
+	// holds us, or when the car we are queued behind is itself waiting for one.
+	// Such waits are expected - no honking, and they don't feed the gridlock
+	// breaker's patience timer.
+	bool _queuedAtSignal = false;
+	// Set by ComputeAvoidanceSpeed: the car we're braking for is queued at a signal.
+	bool _avoidanceBlockerQueued = false;
+
 	// Set when the component is DESERIALIZED (loaded from a saved scene).
 	// Spawner-created vehicles are explicitly placed onto the lane via
 	// Entity::ForcePosition(lanePoints.front()); loaded vehicles never were,

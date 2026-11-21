@@ -1,6 +1,7 @@
 #include "TrafficVehicleComponent.hpp"
 #include "TrafficLaneComponent.hpp"
 #include "LanePathSmoothing.hpp"
+#include "TrafficSignalControllerComponent.hpp"
 #include <HexEngine.Core/Audio/AudioManager.hpp>
 #include <HexEngine.Core/GUI/Elements/ArrayElement.hpp>
 #include <HexEngine.Core/GUI/Elements/AssetSearch.hpp>
@@ -410,7 +411,7 @@ void TrafficVehicleComponent::UpdateAudio(const math::Vector3& worldPos, float f
 
 	const bool isMoving = _currentSpeed > 0.5f;
 	const bool wantsToMove = _speed > 0.1f;
-	if (wantsToMove && !isMoving)
+	if (wantsToMove && !isMoving && !_queuedAtSignal)
 	{
 		_blockedTime += frameTime;
 		const float effectiveThreshold = std::max(0.5f, _honkBlockedThreshold / std::max(_honkPersonality, 0.1f));
@@ -1091,6 +1092,7 @@ bool TrafficVehicleComponent::AdvanceTargetIndex(size_t numPoints)
 float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& currentPosition, const math::Vector3& moveDirection, float maxSpeed)
 {
 	_debugAvoidanceBlocked = false;
+	_avoidanceBlockerQueued = false;
 
 	if (!_avoidanceEnabled)
 		return maxSpeed;
@@ -1215,6 +1217,7 @@ float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& curren
 			nearestAheadDistance = projectedDistance;
 			_debugBlockerPos = otherPos;
 			lastBlocker = otherEnt;
+			_avoidanceBlockerQueued = other->_queuedAtSignal;
 		}
 	}
 
@@ -1393,9 +1396,20 @@ void TrafficVehicleComponent::Update(float frameTime)
 		return;
 	}
 
-	const float desiredSpeed = ComputeAvoidanceSpeed(currentPosition, toTarget, maxSpeed);
+	float desiredSpeed = ComputeAvoidanceSpeed(currentPosition, toTarget, maxSpeed);
 	const float accel = std::max(_acceleration, 0.0f);
 	const float brake = std::max(_brakingStrength, 0.0f);
+
+	// Traffic signals: stop at the line on red (and on amber when we can).
+	{
+		const bool avoidanceBinds = desiredSpeed < maxSpeed - 0.01f;
+		bool heldBySignal = false;
+		const float signalCap = TrafficSignalControllerComponent::ComputeVehicleSpeedCap(
+			currentPosition, toTarget, _currentSpeed, maxSpeed, brake, heldBySignal);
+		const bool signalBinds = heldBySignal && signalCap <= desiredSpeed + 0.01f;
+		desiredSpeed = std::min(desiredSpeed, signalCap);
+		_queuedAtSignal = signalBinds || (avoidanceBinds && _avoidanceBlockerQueued);
+	}
 
 	if (_currentSpeed < desiredSpeed)
 	{
@@ -1409,7 +1423,7 @@ void TrafficVehicleComponent::Update(float frameTime)
 	currentPosition += toTarget * (_currentSpeed * frameTime);
 	transform->SetPositionNoNotify(currentPosition);
 
-	if (_speed > 0.1f && _currentSpeed <= 0.5f)
+	if (_speed > 0.1f && _currentSpeed <= 0.5f && !_queuedAtSignal)
 		_waitTime += frameTime;
 	else
 		_waitTime = 0.0f;

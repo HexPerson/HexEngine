@@ -573,7 +573,12 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 	}
 
 	auto task = *agent->GetActiveTask();
-	agent->StateTimerRef() += frameTime;
+	// Waiting at a red pedestrian crossing is part of the walk, not lost time:
+	// don't let it run down the walk timeout.
+	const auto* gateNav = agent->GetEntity()->GetComponent<HexEngine::NavigationComponent>();
+	const bool heldAtCrossing = gateNav != nullptr && gateNav->IsHeldByGate();
+	if (!heldAtCrossing)
+		agent->StateTimerRef() += frameTime;
 
 	switch (agent->GetExecutionState())
 	{
@@ -1579,6 +1584,13 @@ bool CityRoutineSystemComponent::UpdateWalkStuckRecovery(RoutineAgentComponent* 
 	const float speed = (currentPos - motion.lastPosition).Length() / frameTime;
 	motion.lastPosition = currentPos;
 	motion.repathCooldownSeconds = std::max(0.0f, motion.repathCooldownSeconds - frameTime);
+
+	// Held at a red pedestrian crossing: standing still on purpose, not stuck.
+	if (auto* nav = agent->GetEntity()->GetComponent<HexEngine::NavigationComponent>(); nav != nullptr && nav->IsHeldByGate())
+	{
+		motion.lowMotionAccumSeconds = 0.0f;
+		return false;
+	}
 
 	if (speed <= std::max(0.0f, _walkStuckSpeedThreshold))
 	{
