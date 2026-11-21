@@ -54,7 +54,14 @@ namespace HexEngine
 		float downforce = 6.0f;       // downforce at speed (m/s^2)
 
 		// Steering / orientation
-		float steer = 18.0f;          // yaw authority (torque scale)
+		// Steering is a turn-RATE controller: holding a direction asks for a yaw
+		// rate (tight at walking pace, capped at speed) and `steer` is how hard
+		// the body is torqued toward it - so releasing the key stops the turn
+		// instead of letting the bike keep spinning on its own momentum.
+		float steer = 18.0f;          // yaw-rate tracking gain (1/s)
+		float maxYawRate = 55.0f;     // full-lock turn rate at speed (deg/s)
+		float minTurnRadius = 4.5f;   // tightest turn radius - limits the rate at low speed (m)
+		float standYawRate = 12.0f;   // turn rate available near a standstill (deg/s)
 		float lean = 0.5f;            // lean-into-turn angle at speed (rad)
 		float upright = 55.0f;        // upright/lean P gain
 		float steerSmooth = 8.0f;     // digital steer smoothing rate (1/s)
@@ -231,6 +238,10 @@ namespace HexEngine
 		// digital key state (player path)
 		bool _kThrottle = false, _kBrake = false, _kLeft = false, _kRight = false, _kHandbrake = false;
 		float _steerSmoothed = 0.0f;
+		// Heading at the previous physics step: the rigid-body interface has no
+		// angular-velocity read, so the yaw rate is a finite difference.
+		math::Vector3 _prevHeading = math::Vector3::Zero;
+		bool _hasPrevHeading = false;
 
 		// --- hop / crash runtime state (not serialized) ---
 		bool  _kHop = false;

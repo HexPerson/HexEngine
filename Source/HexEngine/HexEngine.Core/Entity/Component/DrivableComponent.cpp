@@ -704,6 +704,9 @@ namespace HexEngine
 		file->Serialize(t, "grip", _tuning.grip);
 		file->Serialize(t, "downforce", _tuning.downforce);
 		file->Serialize(t, "steer", _tuning.steer);
+		file->Serialize(t, "maxYawRate", _tuning.maxYawRate);
+		file->Serialize(t, "minTurnRadius", _tuning.minTurnRadius);
+		file->Serialize(t, "standYawRate", _tuning.standYawRate);
 		file->Serialize(t, "lean", _tuning.lean);
 		file->Serialize(t, "upright", _tuning.upright);
 		file->Serialize(t, "steerSmooth", _tuning.steerSmooth);
@@ -761,6 +764,9 @@ namespace HexEngine
 			file->Deserialize(t, "grip", _tuning.grip);
 			file->Deserialize(t, "downforce", _tuning.downforce);
 			file->Deserialize(t, "steer", _tuning.steer);
+			file->Deserialize(t, "maxYawRate", _tuning.maxYawRate);
+			file->Deserialize(t, "minTurnRadius", _tuning.minTurnRadius);
+			file->Deserialize(t, "standYawRate", _tuning.standYawRate);
 			file->Deserialize(t, "lean", _tuning.lean);
 			file->Deserialize(t, "upright", _tuning.upright);
 			file->Deserialize(t, "steerSmooth", _tuning.steerSmooth);
@@ -859,7 +865,10 @@ namespace HexEngine
 		addF(L"Grip", &_tuning.grip, 0.0f, 40.0f, 0.5f);
 		addF(L"Downforce", &_tuning.downforce, 0.0f, 40.0f, 0.5f);
 
-		addF(L"Steer authority", &_tuning.steer, 0.1f, 120.0f, 1.0f);
+		addF(L"Steer gain (1/s)", &_tuning.steer, 0.1f, 120.0f, 1.0f);
+		addF(L"Max turn rate (deg/s)", &_tuning.maxYawRate, 5.0f, 360.0f, 1.0f);
+		addF(L"Min turn radius (m)", &_tuning.minTurnRadius, 0.5f, 50.0f, 0.1f);
+		addF(L"Standstill turn rate (deg/s)", &_tuning.standYawRate, 0.0f, 180.0f, 1.0f);
 		addF(L"Lean (rad)", &_tuning.lean, 0.0f, 1.2f, 0.02f);
 		addF(L"Upright gain", &_tuning.upright, 1.0f, 200.0f, 1.0f);
 		addF(L"Steer smoothing", &_tuning.steerSmooth, 1.0f, 30.0f, 0.5f);
@@ -1355,14 +1364,45 @@ namespace HexEngine
 				_body->ApplyForceToCenterOfMass(-groundNormal * (_tuning.downforce * speedFactor * mass));
 		}
 
-		// Steering: speed-scaled yaw torque (can turn a little at a standstill).
-		// Multiply by the forward sign so the yaw handedness matches the driving
-		// direction AND the lean below (the lean is built about `fwd`, which is
-		// already signed) - otherwise flipping v_bikeForwardSign turned the bike
-		// one way while it leaned the other.
-		const float steerAuthority = 0.5f + 1.0f * speedFactor;
-		const float steerDir = (_forwardSpeed >= -0.3f) ? 1.0f : -1.0f;
-		_body->ApplyTorque(up * (_input.steer * _tuning.steer * steerAuthority * steerDir * mass * _tuning.forwardSign));
+		// Steering: track a target yaw RATE. The old open-loop torque relied on
+		// ground friction to stop the spin; with real gravity that friction is a
+		// tenth of what the tuning was made against, so a tap kept the bike
+		// turning (~70 deg per quarter-second tap). Measuring the actual rate and
+		// torquing toward the target turns on demand and stops on release.
+		// Handedness: the forward sign keeps the turn matching the driving
+		// direction AND the lean below (built about the signed `fwd`).
+		{
+			math::Vector3 heading(fwd.x, 0.0f, fwd.z);
+			float measuredYawRate = 0.0f;   // rad/s about world +Y
+			bool rateValid = false;
+			if (heading.LengthSquared() > 1e-6f)
+			{
+				heading.Normalize();
+				if (_hasPrevHeading)
+				{
+					const float crossY = _prevHeading.z * heading.x - _prevHeading.x * heading.z;
+					const float dotH = _prevHeading.x * heading.x + _prevHeading.z * heading.z;
+					measuredYawRate = std::atan2(crossY, dotH) / dt;
+					// A bike can't yaw at 6 rad/s (~340 deg/s): a jump that big is a
+					// teleport/respawn, not motion - skip this step rather than
+					// "correcting" it with a huge torque kick.
+					rateValid = std::fabs(measuredYawRate) < 6.0f;
+				}
+				_prevHeading = heading;
+				_hasPrevHeading = true;
+			}
+
+			if (!_crashed && rateValid)
+			{
+				constexpr float kDegToRad = 0.0174532925f;
+				const float steerDir = (_forwardSpeed >= -0.3f) ? 1.0f : -1.0f;
+				const float speedAbs = std::fabs(_forwardSpeed);
+				const float rateFromRadius = speedAbs / std::max(_tuning.minTurnRadius, 0.1f);
+				const float rateMag = std::clamp(rateFromRadius, _tuning.standYawRate * kDegToRad, _tuning.maxYawRate * kDegToRad);
+				const float targetYawRate = _input.steer * steerDir * _tuning.forwardSign * rateMag;
+				_body->ApplyTorque(up * ((targetYawRate - measuredYawRate) * _tuning.steer * mass));
+			}
+		}
 
 		// Upright + lean: proportional torque toward a target up-vector. The
 		// heavy angular damping above turns this pure-P controller into a
