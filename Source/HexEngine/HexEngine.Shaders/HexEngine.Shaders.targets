@@ -16,15 +16,117 @@
 		<BuildShader Remove="@(HexEngineShader->WithMetadataValue('ExcludedFromBuild','true'))" />
 	</ItemGroup>
 
+	<!--
+	  A shader pulls other .shader files in two ways: names listed in its
+	  "<Stage>Includes" sections (the compiler turns each into #include "Name.shader")
+	  and literal #include "X.shader" lines. Those are resolved again, so included
+	  files can include more files. Some included files are also compiled shaders in
+	  their own right (DefaultPixel, Atmosphere, PCSS, EnvMapCommon, ...) or are not
+	  in the project at all (UICommon), so the blanket @(ShaderInclude) input below
+	  never covered them: editing DefaultPixel.shader left Default/SnowShell/
+	  DefaultSnowTess.hcs stale. This task walks each shader's real include graph
+	  so every compiled .hcs lists the exact files it was built from.
+	-->
+	<UsingTask
+	  TaskName="ResolveHexEngineShaderDependencies"
+	  TaskFactory="RoslynCodeTaskFactory"
+	  AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+		<ParameterGroup>
+			<Shaders ParameterType="Microsoft.Build.Framework.ITaskItem[]" Required="true" />
+			<Resolved ParameterType="Microsoft.Build.Framework.ITaskItem[]" Output="true" />
+		</ParameterGroup>
+		<Task>
+			<Using Namespace="System" />
+			<Using Namespace="System.Collections.Generic" />
+			<Using Namespace="System.IO" />
+			<Using Namespace="System.Text.RegularExpressions" />
+			<Code Type="Fragment" Language="cs"><![CDATA[
+var includeSection = new Regex(@"""\w*Includes""\s*\{([^}]*)\}");
+var includeDirective = new Regex(@"#include\s*""([^""]+)""");
+var directCache = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+// Includes resolve against the shader directory (the compiler's include path),
+// not the including file, so every lookup uses the root shader's folder.
+Func<string, string, List<string>> direct = (path, dir) =>
+{
+	List<string> deps;
+	if (directCache.TryGetValue(path, out deps))
+		return deps;
+	deps = new List<string>();
+	directCache[path] = deps;
+	if (!File.Exists(path))
+		return deps;
+	string text = File.ReadAllText(path);
+	foreach (Match m in includeSection.Matches(text))
+	{
+		foreach (string rawLine in m.Groups[1].Value.Split('\n'))
+		{
+			string line = rawLine;
+			int comment = line.IndexOf("//", StringComparison.Ordinal);
+			if (comment >= 0)
+				line = line.Substring(0, comment);
+			line = line.Trim();
+			if (line.Length > 0)
+				deps.Add(Path.GetFullPath(Path.Combine(dir, line + ".shader")));
+		}
+	}
+	foreach (Match m in includeDirective.Matches(text))
+		deps.Add(Path.GetFullPath(Path.Combine(dir, m.Groups[1].Value.Trim())));
+	return deps;
+};
+
+var resolved = new List<ITaskItem>();
+foreach (ITaskItem shader in Shaders)
+{
+	string full = shader.GetMetadata("FullPath");
+	string dir = Path.GetDirectoryName(full);
+	var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+	var pending = new Stack<string>(direct(full, dir));
+	while (pending.Count > 0)
+	{
+		string dep = pending.Pop();
+		if (!seen.Add(dep))
+			continue;
+		foreach (string next in direct(dep, dir))
+			pending.Push(next);
+	}
+	seen.Remove(full);
+
+	// Only files that exist: a missing input would make MSBuild rebuild the
+	// shader on every build, and the compiler reports the missing include itself.
+	var existing = new List<string>();
+	foreach (string dep in seen)
+		if (File.Exists(dep))
+			existing.Add(dep);
+	existing.Sort(StringComparer.OrdinalIgnoreCase);
+
+	var item = new Microsoft.Build.Utilities.TaskItem(shader);
+	item.SetMetadata("ShaderDependencies", string.Join(";", existing));
+	resolved.Add(item);
+}
+Resolved = resolved.ToArray();
+]]></Code>
+		</Task>
+	</UsingTask>
+
+	<Target
+	  Name="ResolveHexEngineShaderDependencies"
+	  Condition="'@(BuildShader)' != ''">
+		<ResolveHexEngineShaderDependencies Shaders="@(BuildShader)">
+			<Output TaskParameter="Resolved" ItemName="BuildShaderResolved" />
+		</ResolveHexEngineShaderDependencies>
+	</Target>
+
 	<Target
 	  Name="HexEngineShaderCompiler"
 	  Condition="'@(BuildShader)' != ''"
-	  Inputs="%(BuildShader.FullPath);@(ShaderHeader);@(ShaderInclude)"
-	  Outputs="$(MSBuildProjectDirectory)\Compiled\%(BuildShader.Filename).hcs"
+	  DependsOnTargets="ResolveHexEngineShaderDependencies"
+	  Inputs="%(BuildShaderResolved.FullPath);%(BuildShaderResolved.ShaderDependencies);@(ShaderHeader);@(ShaderInclude)"
+	  Outputs="$(MSBuildProjectDirectory)\Compiled\%(BuildShaderResolved.Filename).hcs"
 	  BeforeTargets="ClCompile">
 		<MakeDir Directories="$(MSBuildProjectDirectory)\Compiled" />
-		<Message Importance="High" Text="Compiling shader: %(BuildShader.Filename)%(BuildShader.Extension)" />
-		<Exec Command="&quot;$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\HexEngine.ShaderCompiler.exe&quot; -I &quot;%(BuildShader.FullPath)&quot; -O &quot;$(MSBuildProjectDirectory)\Compiled\%(BuildShader.Filename).hcs&quot; -T hlsl" />
+		<Message Importance="High" Text="Compiling shader: %(BuildShaderResolved.Filename)%(BuildShaderResolved.Extension)" />
+		<Exec Command="&quot;$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\HexEngine.ShaderCompiler.exe&quot; -I &quot;%(BuildShaderResolved.FullPath)&quot; -O &quot;$(MSBuildProjectDirectory)\Compiled\%(BuildShaderResolved.Filename).hcs&quot; -T hlsl" />
 	</Target>
 
 	<Target Name="HexEngineShaderClean" AfterTargets="Clean" Condition="'@(BuildShader)' != ''">
