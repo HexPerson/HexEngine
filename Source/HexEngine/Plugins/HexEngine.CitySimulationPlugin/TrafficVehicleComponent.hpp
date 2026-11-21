@@ -29,6 +29,7 @@ public:
 	// avoidance and not counted against the traffic budget.
 	void SetParked(bool parked) { _parked = parked; }
 	bool IsParked() const { return _parked; }
+	float GetCurrentSpeed() const { return _currentSpeed; }
 	bool ConsumeRouteEndReachedEvent();
 
 public:

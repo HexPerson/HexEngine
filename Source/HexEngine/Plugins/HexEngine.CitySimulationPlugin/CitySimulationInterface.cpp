@@ -14,6 +14,9 @@
 #include "ServiceStationComponent.hpp"
 #include "CityRoutineSystemComponent.hpp"
 #include "CityEmergencyDispatcherSystemComponent.hpp"
+#include "AmbientSoundscapeComponent.hpp"
+#include "AmbientZoneComponent.hpp"
+#include "AmbientEmitterComponent.hpp"
 #include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
 #include <algorithm>
 #include <cfloat>
@@ -39,6 +42,9 @@ namespace
 		"VehicleComponent",
 		"TrafficSignalControllerComponent",
 		"TrafficSignalComponent",
+		"AmbientSoundscapeComponent",
+		"AmbientZoneComponent",
+		"AmbientEmitterComponent",
 	};
 
 	math::Vector3 ResolveRoadForwardVector(RoadComponent::ForwardAxis axis)
@@ -86,6 +92,9 @@ bool CitySimulationInterface::Create()
 	REG_CLASS(VehicleComponent);
 	REG_CLASS(TrafficSignalControllerComponent);
 	REG_CLASS(TrafficSignalComponent);
+	REG_CLASS(AmbientSoundscapeComponent);
+	REG_CLASS(AmbientZoneComponent);
+	REG_CLASS(AmbientEmitterComponent);
 
 	// Walkers wait at signal-controlled crossings showing DON'T WALK.
 	NavigationComponent::SetSegmentGate(&TrafficSignalControllerComponent::IsPedestrianStepAllowed);

@@ -71,6 +71,15 @@
     <ClInclude Include="TrafficVehicleComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="AmbientSoundscapeComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AmbientZoneComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="AmbientEmitterComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="VehicleComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -122,6 +131,15 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="TrafficVehicleComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AmbientSoundscapeComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AmbientZoneComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="AmbientEmitterComponent.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="VehicleComponent.cpp">
