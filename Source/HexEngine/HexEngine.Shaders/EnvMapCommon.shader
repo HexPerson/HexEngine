@@ -4,6 +4,8 @@
 }
 "Global"
 {
+#ifndef ENVMAPCOMMON_SHADER
+#define ENVMAPCOMMON_SHADER
 	// Shared helpers for the IBL environment atlas.
 	//
 	// The engine's texture API exposes one implicit RTV/SRV per texture - no
@@ -363,4 +365,5 @@
 		specularReflectanceOut = saturate(specularReflectance);
 		return envSpecRadiance * specularReflectance;
 	}
+#endif
 }

@@ -355,7 +355,12 @@ namespace HexEditor
 					return nullptr;
 				}
 
-				entity->SetParent(parent);
+				// The snapshot transforms are LOCAL (Transform serializes local space)
+				// and were applied in pass 2 while the entity was still unparented.
+				// The default SetParent keeps the WORLD position, which re-expressed
+				// every restored child relative to its parent: undoing the delete of a
+				// prefab group put all of its meshes at the world origin.
+				entity->SetParent(parent, false);
 			}
 
 			return scene->GetEntityByName(snapshot.rootEntityName);

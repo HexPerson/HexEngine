@@ -24,6 +24,11 @@ public:
 	void SetUseWaypointRoute(bool enabled) { _useWaypointRoute = enabled; }
 	void SetWaypointRouteEndpoints(const std::string& startWaypointEntityName, const std::string& destinationWaypointEntityName);
 	void SetDespawnAtRouteEnd(bool enabled) { _despawnAtRouteEnd = enabled; }
+	// A parked vehicle (an NPC's own car on its driveway, or stored at the
+	// destination) does nothing: no driving, no audio, invisible to traffic
+	// avoidance and not counted against the traffic budget.
+	void SetParked(bool parked) { _parked = parked; }
+	bool IsParked() const { return _parked; }
 	bool ConsumeRouteEndReachedEvent();
 
 public:
@@ -155,13 +160,22 @@ private:
 	float _engineSmoothedPitch = 0.0f;
 	// Honk trigger: vehicle must be stopped (or near-stopped) due to
 	// avoidance for this long before honking. Cooldown prevents spam.
-	float _honkBlockedThreshold = 2.0f;
-	float _honkCooldownMin = 3.5f;
-	float _honkCooldownMax = 8.0f;
+	float _honkBlockedThreshold = 6.0f;
+	float _honkCooldownMin = 25.0f;
+	float _honkCooldownMax = 60.0f;
+	// Most drivers are patient: only this fraction of vehicles ever honk
+	// (rolled per vehicle). Honk loudness relative to the clip.
+	float _honkChance = 0.35f;
+	float _honkVolume = 0.55f;
+	bool _isHonker = true;               // runtime roll from _honkChance
+	bool _honkerRolled = false;
 	// Random per-vehicle "personality" multipliers initialised on spawn,
 	// so traffic doesn't honk in perfect unison.
 	float _honkPersonality = 1.0f;   // <1 = patient, >1 = honky
 	float _enginePitchOffset = 0.0f; // small per-vehicle pitch shift
+	float _audioPrevSpeed = 0.0f;
+	float _engineLoad = 0.0f;        // smoothed acceleration, -1..1
+	float _engineWobblePhase = 0.0f; // slow per-vehicle drift so loops don't sound identical
 
 	// Cached each frame for audio. The vehicle's effective top speed
 	// is min(_speed, laneSpeedLimit) when _useLaneSpeedLimit is on -
@@ -205,5 +219,6 @@ private:
 	// onto the nearest lane point and then drive from there. Cleared after the
 	// snap so it only happens once per load.
 	bool _snapToLaneOnLoad = false;
+	bool _parked = false;
 };
 

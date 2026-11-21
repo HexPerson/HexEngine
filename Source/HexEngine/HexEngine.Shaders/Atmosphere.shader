@@ -4,6 +4,8 @@
 }
 "Global"
 {
+#ifndef ATMOSPHERE_SHADER
+#define ATMOSPHERE_SHADER
 	static const float pi = 3.14159265359;
 	static const float invPi = 1.0 / pi;
 
@@ -159,4 +161,5 @@
 
 		return totalSky * float3(1.0f, 0.94f, 0.92f);
 	}	
+#endif
 }

@@ -41,6 +41,7 @@ RoutineAgentComponent::RoutineAgentComponent(HexEngine::Entity* entity, RoutineA
 		_homeEntityName = copy->_homeEntityName;
 		_assignedWorkplaceEntityName = copy->_assignedWorkplaceEntityName;
 		_preferredVehiclePrefabPath = copy->_preferredVehiclePrefabPath;
+		_ownedVehicleEntityName = copy->_ownedVehicleEntityName;
 		_isEmergencyEligible = copy->_isEmergencyEligible;
 		_scheduleCsv = copy->_scheduleCsv;
 		_travelPreference = copy->_travelPreference;
@@ -58,6 +59,7 @@ void RoutineAgentComponent::Serialize(json& data, HexEngine::JsonFile* file)
 	file->Serialize(data, "_homeEntityName", _homeEntityName);
 	file->Serialize(data, "_assignedWorkplaceEntityName", _assignedWorkplaceEntityName);
 	file->Serialize(data, "_preferredVehiclePrefabPath", _preferredVehiclePrefabPath);
+	file->Serialize(data, "_ownedVehicleEntityName", _ownedVehicleEntityName);
 	file->Serialize(data, "_isEmergencyEligible", _isEmergencyEligible);
 	file->Serialize(data, "_scheduleCsv", _scheduleCsv);
 	file->Serialize(data, "_travelPreference", _travelPreference);
@@ -72,6 +74,7 @@ void RoutineAgentComponent::Deserialize(json& data, HexEngine::JsonFile* file, u
 	file->Deserialize(data, "_homeEntityName", _homeEntityName);
 	file->Deserialize(data, "_assignedWorkplaceEntityName", _assignedWorkplaceEntityName);
 	file->Deserialize(data, "_preferredVehiclePrefabPath", _preferredVehiclePrefabPath);
+	file->Deserialize(data, "_ownedVehicleEntityName", _ownedVehicleEntityName);
 	file->Deserialize(data, "_isEmergencyEligible", _isEmergencyEligible);
 	file->Deserialize(data, "_scheduleCsv", _scheduleCsv);
 	file->Deserialize(data, "_travelPreference", _travelPreference);
@@ -136,6 +139,18 @@ bool RoutineAgentComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 			_preferredVehiclePrefabPath = result.assetPath.string();
 		});
 	vehiclePrefab->SetValue(std::wstring(_preferredVehiclePrefabPath.begin(), _preferredVehiclePrefabPath.end()));
+
+	auto* ownedVehicle = new HexEngine::EntitySearch(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Owned Vehicle");
+	ownedVehicle->SetValue(std::wstring(_ownedVehicleEntityName.begin(), _ownedVehicleEntityName.end()));
+	ownedVehicle->SetOnInputFn([this](HexEngine::EntitySearch* search, const std::wstring& value)
+		{
+			_ownedVehicleEntityName = ws2s(value);
+		});
+	ownedVehicle->SetOnSelectFn([this](HexEngine::EntitySearch* search, const HexEngine::EntitySearchResult& result)
+		{
+			_ownedVehicleEntityName = result.entityName;
+		});
+	ownedVehicle->SetPrefabOverrideBinding(GetComponentName(), "/_ownedVehicleEntityName");
 
 
 	auto* emergencyEligible = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Emergency Eligible", &_isEmergencyEligible);

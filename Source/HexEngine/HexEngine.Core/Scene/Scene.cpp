@@ -1056,7 +1056,7 @@ namespace HexEngine
 		// DoNotSave, ...) onto the clone - CloneEntity previously copied only the layer,
 		// so these were lost on prefab spawn / duplicate. Strip the editor-only
 		// selection flag so clones aren't born selected (matches Entity::Deserialize).
-		clone->SetFlag(entity->GetFlags() & ~EntityFlags::SelectedInEditor);
+		clone->SetFlag(entity->GetFlags() & ~(EntityFlags::SelectedInEditor | EntityFlags::IsPendingRemoval));
 		if (entity->IsPrefabInstance())
 		{
 			clone->SetPrefabSource(entity->GetPrefabSourcePath(), entity->GetPrefabRootEntityName(), entity->IsPrefabInstanceRoot());
@@ -1106,8 +1106,12 @@ namespace HexEngine
 			clone->AddComponent(clonedComponent);
 		}
 
-		// Even though the PVS was already flushed in CreateEntity we have to flush it again because it has had all its components added now
-		FlushPVS(entity);
+		// Even though the PVS was already flushed in CreateEntity we have to flush it again because it has had all its components added now.
+		// The CLONE - flushing the source put the SOURCE entity (for a prefab spawn: an entity in
+		// the prefab's private scene) into this scene's camera + light PVS snapshots. Once that
+		// prefab scene was freed (prefab unloaded, e.g. play stop clearing the asset pins) the
+		// shadow pass drew a freed StaticMeshComponent and crashed.
+		FlushPVS(clone);
 
 		return clone;
 	}
@@ -1127,6 +1131,11 @@ namespace HexEngine
 		{
 			for (auto& ent : map.second)
 			{
+				// A source scene that never ticks (a prefab's private scene) never reaps
+				// what it deleted - e.g. vehicle parts a VehicleComponent rebuilt. Don't
+				// resurrect them as extra live roots in the target scene.
+				if (ent == nullptr || ent->IsPendingDeletion())
+					continue;
 				auto newEnt = CloneEntity(ent, false);
 
 				renamedEnts.push_back({ newEnt, ent, newEnt->GetName(), ent->GetName() });

@@ -122,6 +122,43 @@ private:
 	// Schedules / travel / animation.
 	float _walkMaxDistance = 150.0f;			// Auto travel: walk up to this straight-line distance, drive beyond
 	std::string _defaultVehiclePrefabPath = "GameData.Prefabs/SmallCar01.hprefab";
+	// Job-relevant commuter vehicles, so a driver's job reads from their car.
+	// Ordered, first match wins. One rule per line:
+	//   Role1,Role2[@Workplace1,Workplace2] = GameData.Prefabs/Vehicles/V_Sedan_01*.hprefab, ...
+	// Roles match the agent's role tags ('*' = anyone); the optional @list matches the
+	// assigned workplace entity name. Prefab entries may end their file name in '*'
+	// to take every colour variant. Each agent always gets the same pick (hashed
+	// from its entity name). The agent's own preferred prefab still wins.
+	std::vector<std::string> _roleVehicleRules;
+	// Agents WITHOUT a car of their own only get a spawned one for trips longer
+	// than this (or emergencies / an explicit Drive preference); otherwise they walk.
+	float _spawnVehicleMinDistance = 400.0f;
+	// Owned cars (RoutineAgentComponent::GetOwnedVehicleEntityName), runtime only.
+	struct OwnedCarState
+	{
+		math::Vector3 homePosition;
+		math::Quaternion homeRotation;
+		bool stored = false;		// hidden at a destination (implicit car park)
+	};
+	std::unordered_map<std::string, OwnedCarState> _ownedCars;
+	HexEngine::Entity* GetOwnedCar(const class RoutineAgentComponent* agent) const;
+	OwnedCarState& OwnedCarStateFor(HexEngine::Entity* car);
+	bool IsOwnedCarAvailable(const class RoutineAgentComponent* agent, const math::Vector3& agentPos) const;
+	void ParkOwnedCar(HexEngine::Entity* car, bool atHome);
+	// A car left in the (implicit) car park somewhere else - e.g. abandoned when a
+	// drive got stuck - is back on the driveway by the time its owner is home.
+	void RehomeOwnedCarIfOwnerHome(RoutineAgentComponent* agent);
+	void ResetOwnedCars();
+	struct ParsedVehicleRule
+	{
+		std::vector<std::string> roles;
+		std::vector<std::string> workplaces;
+		std::vector<std::string> prefabs;	// wildcards expanded
+	};
+	std::vector<ParsedVehicleRule> _parsedVehicleRules;
+	bool _vehicleRulesParsed = false;
+	void ParseVehicleRules();
+	std::string PickRoleVehiclePrefab(const class RoutineAgentComponent* agent);
 	bool _hideAgentsAtDestination = false;		// legacy: vanish on arriving at work
 	float _failedTaskCooldownSeconds = 15.0f;	// after a permanent failure, wait before re-seeding
 	float _vehicleStuckSeconds = 20.0f;		// a car that hasn't moved this long is abandoned (agent walks on)

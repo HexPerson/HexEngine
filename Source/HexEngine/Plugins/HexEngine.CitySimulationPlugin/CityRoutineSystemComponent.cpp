@@ -8,6 +8,8 @@
 #include <HexEngine.Core/Entity/Component/NavigationComponent.hpp>
 #include <HexEngine.Core/Entity/Component/SkeletalAnimationComponent.hpp>
 #include <HexEngine.Core/GUI/Elements/LineEdit.hpp>
+#include <HexEngine.Core/GUI/Elements/ArrayElement.hpp>
+#include <format>
 #include "CityAnchorUtils.hpp"
 #include "PlaceOfWorkComponent.hpp"
 #include "CityAssetPins.hpp"
@@ -164,6 +166,8 @@ CityRoutineSystemComponent::CityRoutineSystemComponent(HexEngine::Entity* entity
 		_walkStuckRepathCooldownSeconds = copy->_walkStuckRepathCooldownSeconds;
 		_walkMaxDistance = copy->_walkMaxDistance;
 		_defaultVehiclePrefabPath = copy->_defaultVehiclePrefabPath;
+		_roleVehicleRules = copy->_roleVehicleRules;
+		_spawnVehicleMinDistance = copy->_spawnVehicleMinDistance;
 		_hideAgentsAtDestination = copy->_hideAgentsAtDestination;
 		_failedTaskCooldownSeconds = copy->_failedTaskCooldownSeconds;
 		_vehicleStuckSeconds = copy->_vehicleStuckSeconds;
@@ -198,6 +202,8 @@ void CityRoutineSystemComponent::Serialize(json& data, HexEngine::JsonFile* file
 	file->Serialize(data, "_walkStuckRepathCooldownSeconds", _walkStuckRepathCooldownSeconds);
 	file->Serialize(data, "_walkMaxDistance", _walkMaxDistance);
 	file->Serialize(data, "_defaultVehiclePrefabPath", _defaultVehiclePrefabPath);
+	file->Serialize(data, "_roleVehicleRules", _roleVehicleRules);
+	file->Serialize(data, "_spawnVehicleMinDistance", _spawnVehicleMinDistance);
 	file->Serialize(data, "_hideAgentsAtDestination", _hideAgentsAtDestination);
 	file->Serialize(data, "_failedTaskCooldownSeconds", _failedTaskCooldownSeconds);
 	file->Serialize(data, "_vehicleStuckSeconds", _vehicleStuckSeconds);
@@ -224,6 +230,9 @@ void CityRoutineSystemComponent::Deserialize(json& data, HexEngine::JsonFile* fi
 	file->Deserialize(data, "_walkStuckRepathCooldownSeconds", _walkStuckRepathCooldownSeconds);
 	file->Deserialize(data, "_walkMaxDistance", _walkMaxDistance);
 	file->Deserialize(data, "_defaultVehiclePrefabPath", _defaultVehiclePrefabPath);
+	file->Deserialize(data, "_roleVehicleRules", _roleVehicleRules);
+	file->Deserialize(data, "_spawnVehicleMinDistance", _spawnVehicleMinDistance);
+	_vehicleRulesParsed = false;
 	file->Deserialize(data, "_hideAgentsAtDestination", _hideAgentsAtDestination);
 	file->Deserialize(data, "_failedTaskCooldownSeconds", _failedTaskCooldownSeconds);
 	file->Deserialize(data, "_vehicleStuckSeconds", _vehicleStuckSeconds);
@@ -276,6 +285,23 @@ bool CityRoutineSystemComponent::CreateWidget(HexEngine::ComponentWidget* widget
 	vehicle->SetValue(std::wstring(_defaultVehiclePrefabPath.begin(), _defaultVehiclePrefabPath.end()));
 	vehicle->SetDoesCallbackWaitForReturn(false);
 	vehicle->SetOnInputFn([this](HexEngine::LineEdit*, const std::wstring& value) { _defaultVehiclePrefabPath = ws2s(value); });
+	new HexEngine::ArrayElement<std::string>(
+		widget,
+		widget->GetNextPos(),
+		HexEngine::Point(widget->GetSize().x - 20, 160),
+		L"Role Vehicle Rules (Roles[@Workplaces] = prefabs)",
+		_roleVehicleRules,
+		[this](HexEngine::Element* parent, std::string& item, int32_t)
+		{
+			auto* edit = new HexEngine::LineEdit(parent, HexEngine::Point(0, 0), HexEngine::Point(parent->GetSize().x, 18), L"");
+			edit->SetValue(std::wstring(item.begin(), item.end()));
+			edit->SetDoesCallbackWaitForReturn(true);
+			edit->SetOnInputFn([this, &item](HexEngine::LineEdit*, const std::wstring& value) { item = ws2s(value); _vehicleRulesParsed = false; });
+		},
+		[]() -> std::string { return std::string(); },
+		[](const std::string&, int32_t) -> int32_t { return 22; },
+		[](const std::string&, int32_t index) -> std::wstring { return std::format(L"Rule {}", index + 1); });
+
 	auto* idleClip = new HexEngine::LineEdit(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Idle Clip");
 	idleClip->SetValue(std::wstring(_idleClipName.begin(), _idleClipName.end()));
 	idleClip->SetDoesCallbackWaitForReturn(false);
@@ -391,7 +417,11 @@ void CityRoutineSystemComponent::Update(float frameTime)
 		// agent's NavigationComponent kept its runtime path and went on walking
 		// in the editor. Drop the paths and per-trip state.
 		if (_wasGameRunning)
+		{
 			CityAssetPins::Clear();
+			_vehicleRulesParsed = false;	// re-expand wildcards next play (new variants)
+			ResetOwnedCars();
+		}
 		if (_wasGameRunning && GetEntity() != nullptr && GetEntity()->GetScene() != nullptr)
 		{
 			std::vector<RoutineAgentComponent*> agents;
@@ -594,7 +624,13 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 
 	case RoutineExecutionState::WalkToVehicleAnchor:
 	{
-		const std::string sourceParkingWaypointName = task.sourceParkingWaypointName.empty() ? task.targetParkingWaypointName : task.sourceParkingWaypointName;
+		std::string sourceParkingWaypointName = task.sourceParkingWaypointName.empty() ? task.targetParkingWaypointName : task.sourceParkingWaypointName;
+		// Own car nearby: walk to it (driveway / where it was left) rather than
+		// to a lane waypoint where a car would be conjured.
+		if (agent->StateTimerRef() <= frameTime)
+			RehomeOwnedCarIfOwnerHome(agent);
+		if (IsOwnedCarAvailable(agent, agent->GetEntity()->GetWorldTM().Translation()))
+			sourceParkingWaypointName = agent->GetOwnedVehicleEntityName();
 
 		if (agent->StateTimerRef() <= frameTime)
 		{
@@ -704,8 +740,16 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 
 		if (vehicle->ConsumeRouteEndReachedEvent())
 		{
+			math::Vector3 exitPosition = vehicleEntity->GetWorldTM().Translation();
+			if (vehicleEntity->GetName() == agent->GetOwnedVehicleEntityName())
+			{
+				// Own car: park it now (driveway at home, car park elsewhere) so it
+				// doesn't sit in the lane while the owner walks in.
+				CleanupAgentVehicle(agent);
+				exitPosition = vehicleEntity->GetPosition();	// root entity: local == world; the world TM lags a ForcePosition
+			}
 			SetAgentHidden(agent->GetEntity(), false);
-			agent->GetEntity()->ForcePosition(vehicleEntity->GetWorldTM().Translation());
+			agent->GetEntity()->ForcePosition(exitPosition);
 			agent->SetExecutionState(RoutineExecutionState::WalkToTaskEntry);
 			agent->SetStateTimer(0.0f);
 			break;
@@ -1051,9 +1095,202 @@ RoutineTravelMode CityRoutineSystemComponent::ChooseTravelMode(RoutineAgentCompo
 		break;
 	}
 
-	if (agent->GetPreferredVehiclePrefabPath().empty() && _defaultVehiclePrefabPath.empty())
+	const float distance = (to - from).Length();
+	if (distance <= _walkMaxDistance)
 		return RoutineTravelMode::WalkOnly;
-	return (to - from).Length() <= _walkMaxDistance ? RoutineTravelMode::WalkOnly : RoutineTravelMode::DriveFirst;
+	// Own car to hand: drive. Otherwise a car would have to appear out of thin
+	// air - only do that when the trip is genuinely too long to walk.
+	if (IsOwnedCarAvailable(agent, from))
+		return RoutineTravelMode::DriveFirst;
+	if (agent->GetPreferredVehiclePrefabPath().empty() && _defaultVehiclePrefabPath.empty() && _roleVehicleRules.empty())
+		return RoutineTravelMode::WalkOnly;
+	return distance > _spawnVehicleMinDistance ? RoutineTravelMode::DriveFirst : RoutineTravelMode::WalkOnly;
+}
+
+namespace
+{
+	std::string TrimCopy(const std::string& v)
+	{
+		const auto b = v.find_first_not_of(" \t");
+		if (b == std::string::npos)
+			return std::string();
+		const auto e = v.find_last_not_of(" \t");
+		return v.substr(b, e - b + 1);
+	}
+
+	std::vector<std::string> SplitCsv(const std::string& v)
+	{
+		std::vector<std::string> out;
+		size_t start = 0;
+		while (start <= v.size())
+		{
+			const auto comma = v.find(',', start);
+			const auto token = TrimCopy(v.substr(start, comma == std::string::npos ? std::string::npos : comma - start));
+			if (!token.empty())
+				out.push_back(token);
+			if (comma == std::string::npos)
+				break;
+			start = comma + 1;
+		}
+		return out;
+	}
+
+	bool EqualsNoCase(const std::string& a, const std::string& b)
+	{
+		return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(),
+			[](char x, char y) { return std::tolower((unsigned char)x) == std::tolower((unsigned char)y); });
+	}
+
+	// "GameData.Prefabs/Vehicles/V_Sedan_*.hprefab" -> every matching file, as refs in
+	// the same "<FileSystem>.<dir>/<file>" form. Loose-file data only (a packaged
+	// build lists nothing - spell such prefabs out in full).
+	void ExpandPrefabPattern(const std::string& pattern, std::vector<std::string>& out)
+	{
+		const auto star = pattern.find('*');
+		if (star == std::string::npos)
+		{
+			out.push_back(pattern);
+			return;
+		}
+
+		const auto dot = pattern.find('.');
+		const auto slash = pattern.find_last_of('/');
+		if (dot == std::string::npos || slash == std::string::npos || slash < dot || star < slash)
+		{
+			LOG_WARN("CityRoutineSystem: vehicle prefab pattern '%s' must look like GameData.Dir/Name*.hprefab", pattern.c_str());
+			return;
+		}
+
+		const std::string fsName = pattern.substr(0, dot);
+		const std::string relDir = pattern.substr(dot + 1, slash - dot - 1);
+		const std::string filePattern = pattern.substr(slash + 1);
+		const std::string prefix = filePattern.substr(0, filePattern.find('*'));
+		const std::string suffix = filePattern.substr(filePattern.find('*') + 1);
+
+		auto* fileSystem = HexEngine::g_pEnv->GetResourceSystem().FindFileSystemByName(std::wstring(fsName.begin(), fsName.end()));
+		if (fileSystem == nullptr)
+		{
+			LOG_WARN("CityRoutineSystem: no file system '%s' for vehicle prefab pattern '%s'", fsName.c_str(), pattern.c_str());
+			return;
+		}
+
+		std::error_code ec;
+		const fs::path dir = fileSystem->GetDataDirectory() / relDir;
+		std::vector<std::string> found;
+		for (const auto& entry : fs::directory_iterator(dir, ec))
+		{
+			if (!entry.is_regular_file(ec))
+				continue;
+			const std::string name = entry.path().filename().string();
+			if (name.size() >= prefix.size() + suffix.size() &&
+				name.compare(0, prefix.size(), prefix) == 0 &&
+				name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
+			{
+				found.push_back(fsName + "." + relDir + "/" + name);
+			}
+		}
+
+		if (found.empty())
+			LOG_WARN("CityRoutineSystem: vehicle prefab pattern '%s' matched nothing", pattern.c_str());
+		std::sort(found.begin(), found.end());	// stable picks across runs
+		out.insert(out.end(), found.begin(), found.end());
+	}
+}
+
+void CityRoutineSystemComponent::ParseVehicleRules()
+{
+	_parsedVehicleRules.clear();
+	_vehicleRulesParsed = true;
+
+	for (const auto& line : _roleVehicleRules)
+	{
+		const auto eq = line.find('=');
+		if (eq == std::string::npos)
+		{
+			if (!TrimCopy(line).empty())
+				LOG_WARN("CityRoutineSystem: vehicle rule '%s' has no '='", line.c_str());
+			continue;
+		}
+
+		ParsedVehicleRule rule;
+		std::string lhs = line.substr(0, eq);
+		const auto at = lhs.find('@');
+		if (at != std::string::npos)
+		{
+			rule.workplaces = SplitCsv(lhs.substr(at + 1));
+			lhs = lhs.substr(0, at);
+		}
+		rule.roles = SplitCsv(lhs);
+		for (const auto& pattern : SplitCsv(line.substr(eq + 1)))
+			ExpandPrefabPattern(pattern, rule.prefabs);
+
+		if (!rule.roles.empty() && !rule.prefabs.empty())
+			_parsedVehicleRules.push_back(std::move(rule));
+	}
+}
+
+std::string CityRoutineSystemComponent::PickRoleVehiclePrefab(const RoutineAgentComponent* agent)
+{
+	if (agent == nullptr || _roleVehicleRules.empty())
+		return std::string();
+	if (!_vehicleRulesParsed)
+		ParseVehicleRules();
+
+	const auto& tags = agent->GetRoleTags();
+	const auto& workplace = agent->GetAssignedWorkplaceEntityName();
+
+	for (const auto& rule : _parsedVehicleRules)
+	{
+		bool roleMatch = false;
+		for (const auto& role : rule.roles)
+		{
+			if (role == "*")
+			{
+				roleMatch = true;
+				break;
+			}
+			for (const auto& tag : tags)
+			{
+				if (EqualsNoCase(role, tag))
+				{
+					roleMatch = true;
+					break;
+				}
+			}
+			if (roleMatch)
+				break;
+		}
+		if (!roleMatch)
+			continue;
+
+		if (!rule.workplaces.empty())
+		{
+			bool workplaceMatch = false;
+			for (const auto& name : rule.workplaces)
+			{
+				if (EqualsNoCase(name, workplace))
+				{
+					workplaceMatch = true;
+					break;
+				}
+			}
+			if (!workplaceMatch)
+				continue;
+		}
+
+		// Same agent -> same car every trip (FNV-1a of the entity name: stable
+		// across runs, unlike std::hash).
+		uint32_t h = 2166136261u;
+		const std::string& key = agent->GetEntity() != nullptr ? agent->GetEntity()->GetName() : workplace;
+		for (const char c : key)
+		{
+			h ^= (uint8_t)c;
+			h *= 16777619u;
+		}
+		return rule.prefabs[h % rule.prefabs.size()];
+	}
+
+	return std::string();
 }
 
 bool CityRoutineSystemComponent::ResolveAnchorPosition(const std::string& entityName, math::Vector3& outPosition) const
@@ -1243,6 +1480,24 @@ HexEngine::Entity* CityRoutineSystemComponent::AcquireVehicleForTask(RoutineAgen
 			return existing;
 	}
 
+	// The agent's own car: unpark it and pull out onto the nearest lane. Emergency
+	// call-outs still take the station's vehicle.
+	if (task.type != RoutineTaskType::RespondEmergency && IsOwnedCarAvailable(agent, agent->GetEntity()->GetWorldTM().Translation()))
+	{
+		auto* car = GetOwnedCar(agent);
+		auto& state = OwnedCarStateFor(car);
+		if (state.stored)
+		{
+			SetAgentHidden(car, false);
+			state.stored = false;
+		}
+		if (auto* traffic = car->GetComponent<TrafficVehicleComponent>(); traffic != nullptr)
+			traffic->SetParked(false);
+		task.sourceParkingWaypointName = FindNearestWaypointName(car->GetWorldTM().Translation());
+		agent->SetCurrentVehicleEntityName(car->GetName());
+		return car;
+	}
+
 	std::string prefabPath = agent->GetPreferredVehiclePrefabPath();
 	if (task.type == RoutineTaskType::RespondEmergency && !task.reason.empty())
 	{
@@ -1256,6 +1511,8 @@ HexEngine::Entity* CityRoutineSystemComponent::AcquireVehicleForTask(RoutineAgen
 		}
 	}
 
+	if (prefabPath.empty())
+		prefabPath = PickRoleVehiclePrefab(agent);
 	if (prefabPath.empty())
 		prefabPath = _defaultVehiclePrefabPath;
 	if (prefabPath.empty())
@@ -1338,6 +1595,8 @@ void CityRoutineSystemComponent::FinishTask(RoutineAgentComponent* agent, bool s
 		completedTask->type == RoutineTaskType::GoToWork;
 
 	CleanupAgentVehicle(agent);
+	if (success && completedTask.has_value() && completedTask->type == RoutineTaskType::GoHome)
+		RehomeOwnedCarIfOwnerHome(agent);
 	if (agent->GetEntity() != nullptr)
 	{
 		if (auto* nav = agent->GetEntity()->GetComponent<HexEngine::NavigationComponent>(); nav != nullptr)
@@ -1546,6 +1805,106 @@ std::string CityRoutineSystemComponent::FindNearestWaypointName(const math::Vect
 	return best;
 }
 
+HexEngine::Entity* CityRoutineSystemComponent::GetOwnedCar(const RoutineAgentComponent* agent) const
+{
+	if (agent == nullptr || agent->GetOwnedVehicleEntityName().empty() || agent->GetEntity() == nullptr)
+		return nullptr;
+	auto* scene = agent->GetEntity()->GetScene();
+	auto* car = scene != nullptr ? scene->GetEntityByName(agent->GetOwnedVehicleEntityName()) : nullptr;
+	if (car == nullptr || car->IsPendingDeletion() || car->GetComponent<TrafficVehicleComponent>() == nullptr)
+		return nullptr;
+	return car;
+}
+
+CityRoutineSystemComponent::OwnedCarState& CityRoutineSystemComponent::OwnedCarStateFor(HexEngine::Entity* car)
+{
+	auto it = _ownedCars.find(car->GetName());
+	if (it == _ownedCars.end())
+	{
+		// First sight this play session: wherever it stands now is home.
+		OwnedCarState state;
+		state.homePosition = car->GetWorldTM().Translation();
+		state.homeRotation = car->GetRotation();
+		it = _ownedCars.emplace(car->GetName(), state).first;
+	}
+	return it->second;
+}
+
+bool CityRoutineSystemComponent::IsOwnedCarAvailable(const RoutineAgentComponent* agent, const math::Vector3& agentPos) const
+{
+	auto* car = GetOwnedCar(agent);
+	if (car == nullptr)
+		return false;
+	auto* traffic = car->GetComponent<TrafficVehicleComponent>();
+	// Already being driven (by this agent mid-trip, or someone else).
+	if (traffic == nullptr || (!traffic->IsParked() && agent->GetCurrentVehicleEntityName() != car->GetName()))
+		return false;
+	// Close enough to walk to: on the driveway at home, or in the car park at the
+	// place the owner drove to (or where a stuck drive left it).
+	if ((car->GetWorldTM().Translation() - agentPos).LengthSquared() <= 300.0f * 300.0f)
+		return true;
+	// Put away elsewhere while the owner is at home: re-homed before use.
+	auto it = _ownedCars.find(car->GetName());
+	return it != _ownedCars.end() && it->second.stored && (it->second.homePosition - agentPos).LengthSquared() <= 80.0f * 80.0f;
+}
+
+void CityRoutineSystemComponent::ParkOwnedCar(HexEngine::Entity* car, bool atHome)
+{
+	auto& state = OwnedCarStateFor(car);
+	if (auto* traffic = car->GetComponent<TrafficVehicleComponent>(); traffic != nullptr)
+	{
+		traffic->SetParked(true);
+		traffic->SetUseWaypointRoute(false);
+	}
+	if (atHome)
+	{
+		car->ForcePosition(state.homePosition);
+		car->ForceRotation(state.homeRotation);
+		if (state.stored)
+			SetAgentHidden(car, false);
+		state.stored = false;
+	}
+	else
+	{
+		SetAgentHidden(car, true);
+		state.stored = true;
+	}
+}
+
+void CityRoutineSystemComponent::RehomeOwnedCarIfOwnerHome(RoutineAgentComponent* agent)
+{
+	auto* car = GetOwnedCar(agent);
+	if (car == nullptr || agent->GetCurrentVehicleEntityName() == car->GetName())
+		return;
+	auto it = _ownedCars.find(car->GetName());
+	if (it == _ownedCars.end() || !it->second.stored)
+		return;
+	if ((it->second.homePosition - agent->GetEntity()->GetWorldTM().Translation()).LengthSquared() > 80.0f * 80.0f)
+		return;
+	ParkOwnedCar(car, true);
+}
+
+void CityRoutineSystemComponent::ResetOwnedCars()
+{
+	auto* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr;
+	if (scene != nullptr)
+	{
+		for (auto& [name, state] : _ownedCars)
+		{
+			auto* car = scene->GetEntityByName(name);
+			if (car == nullptr || car->IsPendingDeletion())
+				continue;
+			car->ForcePosition(state.homePosition);
+			car->ForceRotation(state.homeRotation);
+			if (state.stored)
+				SetAgentHidden(car, false);
+			if (auto* traffic = car->GetComponent<TrafficVehicleComponent>(); traffic != nullptr)
+				traffic->SetParked(true);
+		}
+	}
+	_ownedCars.clear();
+}
+
 void CityRoutineSystemComponent::CleanupAgentVehicle(RoutineAgentComponent* agent)
 {
 	if (agent == nullptr || agent->GetEntity() == nullptr || agent->GetCurrentVehicleEntityName().empty())
@@ -1558,7 +1917,20 @@ void CityRoutineSystemComponent::CleanupAgentVehicle(RoutineAgentComponent* agen
 	auto* vehicle = scene->GetEntityByName(agent->GetCurrentVehicleEntityName());
 	if (vehicle != nullptr && !vehicle->IsPendingDeletion())
 	{
-		vehicle->DeleteMe();
+		if (vehicle->GetName() == agent->GetOwnedVehicleEntityName())
+		{
+			// Home trip ends on the driveway; anywhere else the car goes into the
+			// (implicit) car park until the owner comes back for it.
+			const auto& active = agent->GetActiveTask();
+			const bool goingHome = active.has_value() && active->type == RoutineTaskType::GoHome;
+			const auto& state = OwnedCarStateFor(vehicle);
+			const bool nearHome = (vehicle->GetWorldTM().Translation() - state.homePosition).LengthSquared() < 60.0f * 60.0f;
+			ParkOwnedCar(vehicle, goingHome && nearHome);
+		}
+		else
+		{
+			vehicle->DeleteMe();
+		}
 	}
 
 	agent->SetCurrentVehicleEntityName(std::string());

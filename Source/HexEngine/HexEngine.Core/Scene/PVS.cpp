@@ -1015,6 +1015,11 @@ namespace HexEngine
 		if (entity->GetLayer() == Layer::Invisible || entity->GetLayer() == Layer::Trigger || entity->HasFlag(EntityFlags::DoNotRender))
 			return;
 
+		// About to be deleted: its removal flushes it again, but anything cached
+		// after that point would dangle.
+		if (entity->IsPendingDeletion())
+			return;
+
 		if (_optimisedParams.isShadow && !entity->GetCastsShadows())
 			return;
 

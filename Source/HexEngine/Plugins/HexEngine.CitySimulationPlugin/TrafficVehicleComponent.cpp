@@ -1,4 +1,6 @@
 #include "TrafficVehicleComponent.hpp"
+#include "VehicleComponent.hpp"
+#include <chrono>
 #include "TrafficLaneComponent.hpp"
 #include "LanePathSmoothing.hpp"
 #include "TrafficSignalControllerComponent.hpp"
@@ -113,7 +115,7 @@ TrafficVehicleComponent::TrafficVehicleComponent(HexEngine::Entity* entity) :
 	// Per-vehicle audio personality, so a city of cars doesn't honk in
 	// unison and engines have slight pitch variation.
 	_honkPersonality = HexEngine::GetRandomFloat(0.7f, 1.4f);
-	_enginePitchOffset = HexEngine::GetRandomFloat(-0.07f, 0.07f);
+	_enginePitchOffset = HexEngine::GetRandomFloat(-0.1f, 0.1f);
 }
 
 TrafficVehicleComponent::TrafficVehicleComponent(HexEngine::Entity* entity, TrafficVehicleComponent* copy) :
@@ -155,12 +157,15 @@ TrafficVehicleComponent::TrafficVehicleComponent(HexEngine::Entity* entity, Traf
 		_honkBlockedThreshold = copy->_honkBlockedThreshold;
 		_honkCooldownMin = copy->_honkCooldownMin;
 		_honkCooldownMax = copy->_honkCooldownMax;
+		_honkChance = copy->_honkChance;
+		_parked = copy->_parked;
+		_honkVolume = copy->_honkVolume;
 	}
 
 	s_allVehicles.push_back(this);
 	// Fresh personality even on clones - traffic should still vary.
 	_honkPersonality = HexEngine::GetRandomFloat(0.7f, 1.4f);
-	_enginePitchOffset = HexEngine::GetRandomFloat(-0.07f, 0.07f);
+	_enginePitchOffset = HexEngine::GetRandomFloat(-0.1f, 0.1f);
 }
 
 TrafficVehicleComponent::~TrafficVehicleComponent()
@@ -191,7 +196,7 @@ void TrafficVehicleComponent::RebuildSpatialGrid()
 
 	for (auto* v : s_allVehicles)
 	{
-		if (v == nullptr) continue;
+		if (v == nullptr || v->_parked) continue;
 		auto* e = v->GetEntity();
 		if (e == nullptr || e->IsPendingDeletion()) continue;
 		const math::Vector3 pos = e->GetWorldTM().Translation();
@@ -226,7 +231,7 @@ size_t TrafficVehicleComponent::GetAliveVehicleCount()
 	size_t alive = 0;
 	for (auto* v : s_allVehicles)
 	{
-		if (v == nullptr) continue;
+		if (v == nullptr || v->_parked) continue;
 		auto* e = v->GetEntity();
 		if (e == nullptr || e->IsPendingDeletion()) continue;
 		++alive;
@@ -279,8 +284,55 @@ void TrafficVehicleComponent::StopEngineSound()
 	_engineSoundPlaying = false;
 }
 
+namespace
+{
+	// City-wide honk etiquette. A queue of cars that all see "blocked" at the
+	// same moment used to honk together, and every jam became a wall of horns.
+	// Recent honks (where + when) let a car stay quiet if someone nearby just
+	// honked, and a global gap keeps the soundscape from ever being mostly horn.
+	struct RecentHonk { math::Vector3 pos; double time; };
+	std::vector<RecentHonk>& RecentHonks()
+	{
+		static std::vector<RecentHonk> honks;
+		return honks;
+	}
+
+	double HonkClockSeconds()
+	{
+		using namespace std::chrono;
+		return duration<double>(steady_clock::now().time_since_epoch()).count();
+	}
+
+	constexpr double kHonkNearbySuppressSeconds = 10.0;
+	constexpr float kHonkNearbySuppressRadius = 35.0f;
+	constexpr double kHonkGlobalGapSeconds = 2.5;
+
+	bool HonkAllowed(const math::Vector3& pos)
+	{
+		const double now = HonkClockSeconds();
+		auto& honks = RecentHonks();
+		honks.erase(std::remove_if(honks.begin(), honks.end(),
+			[now](const RecentHonk& h) { return now - h.time > kHonkNearbySuppressSeconds; }), honks.end());
+
+		for (const auto& h : honks)
+		{
+			if (now - h.time < kHonkGlobalGapSeconds)
+				return false;
+			if (math::Vector3::DistanceSquared(h.pos, pos) < kHonkNearbySuppressRadius * kHonkNearbySuppressRadius)
+				return false;
+		}
+		return true;
+	}
+
+	void RecordHonk(const math::Vector3& pos)
+	{
+		RecentHonks().push_back({ pos, HonkClockSeconds() });
+	}
+}
+
 void TrafficVehicleComponent::TryHonk(const math::Vector3& worldPos)
 {
+	if (!HonkAllowed(worldPos)) return;
 	if (_honkSoundPaths.empty()) return;
 	if (HexEngine::g_pEnv == nullptr || HexEngine::g_pEnv->_audioManager == nullptr) return;
 
@@ -313,11 +365,12 @@ void TrafficVehicleComponent::TryHonk(const math::Vector3& worldPos)
 	auto honk = master->CreatePlaybackClone();
 	if (!honk) return;
 	honk->SetRadius(_honkSoundRadius);
-	honk->SetVolume(1.0f);
+	honk->SetVolume(std::clamp(_honkVolume, 0.0f, 1.0f));
 	// Slight per-honk pitch variation for natural-sounding traffic.
 	// In DirectX semi-octave units [-1, 1]; ±0.05 = ~3.5% frequency shift.
 	honk->SetPitch(HexEngine::GetRandomFloat(-0.05f, 0.05f));
 	HexEngine::g_pEnv->_audioManager->Play(honk, worldPos);
+	RecordHonk(worldPos);
 	// AudioManager keeps only a WEAK ref - the clone shared_ptr would
 	// die at end of scope and free the SoundEffectInstance before the
 	// honk finishes playing. Keep the clone alive in _activeHonks;
@@ -341,6 +394,13 @@ void TrafficVehicleComponent::UpdateAudio(const math::Vector3& worldPos, float f
 			}
 		}
 	}
+	// Rolling wheels: only where someone could see them turn.
+	if (distSqToCamera < 120.0f * 120.0f && _currentSpeed > 0.01f)
+	{
+		if (auto* vehicle = GetEntity()->GetComponent<VehicleComponent>(); vehicle != nullptr)
+			vehicle->SpinWheels(_currentSpeed * frameTime);
+	}
+
 	const float cullDist = std::max(_audioCullDistance, 1.0f);
 	// Hysteresis: stop slightly beyond start distance to avoid flicker
 	// for vehicles parked exactly at the cull edge.
@@ -380,7 +440,15 @@ void TrafficVehicleComponent::UpdateAudio(const math::Vector3& worldPos, float f
 		const int32_t numGears    = std::max(1, _engineNumGears);
 		const float gearPos       = speedAlpha * float(numGears);    // continuous gear index, e.g. 2.37
 		const float gearLocal     = std::clamp(gearPos - std::floor(gearPos), 0.0f, 1.0f);
-		const float targetPitch   = std::lerp(_engineIdlePitch, _engineMaxPitch, gearLocal) + _enginePitchOffset;
+		// Engine load: speeding up works the engine harder (higher, louder), lifting
+		// off drops it - otherwise a car at steady speed sits on one pitch forever.
+		const float accelNow = frameTime > 0.0f ? (_currentSpeed - _audioPrevSpeed) / frameTime : 0.0f;
+		_audioPrevSpeed = _currentSpeed;
+		_engineLoad = std::lerp(_engineLoad, std::clamp(accelNow / 3.0f, -1.0f, 1.0f), 1.0f - std::exp(-3.0f * frameTime));
+		_engineWobblePhase += frameTime * (0.35f + std::abs(_enginePitchOffset) * 4.0f);
+		const float wobble = 0.03f * std::sin(_engineWobblePhase);
+		const float loadPitch = 0.2f * std::max(_engineLoad, 0.0f) - 0.08f * std::max(-_engineLoad, 0.0f);
+		const float targetPitch   = std::lerp(_engineIdlePitch, _engineMaxPitch, gearLocal) + _enginePitchOffset + loadPitch + wobble;
 
 		// Smooth the abrupt drop at gear boundaries so the "shift"
 		// doesn't crackle. Exponential damping - same frame-rate
@@ -388,7 +456,7 @@ void TrafficVehicleComponent::UpdateAudio(const math::Vector3& worldPos, float f
 		const float shiftBlend    = 1.0f - std::exp(-std::max(_engineShiftDamping, 0.01f) * frameTime);
 		_engineSmoothedPitch      = std::lerp(_engineSmoothedPitch, targetPitch, shiftBlend);
 
-		const float vol = std::lerp(_engineIdleVolume, _engineMaxVolume, speedAlpha);
+		const float vol = std::lerp(_engineIdleVolume, _engineMaxVolume, speedAlpha) * (1.0f + 0.35f * std::max(_engineLoad, 0.0f) - 0.15f * std::max(-_engineLoad, 0.0f));
 		_engineSound->SetPitch(std::clamp(_engineSmoothedPitch, -1.0f, 1.0f));
 		_engineSound->SetVolume(std::clamp(vol, 0.0f, 1.0f));
 	}
@@ -409,10 +477,15 @@ void TrafficVehicleComponent::UpdateAudio(const math::Vector3& worldPos, float f
 	// Cooldown ticks down whether blocked or not so we don't accidentally
 	// honk again the instant we hit threshold next.
 	if (_honkCooldown > 0.0f) _honkCooldown = std::max(0.0f, _honkCooldown - frameTime);
+	if (!_honkerRolled)
+	{
+		_honkerRolled = true;
+		_isHonker = HexEngine::GetRandomFloat(0.0f, 1.0f) < std::clamp(_honkChance, 0.0f, 1.0f);
+	}
 
 	const bool isMoving = _currentSpeed > 0.5f;
 	const bool wantsToMove = _speed > 0.1f;
-	if (wantsToMove && !isMoving && !_queuedAtSignal)
+	if (wantsToMove && !isMoving && !_queuedAtSignal && _isHonker)
 	{
 		_blockedTime += frameTime;
 		const float effectiveThreshold = std::max(0.5f, _honkBlockedThreshold / std::max(_honkPersonality, 0.1f));
@@ -1246,6 +1319,12 @@ void TrafficVehicleComponent::Update(float frameTime)
 {
 	UpdateComponent::Update(frameTime);
 
+	if (_parked)
+	{
+		StopEngineSound();
+		return;
+	}
+
 	if (frameTime <= 0.0f)
 		return;
 
@@ -1384,13 +1463,14 @@ void TrafficVehicleComponent::Update(float frameTime)
 	auto* lane = ResolveLane();
 	const float laneSpeed = lane != nullptr ? lane->GetSpeedLimit() : _speed;
 	float maxSpeed = std::max(_useLaneSpeedLimit ? laneSpeed : _speed, 0.0f);
-	// Slow through active corner fillets - sharper turn, stronger slow-down.
-	if (!_cornerPoints.empty())
-		maxSpeed *= _cornerSpeedScale;
 	// Cache the achievable top speed so the audio system can map
 	// pitch correctly. Using _speed as the denominator means cars on
 	// slow lanes never reach max pitch even at their actual cruise.
+	// Taken before the corner slow-down so turning doesn't jump the pitch.
 	_audioReferenceMaxSpeed = std::max(maxSpeed, 0.01f);
+	// Slow through active corner fillets - sharper turn, stronger slow-down.
+	if (!_cornerPoints.empty())
+		maxSpeed *= _cornerSpeedScale;
 	if (maxSpeed <= 0.0f)
 	{
 		_currentSpeed = 0.0f;
@@ -1479,6 +1559,9 @@ void TrafficVehicleComponent::Serialize(json& data, HexEngine::JsonFile* file)
 	file->Serialize(data, "_honkBlockedThreshold", _honkBlockedThreshold);
 	file->Serialize(data, "_honkCooldownMin", _honkCooldownMin);
 	file->Serialize(data, "_honkCooldownMax", _honkCooldownMax);
+	file->Serialize(data, "_honkChance", _honkChance);
+	file->Serialize(data, "_parked", _parked);
+	file->Serialize(data, "_honkVolume", _honkVolume);
 }
 
 void TrafficVehicleComponent::Deserialize(json& data, HexEngine::JsonFile* file, uint32_t mask)
@@ -1514,6 +1597,9 @@ void TrafficVehicleComponent::Deserialize(json& data, HexEngine::JsonFile* file,
 	file->Deserialize(data, "_honkBlockedThreshold", _honkBlockedThreshold);
 	file->Deserialize(data, "_honkCooldownMin", _honkCooldownMin);
 	file->Deserialize(data, "_honkCooldownMax", _honkCooldownMax);
+	file->Deserialize(data, "_honkChance", _honkChance);
+	file->Deserialize(data, "_parked", _parked);
+	file->Deserialize(data, "_honkVolume", _honkVolume);
 	RestartPath();
 	// The lane entity may not be loaded yet at deserialize time (entities load
 	// in arbitrary order), so RestartPath above can't position us. Defer the
@@ -1673,8 +1759,12 @@ bool TrafficVehicleComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 	auto* engineGears     = new HexEngine::DragInt  (widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Engine Num Gears",     &_engineNumGears, 1, 8, 1);
 	auto* engineShiftDamp = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Engine Shift Damping", &_engineShiftDamping, 0.0f, 60.0f, 0.5f, 1);
 	auto* honkThreshold   = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Honk After Blocked (s)", &_honkBlockedThreshold, 0.1f, 30.0f, 0.1f, 2);
-	auto* honkCdMin       = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Honk Cooldown Min (s)",   &_honkCooldownMin, 0.5f, 60.0f, 0.1f, 2);
-	auto* honkCdMax       = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Honk Cooldown Max (s)",   &_honkCooldownMax, 0.5f, 60.0f, 0.1f, 2);
+	auto* honkCdMin       = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Honk Cooldown Min (s)",   &_honkCooldownMin, 0.5f, 120.0f, 0.1f, 2);
+	auto* honkCdMax       = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Honk Cooldown Max (s)",   &_honkCooldownMax, 0.5f, 120.0f, 0.1f, 2);
+	auto* honkChance      = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Honk Chance (drivers)",   &_honkChance, 0.0f, 1.0f, 0.01f, 2);
+	auto* honkVolume      = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Honk Volume",             &_honkVolume, 0.0f, 1.0f, 0.01f, 2);
+	honkChance->SetPrefabOverrideBinding(GetComponentName(), "/_honkChance");
+	honkVolume->SetPrefabOverrideBinding(GetComponentName(), "/_honkVolume");
 
 	audioCull      ->SetPrefabOverrideBinding(GetComponentName(), "/_audioCullDistance");
 	engineRadius   ->SetPrefabOverrideBinding(GetComponentName(), "/_engineSoundRadius");

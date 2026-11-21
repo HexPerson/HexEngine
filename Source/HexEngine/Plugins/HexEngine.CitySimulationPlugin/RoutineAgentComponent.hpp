@@ -83,6 +83,10 @@ public:
 	virtual const std::string& GetHomeEntityName() const override { return _homeEntityName; }
 	virtual const std::string& GetAssignedWorkplaceEntityName() const override { return _assignedWorkplaceEntityName; }
 	const std::string& GetPreferredVehiclePrefabPath() const { return _preferredVehiclePrefabPath; }
+	// The agent's own car (an entity in the scene, normally parked on its home
+	// driveway). Trips use it instead of spawning one.
+	const std::string& GetOwnedVehicleEntityName() const { return _ownedVehicleEntityName; }
+	void SetOwnedVehicleEntityName(const std::string& value) { _ownedVehicleEntityName = value; }
 	const std::string& GetCurrentVehicleEntityName() const { return _currentVehicleEntityName; }
 	bool IsEmergencyEligible() const { return _isEmergencyEligible; }
 	bool IsBusy() const { return _isBusy; }
@@ -154,6 +158,7 @@ private:
 	std::string _homeEntityName;
 	std::string _assignedWorkplaceEntityName;
 	std::string _preferredVehiclePrefabPath;
+	std::string _ownedVehicleEntityName;
 	bool _isEmergencyEligible = false;
 
 	bool _isBusy = false;

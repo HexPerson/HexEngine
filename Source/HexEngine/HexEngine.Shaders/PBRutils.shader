@@ -4,6 +4,8 @@
 }
 "Global"
 {
+#ifndef PBRUTILS_SHADER
+#define PBRUTILS_SHADER
 	static const float3 f0 = float3(0.04, 0.04, 0.04);
 	static const float MinRoughness = 0.04;
 	static const float PI = 3.141592653589793;
@@ -1731,4 +1733,5 @@
 
 		return float4(normalize(perturbedNormal), saturate(roughMul));
 	}
+#endif
 }
