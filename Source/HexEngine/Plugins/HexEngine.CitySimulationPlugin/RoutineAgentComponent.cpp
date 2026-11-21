@@ -98,6 +98,20 @@ void RoutineAgentComponent::Deserialize(json& data, HexEngine::JsonFile* file, u
 	_navigationReachedFlag = false;
 	_settledVenueName.clear();
 	_heldAtVenue = false;
+	SetConversationPaused(false);
+}
+
+void RoutineAgentComponent::SetConversationPaused(bool paused)
+{
+	_conversationPaused = paused;
+	// Navigation steps itself every frame, independently of the routine system,
+	// so it has to be frozen directly - skipping the routine tick alone would
+	// leave the NPC walking off mid-sentence.
+	if (auto* entity = GetEntity(); entity != nullptr)
+	{
+		if (auto* nav = entity->GetComponent<HexEngine::NavigationComponent>(); nav != nullptr)
+			nav->SetPaused(paused);
+	}
 }
 
 bool RoutineAgentComponent::CreateWidget(HexEngine::ComponentWidget* widget)

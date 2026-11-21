@@ -185,6 +185,9 @@ namespace HexEngine
 
 	private:
 		bool ResolveBody();
+		// Mounting a bike that's lying over: stand it up in place (heading kept),
+		// zero its motion and briefly suppress the crash checks.
+		void RightForMount();
 		// Collision-aware dismount placement. Probes candidate spots around the
 		// vehicle with scene rays (approach clearance from the seat, ground
 		// snap, headroom, body clearance) and returns the first clean foot
@@ -255,6 +258,7 @@ namespace HexEngine
 		float _airborneTime = 0.0f;      // wheel line clearly off the ground (landing detection)
 		bool  _crashed = false;
 		float _crashTimer = 0.0f;        // remount lockout remaining
+		float _remountGrace = 0.0f;      // crash checks suppressed after righting on mount
 		float _crashTopple = 0.0f;       // seconds of tip-over torque remaining
 		float _crashToppleSide = 1.0f;
 		bool  _crashEvent = false;

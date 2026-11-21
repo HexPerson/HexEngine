@@ -146,6 +146,8 @@ public:
 	void SetSettledVenueName(const std::string& venue) { _settledVenueName = venue; }
 	virtual void SetHeldAtVenue(bool held) override { _heldAtVenue = held; }
 	virtual bool IsHeldAtVenue() const override { return _heldAtVenue; }
+	virtual void SetConversationPaused(bool paused) override;
+	virtual bool IsConversationPaused() const override { return _conversationPaused; }
 	virtual bool WorkplaceOffersService(const std::string& tag) const override;
 
 private:
@@ -182,4 +184,5 @@ private:
 	float _seedCooldown = 0.0f;
 	std::string _settledVenueName;	// runtime
 	bool _heldAtVenue = false;		// runtime
+	bool _conversationPaused = false;	// runtime
 };

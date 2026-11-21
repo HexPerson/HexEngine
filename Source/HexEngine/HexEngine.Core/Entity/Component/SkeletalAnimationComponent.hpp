@@ -117,6 +117,9 @@ namespace HexEngine
 		void				SetAnimationIndex(uint32_t idx);
 		void				BlendToAnimationIndex(uint32_t idx);
 		uint32_t			GetAnimationIndex() const { return _animIndex; }
+		// The clip the component is settling on: the crossfade target while a
+		// blend is in flight, else the current clip.
+		uint32_t			GetTargetAnimationIndex() const { return _nextAnimIndex != (uint32_t)-1 ? _nextAnimIndex : _animIndex; }
 
 		// Root motion: when enabled, ReadNodeHierarchy strips the root bone's
 		// translation from the skeleton each frame and accumulates the per-

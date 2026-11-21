@@ -211,6 +211,7 @@ namespace HexEngine
 			_hopRequested = false;
 			_hopKickLeft = 0.0f;
 			std::fill(std::begin(_speedWindow), std::end(_speedWindow), 0.0f);
+			RightForMount();
 			CreateBinds();
 			MountCamera();
 			StartVehicleAudio();
@@ -224,6 +225,56 @@ namespace HexEngine
 			DismountCamera();
 			StopVehicleAudio();
 		}
+	}
+
+	void DrivableComponent::RightForMount()
+	{
+		// A crashed bike usually ends up on its side. Mounting re-enables upright
+		// control, but the "lost balance" check (>55 deg) fired on the very next
+		// tick, before the torque could lift it - so the bike re-crashed on every
+		// remount. Stand it up here instead.
+		if (!ResolveBody())
+			return;
+		const math::Quaternion rot = _body->GetPhysicsRotation();
+		const math::Vector3 up = math::Vector3::Transform(math::Vector3::Up, rot);
+		const math::Vector3 worldUp(0.0f, 1.0f, 0.0f);
+		const float cosTilt = std::clamp(up.Dot(worldUp), -1.0f, 1.0f);
+		if (cosTilt > std::cos(30.0f * 0.0174532925f))
+			return;   // upright enough: the upright torque handles small tilts
+
+		// Smallest rotation taking the bike's up to world up: about its forward
+		// axis when it's on its side, so the heading is kept.
+		math::Vector3 axis = up.Cross(worldUp);
+		float angle = std::acos(cosTilt);
+		if (axis.LengthSquared() < 1e-6f)
+		{
+			// Fully upside down: roll 180 degrees about the nose.
+			axis = math::Vector3::Transform(math::Vector3::Forward, rot);
+			angle = 3.14159265f;
+		}
+		axis.Normalize();
+		math::Quaternion upright = rot * math::Quaternion::CreateFromAxisAngle(axis, angle);
+		upright.Normalize();
+
+		// Lift clear of the ground so the standing wheels don't start inside it.
+		const math::Vector3 pos = _body->GetPhysicsPosition() + worldUp * 0.5f;
+		_body->UpdatePoseRotation(upright);
+		_body->UpdatePosePosition(pos);
+		_body->SetGravityEnabled(false, true);   // zero linear + angular velocity
+		_body->SetGravityEnabled(true, false);
+		_body->WakeUp();
+		// Mirror into the transform so the frame doesn't smear between poses (the
+		// body pose is world space, so only for an unparented vehicle - a parented
+		// one picks the pose up from the physics read-back next step).
+		if (auto* tf = GetEntity() != nullptr && GetEntity()->GetParent() == nullptr ? GetEntity()->GetComponent<Transform>() : nullptr; tf != nullptr)
+		{
+			tf->SetRotationNoNotify(upright);
+			tf->SetPositionNoNotify(pos);
+			tf->SnapInterpolation();
+		}
+		_hasPrevHeading = false;     // the yaw-rate controller mustn't see a jump
+		_airborneTime = 0.0f;        // the short drop isn't a "bad landing"
+		_remountGrace = 1.0f;
 	}
 
 	void DrivableComponent::TriggerCrash(const char* reason, float speed)
@@ -743,7 +794,19 @@ namespace HexEngine
 	{
 		InteractionComponent::Deserialize(data, file, mask);
 
+		// Possessed -> not possessed must go through SetPlayerControlled so the
+		// held keys, last drive input, binds, camera and audio are released. The
+		// play-stop restore re-deserialises this flag; writing it directly left
+		// _input at full throttle and the edit-mode FixedUpdate kept driving the
+		// bike after stop.
+		const bool wasPlayerControlled = _playerControlled;
 		DESERIALIZE_VALUE(_playerControlled);
+		if (wasPlayerControlled && !_playerControlled)
+		{
+			_playerControlled = true;
+			_lastPossessChangeFrame = -1;	// not a same-frame keypress race
+			SetPlayerControlled(false);
+		}
 
 		// Per-vehicle handling tuning. Missing keys keep the struct defaults, so
 		// older scenes load fine and only overrides are read back.
@@ -1035,6 +1098,7 @@ namespace HexEngine
 		if (_crashed)
 			_crashTimer -= dt;
 		_hopCooldownLeft = std::max(0.0f, _hopCooldownLeft - dt);
+		_remountGrace = std::max(0.0f, _remountGrace - dt);
 		_hopAirGrace = std::max(0.0f, _hopAirGrace - dt);
 
 		if (!ResolveBody())
@@ -1096,6 +1160,15 @@ namespace HexEngine
 		// A crashed (riderless) bike must not keep driving on its last input.
 		if (_crashed)
 			_input = DriveInput{};
+		// Physics also steps in the editor, but nothing drives outside play: a key
+		// held as play stopped never gets its release, and a "possess on play"
+		// bike keeps _playerControlled across the stop.
+		if (g_pEnv == nullptr || !g_pEnv->IsGameRunning())
+		{
+			_kThrottle = _kBrake = _kLeft = _kRight = _kHandbrake = _kHop = false;
+			_hopRequested = false;
+			_input = DriveInput{};
+		}
 
 		const float mass = std::max(_body->GetMass(), 1.0f);
 		const math::Vector3 pos = _body->GetPhysicsPosition();
@@ -1295,7 +1368,7 @@ namespace HexEngine
 		}
 		else
 		{
-			if (_airborneTime > 0.12f && _playerControlled && !_crashed)
+			if (_airborneTime > 0.12f && _playerControlled && !_crashed && _remountGrace <= 0.0f)
 			{
 				const float tiltDeg = std::acos(std::clamp(up.Dot(groundNormal), -1.0f, 1.0f)) * 57.2957795f;
 				if (tiltDeg > _tuning.crashLandAngle)
@@ -1306,7 +1379,7 @@ namespace HexEngine
 
 		// Lost balance: the bike rearing up against a kerb face or going over
 		// sideways (well past the ~24 deg max lean) - the rider can't stay on.
-		if (_playerControlled && !_crashed)
+		if (_playerControlled && !_crashed && _remountGrace <= 0.0f)
 		{
 			const float tiltDeg = std::acos(std::clamp(up.Dot(worldUp), -1.0f, 1.0f)) * 57.2957795f;
 			if (tiltDeg > 55.0f)
@@ -1322,7 +1395,7 @@ namespace HexEngine
 				recentMax = std::max(recentMax, s);
 			_speedWindow[_speedWindowIdx] = hSpeed;
 			_speedWindowIdx = (_speedWindowIdx + 1) % kSpeedWindow;
-			if (_playerControlled && !_crashed && _input.brake < 0.01f &&
+			if (_playerControlled && !_crashed && _remountGrace <= 0.0f && _input.brake < 0.01f &&
 				recentMax > _tuning.crashSpeed && hSpeed < recentMax * (1.0f - _tuning.crashSpeedLoss))
 			{
 				if (_tuning.debug)

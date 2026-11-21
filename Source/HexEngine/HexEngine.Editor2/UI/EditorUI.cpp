@@ -1758,7 +1758,15 @@ namespace HexEditor
 		{
 			if (_integrator.GetState() == GameTestState::Started && data->KeyDown.key == VK_ESCAPE)
 			{
-				_integrator.StopGame();
+				// Esc only stops play while the game has the mouse captured. A game
+				// that has freed the mouse is showing its own UI (dialog, map, menu)
+				// and Esc means "close that" - stopping play too threw the tester out
+				// of every conversation. Shift+Esc always stops; so does Stop.
+				const bool shiftHeld = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+				const bool gameOwnsMouse = HexEngine::g_pEnv->_inputSystem != nullptr &&
+					HexEngine::g_pEnv->_inputSystem->GetMouseLockMode() != HexEngine::MouseLockMode::Free;
+				if (shiftHeld || gameOwnsMouse)
+					_integrator.StopGame();
 			}
 		}
 

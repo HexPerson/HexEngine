@@ -318,6 +318,9 @@ namespace HexEngine
 	{
 		UpdateComponent::Update(dt);
 
+		if (_paused)
+			return;
+
 		if (_result.path.size() > 0)
 		{
 			INavMeshProvider::MoveResult result = g_pEnv->_navMeshProvider->Move(_result);

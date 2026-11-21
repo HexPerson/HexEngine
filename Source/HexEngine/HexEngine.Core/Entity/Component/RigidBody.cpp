@@ -447,8 +447,37 @@ namespace HexEngine
 	void RigidBody::TeleportToTransform()
 	{
 		auto rb = GetIRigidBody();
-		if (rb == nullptr || rb->IsCharacterController() || rb->GetBodyType() == IRigidBody::BodyType::Static)
+		if (rb == nullptr || rb->IsCharacterController())
 			return;
+
+		if (rb->GetBodyType() == IRigidBody::BodyType::Static)
+		{
+			// Static actors follow their transform through Entity::ForcePosition /
+			// ForceRotation, which a scripted mover (DoorComponent's swing) drives
+			// in play. A silent transform restore left the actor where play put
+			// it: a door swung open in play looked shut after stop but its
+			// collider stayed open. Only move actors that actually disagree with
+			// the transform - re-posing every static (thousands) through the
+			// notifying setters would churn PVS/GI for nothing.
+			if (auto* tf = GetEntity()->GetComponent<Transform>(); tf != nullptr)
+				tf->SnapInterpolation();
+			const math::Vector3 worldPosition = GetEntity()->GetWorldTM().Translation();
+			math::Quaternion worldRotation = GetEntity()->GetRotation();
+			for (auto* parent = GetEntity()->GetParent(); parent != nullptr; parent = parent->GetParent())
+			{
+				worldRotation = worldRotation * parent->GetRotation();
+				worldRotation.Normalize();
+			}
+			const math::Vector3 physicsPosition = rb->GetPhysicsPosition();
+			const math::Quaternion physicsRotation = rb->GetPhysicsRotation();
+			const bool moved = math::Vector3::DistanceSquared(physicsPosition, worldPosition) > 1e-6f;
+			const bool turned = std::fabs(physicsRotation.Dot(worldRotation)) < 0.99999f;
+			if (moved)
+				rb->UpdatePosePosition(worldPosition);
+			if (turned)
+				rb->UpdatePoseRotation(worldRotation);
+			return;
+		}
 
 		// GetWorldTM (read by ForceUpdatePose) returns the INTERPOLATED pose,
 		// which lags a transform that was just rewritten.

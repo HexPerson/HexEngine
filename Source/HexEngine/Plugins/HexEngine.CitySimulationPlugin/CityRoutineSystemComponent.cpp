@@ -431,6 +431,7 @@ void CityRoutineSystemComponent::Update(float frameTime)
 				if (agent == nullptr || agent->GetEntity() == nullptr)
 					continue;
 				CleanupAgentVehicle(agent);	// the trip's car is play-time only
+				agent->SetConversationPaused(false);	// stopped mid-dialog: not serialised, so release here
 				if (auto* nav = agent->GetEntity()->GetComponent<HexEngine::NavigationComponent>(); nav != nullptr)
 					nav->ClearPath();
 			}
@@ -545,7 +546,11 @@ void CityRoutineSystemComponent::UpdateAgents(float frameTime, float simulationH
 		if (agent == nullptr || agent->GetEntity() == nullptr || agent->GetEntity()->IsPendingDeletion())
 			continue;
 
-		UpdateAgentState(agent, frameTime, simulationHour, workplaceOccupancy);
+		// In conversation: the routine clock, walk timeouts and stuck checks all
+		// wait (a paused walker would otherwise be declared stuck and re-routed),
+		// but locomotion still updates so the body settles into idle.
+		if (!agent->IsConversationPaused())
+			UpdateAgentState(agent, frameTime, simulationHour, workplaceOccupancy);
 		UpdateLocomotionAnimation(agent, frameTime);
 	}
 }
@@ -1378,12 +1383,16 @@ void CityRoutineSystemComponent::UpdateLocomotionAnimation(RoutineAgentComponent
 	auto* nav = entity->GetComponent<HexEngine::NavigationComponent>();
 	const bool moving = state.smoothedSpeed > 0.3f && (nav == nullptr || nav->HasPath() || state.smoothedSpeed > 0.8f);
 	const int32_t wanted = moving ? clips.walk : clips.idle;
-	if (state.requestedClip != wanted)
-	{
-		if ((int32_t)skel->GetAnimationIndex() != wanted)
-			skel->BlendToAnimationIndex((uint32_t)wanted);
-		state.requestedClip = wanted;
-	}
+	// Compare with where the skeleton is HEADING (the blend target), every frame.
+	// The old check cached the request and compared with the clip currently
+	// playing: walk -> (speed dip) idle blend started -> walk again within the
+	// ~80 ms crossfade saw "walk" still playing and did nothing, the pending
+	// blend then completed into idle, and the NPC walked on in its idle pose
+	// until it next stopped. Re-checking the target also heals any outside
+	// reset of the clip (mesh swap, vehicle exit).
+	if ((int32_t)skel->GetTargetAnimationIndex() != wanted)
+		skel->BlendToAnimationIndex((uint32_t)wanted);
+	state.requestedClip = wanted;
 }
 
 bool CityRoutineSystemComponent::BeginWalkTo(RoutineAgentComponent* agent, const std::string& waypointEntityName)

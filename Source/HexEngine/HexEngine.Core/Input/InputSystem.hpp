@@ -170,6 +170,7 @@ namespace HexEngine
 		void Update(float frameTime);
 
 		void SetMouseLockMode(MouseLockMode mode);
+		MouseLockMode GetMouseLockMode() const { return _mouseLockMode; }
 
 		float GetXAxis() const;
 		float GetYAxis() const;

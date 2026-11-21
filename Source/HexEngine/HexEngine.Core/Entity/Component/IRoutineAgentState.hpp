@@ -29,5 +29,11 @@ namespace HexEngine
 		// e.g. to keep a job's pickup NPC findable until the player collects.
 		virtual void SetHeldAtVenue(bool held) = 0;
 		virtual bool IsHeldAtVenue() const = 0;
+
+		// Freeze the agent where it stands (e.g. while the player talks to it):
+		// navigation stops mid-path, its routine clock and walk timeouts don't
+		// advance, and it idles. Releasing resumes the same trip.
+		virtual void SetConversationPaused(bool paused) = 0;
+		virtual bool IsConversationPaused() const = 0;
 	};
 }

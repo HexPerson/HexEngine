@@ -60,6 +60,11 @@ namespace HexEngine
 		// True while the gate is holding this agent (it wants to move but waits).
 		bool IsHeldByGate() const { return _heldByGate; }
 
+		// Freeze the agent on its path without dropping it (e.g. while the player
+		// talks to it). The path and progress are kept; Update just doesn't step.
+		void SetPaused(bool paused) { _paused = paused; }
+		bool IsPaused() const { return _paused; }
+
 		//void SetReachedDestinationFn(std::function<ReachedDestinationFn> fn) { _reachedDestinationFn = fn; }
 
 	private:
@@ -99,6 +104,7 @@ namespace HexEngine
 
 		bool _awaitingPick = false; // armed by BeginPickTarget(); next scene click sets the target
 		bool _heldByGate = false;   // runtime: the segment gate refused this frame's step
+		bool _paused = false;       // runtime: SetPaused (not serialised)
 
 		//std::function<ReachedDestinationFn> _reachedDestinationFn;
 	};
