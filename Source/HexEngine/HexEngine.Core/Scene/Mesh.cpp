@@ -4,6 +4,10 @@
 #include "MeshInstanceManager.hpp"
 #include "../Math/FloatMath.hpp"
 #include "../Graphics/MaterialLoader.hpp"
+#include "../Entity/Component/RigidBody.hpp"
+#include "../Physics/IRigidBody.hpp"
+#include "../Environment/ClassRegistry.hpp"
+#include <mutex>
 
 //#include <noise.h>
 #include <fastnoiselite/Cpp/FastNoiseLite.h>
@@ -141,8 +145,17 @@ namespace HexEngine
 
 	const std::string& Mesh::GetFullName()
 	{
+		// Lazily cached, and meshes are shared between the scene-loading thread
+		// and the main thread: two first callers assigning _cachedFullName at once
+		// corrupted the string (crash in Mesh::CreateInstance during an editor
+		// project load, 2026-11-27). Build it under a lock; once set it never changes.
+		static std::mutex s_fullNameMutex;
 		if (_cachedFullName.length() == 0)
 		{
+			std::lock_guard<std::mutex> lock(s_fullNameMutex);
+			if (_cachedFullName.length() != 0)
+				return _cachedFullName;
+
 			std::string name;
 
 			if (_relativePath.empty() == false)
@@ -472,6 +485,53 @@ namespace HexEngine
 		_indices.insert(_indices.end(), indices.begin(), indices.end());
 	}
 
+	namespace
+	{
+		// A moving object: a vehicle (traffic, transit, ridden) or anything with a
+		// non-static rigid body, on the entity or up its parent chain. Its snow /
+		// dust pattern is keyed on object space (OBJECT_FLAGS_DYNAMIC) so it rides
+		// with it instead of sliding across the body as it drives.
+		bool IsMoverEntity(Entity* entity)
+		{
+			static ComponentId s_ids[4] = {};
+			static bool s_valid[4] = {};
+			static bool s_resolved = false;
+			if (!s_resolved && g_pEnv != nullptr && g_pEnv->_classRegistry != nullptr)
+			{
+				static const char* kNames[4] = { "VehicleComponent", "DrivableComponent", "TransitVehicleComponent", "PathMoverComponent" };
+				int32_t found = 0;
+				for (int32_t i = 0; i < 4; ++i)
+					if (auto* c = g_pEnv->_classRegistry->Find(std::string(kNames[i])); c != nullptr)
+					{
+						s_ids[i] = c->compId;
+						s_valid[i] = true;
+						++found;
+					}
+				// Plugins load before anything renders; resolve once Core's own
+				// DrivableComponent is registered (a project without the CitySim
+				// plugin simply has no VehicleComponent id).
+				s_resolved = s_valid[1];
+			}
+			// Runs per draw call: signature bit tests only, the component list is
+			// scanned just for entities that really have a RigidBody.
+			const ComponentId rbId = RigidBody::_GetComponentId();
+			int32_t depth = 0;
+			for (Entity* e = entity; e != nullptr && depth < 8; e = e->GetParent(), ++depth)
+			{
+				const ComponentSignature& sig = e->GetComponentSignature();
+				for (int32_t i = 0; i < 4; ++i)
+					if (s_valid[i] && sig.Has(s_ids[i]))
+						return true;
+				if (!sig.Has(rbId))
+					continue;
+				if (auto* rb = e->GetComponent<RigidBody>(); rb != nullptr)
+					if (auto* irb = rb->GetIRigidBody(); irb != nullptr && irb->GetBodyType() != IRigidBody::BodyType::Static)
+						return true;
+			}
+			return false;
+		}
+	}
+
 	void Mesh::UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId, bool isTransparencyPhase)
 	{
 		// Write the per-object constant buffer
@@ -491,6 +551,8 @@ namespace HexEngine
 		_objectBuffer->pad = 0;
 
 		_objectBuffer->_flags |= GetAnimationObjectFlags();
+		if (entity != nullptr && IsMoverEntity(entity))
+			_objectBuffer->_flags |= OBJECT_FLAGS_DYNAMIC;
 
 		_objectBuffer->_material = material->_properties;
 		_objectBuffer->_material.isInTransparencyPhase = isTransparencyPhase ? 1 : 0;

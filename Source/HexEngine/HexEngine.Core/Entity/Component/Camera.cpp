@@ -61,6 +61,25 @@ namespace HexEngine
 	const float gLargerFrustumExtraFovDegrees = 30.0f;
 
 	HVar r_cameraViewDistance("r_cameraViewDistance", "The maximum view depth of the camera", 1000.0f, 1.0f, 20000.0f);
+	// Global upscaler: the scene's main camera follows these; every other camera
+	// (map / capture / preview targets) renders at native size.
+	HVar r_upscaler("r_upscaler", "Upscaler for the main camera: 0 off, 1 FSR 2, 2 DLSS", 0, 0, 2);
+	HVar r_upscalerQuality("r_upscalerQuality", "Upscaler quality: 0 native AA (DLAA), 1 quality, 2 balanced, 3 performance, 4 ultra performance", 1, 0, 4);
+
+	namespace
+	{
+		DLSSMode DLSSModeFor(int32_t quality)
+		{
+			switch (quality)
+			{
+			case 0:  return DLSSMode::DLAA;
+			case 2:  return DLSSMode::Balanced;
+			case 3:  return DLSSMode::MaxPerformance;
+			case 4:  return DLSSMode::UltraPerformance;
+			default: return DLSSMode::MaxQuality;
+			}
+		}
+	}
 
 	extern HVar r_lodPartition;
 
@@ -149,9 +168,10 @@ namespace HexEngine
 				{
 					int32_t optimalWidth, optimalHeight;
 
+					const DLSSMode mode = DLSSModeFor(_fsrQuality);
 					if (streamline->QueryOptimalDLSSSettings(
 						(int32_t)_viewport.width, (int32_t)_viewport.height,
-						DLSSMode::MaxQuality,
+						mode,
 						optimalWidth, optimalHeight) == true)
 					{
 						LOG_INFO("DLSS determined an optimum render size of %dx%d (from %dx%d)", optimalWidth, optimalHeight, _viewport.width, _viewport.height);
@@ -159,7 +179,7 @@ namespace HexEngine
 						_dlssViewport.width = (float)optimalWidth;
 						_dlssViewport.height = (float)optimalHeight;
 
-						streamline->SetDLSSOptions(1.0f, true, true, DLSSMode::MaxQuality, (int32_t)_viewport.width, (int32_t)_viewport.height);
+						streamline->SetDLSSOptions(1.0f, true, true, mode, (int32_t)_viewport.width, (int32_t)_viewport.height);
 
 						//CreateRenderTarget(_dlssViewport.width, _dlssViewport.height);
 
@@ -279,6 +299,8 @@ namespace HexEngine
 		_viewport = vp;
 		if (_fsrEnabled)
 			_fsrValueChanged = true;	// re-derive the internal size on the next Update
+		if (_dlssEnabled)
+			_dlssValueChanged = true;	// (DLSS kept its old internal size after a window resize)
 
 		CreateRenderTarget((int32_t)vp.width, (int32_t)vp.height);
 	}
@@ -294,6 +316,45 @@ namespace HexEngine
 
 	void Camera::Update(float frameTime)
 	{
+		// Global upscaler (r_upscaler / r_upscalerQuality): the main camera follows
+		// it, every other camera stays native. Re-applied when either cvar changes.
+		{
+			Scene* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr;
+			const bool isMain = scene != nullptr && scene->GetMainCamera() == this;
+			const int32_t want = isMain ? std::clamp(r_upscaler._val.i32, 0, 2) : 0;
+			const int32_t quality = std::clamp(r_upscalerQuality._val.i32, 0, 4);
+			const bool wantDlss = want == 2, wantFsr = want == 1;
+			if (wantDlss != _dlssEnabled || wantFsr != _fsrEnabled || (want != 0 && quality != _fsrQuality))
+			{
+				_fsrQuality = quality;
+				if (_dlssEnabled != wantDlss || wantDlss)
+				{
+					_dlssEnabled = wantDlss;
+					_dlssValueChanged = true;
+				}
+				if (_fsrEnabled != wantFsr || wantFsr)
+				{
+					_fsrEnabled = wantFsr;
+					_fsrValueChanged = true;
+				}
+			}
+		}
+
+		// Switch the outgoing upscaler OFF before the incoming one comes on: each
+		// "off" path resizes the renderer back to native, which would undo the
+		// other's internal-size resize (FSR -> DLSS rendered at native into the
+		// DLSS-sized input: the frame only filled the top-left of the screen).
+		if (_dlssValueChanged && !_dlssEnabled)
+		{
+			EnableDLSS(false);
+			_dlssValueChanged = false;
+		}
+		if (_fsrValueChanged && !_fsrEnabled)
+		{
+			_fsrValueChanged = false;
+			EnableFSR(false);
+		}
+
 		if (_dlssValueChanged)
 		{
 			EnableDLSS(_dlssEnabled);
@@ -808,8 +869,12 @@ namespace HexEngine
 		DESERIALIZE_VALUE(_effects);
 		DESERIALIZE_VALUE(_cameraAngles);
 
-		_dlssValueChanged = true;
-		_fsrValueChanged = _fsrEnabled;
+		// The upscaler is global now (r_upscaler): saved per-camera flags are only
+		// read for old scenes and no longer switch anything on by themselves.
+		_dlssEnabled = false;
+		_fsrEnabled = false;
+		_dlssValueChanged = false;
+		_fsrValueChanged = false;
 	}
 
 	void Camera::SetYawLimits(const math::Vector2& limit, bool set)
@@ -837,20 +902,19 @@ namespace HexEngine
 
 	bool Camera::CreateWidget(ComponentWidget* widget)
 	{
-		Checkbox* dlssEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"DLSS Enabled", &_dlssEnabled);
-		dlssEnabled->SetOnCheckFn(std::bind(&Camera::EnableDLSS, this, std::placeholders::_2));
-		dlssEnabled->SetPrefabOverrideBinding(GetComponentName(), "/_dlssEnabled");
+		// These drive the GLOBAL upscaler (r_upscaler / r_upscalerQuality) - it
+		// applies to whichever camera is the main camera, not to this one.
+		Checkbox* dlssEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"DLSS (global)", &_dlssEnabled);
+		dlssEnabled->SetOnCheckFn([](Checkbox*, bool on) { r_upscaler._val.i32 = on ? 2 : (r_upscaler._val.i32 == 2 ? 0 : r_upscaler._val.i32); });
 
-		Checkbox* fsrEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"FSR 2 Enabled", &_fsrEnabled);
-		fsrEnabled->SetOnCheckFn(std::bind(&Camera::EnableFSR, this, std::placeholders::_2));
-		fsrEnabled->SetPrefabOverrideBinding(GetComponentName(), "/_fsrEnabled");
+		Checkbox* fsrEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"FSR 2 (global)", &_fsrEnabled);
+		fsrEnabled->SetOnCheckFn([](Checkbox*, bool on) { r_upscaler._val.i32 = on ? 1 : (r_upscaler._val.i32 == 1 ? 0 : r_upscaler._val.i32); });
 
 		static const wchar_t* kFsrQualityNames[] = { L"Native AA", L"Quality", L"Balanced", L"Performance", L"Ultra performance" };
-		DropDown* fsrQuality = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"FSR quality");
-		fsrQuality->SetValue(kFsrQualityNames[std::clamp(_fsrQuality, 0, 4)]);
-		fsrQuality->SetPrefabOverrideBinding(GetComponentName(), "/_fsrQuality");
+		DropDown* fsrQuality = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Upscaler quality");
+		fsrQuality->SetValue(kFsrQualityNames[std::clamp(r_upscalerQuality._val.i32, 0, 4)]);
 		for (int32_t q = 0; q < 5; ++q)
-			fsrQuality->GetContextMenu()->AddItem(new ContextItem(kFsrQualityNames[q], [this, q](const std::wstring&) { SetFSRQuality(q); }));
+			fsrQuality->GetContextMenu()->AddItem(new ContextItem(kFsrQualityNames[q], [q](const std::wstring&) { r_upscalerQuality._val.i32 = q; }));
 
 		//Checkbox* ssrEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"SSR Enabled", [this]() { return HEX_HASFLAG(GetCameraEffects(), CameraEffect::SSR);});
 		//ssrEnabled->SetOnCheckFn(std::bind(&Camera::ToggleEffect, this, CameraEffect::SSR));

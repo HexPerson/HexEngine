@@ -739,16 +739,58 @@ void PhysicsSystemPhysX::onShapeHit(const physx::PxControllerShapeHit& hit)
 		// We only allow horizontal pushes. Vertical pushes when we stand on dynamic objects creates
 		// useless stress on the solver. It would be possible to enable/disable vertical pushes on
 		// particular objects, if the gameplay requires it.
+		//
+		// The move direction always carries the small downward ground-stick
+		// velocity, so the old "exactly horizontal" test (|dp| < 1e-3) never
+		// passed and the player could not push anything. Push along the
+		// horizontal part of the move instead, unless the move is mostly
+		// vertical (standing on / landing on the object).
 		const physx::PxVec3 upVector = hit.controller->getUpDirection();
 		const physx::PxF32 dp = hit.dir.dot(upVector);
-		//		shdfnd::printFormatted("%f\n", fabsf(dp));
-		if (fabsf(dp) < 1e-3f)
-			//		if(hit.dir.y==0.0f)
+		physx::PxVec3 horiz = hit.dir - upVector * dp;
+		const physx::PxF32 horizLen = horiz.magnitude();
+		if (fabsf(dp) < 0.7f && horizLen > 1e-3f)
 		{
+			horiz *= 1.0f / horizLen;
+
 			const physx::PxTransform globalPose = actor->getGlobalPose();
 			const physx::PxVec3 localPos = globalPose.transformInv(toVec3(hit.worldPos));
 
-			addForceAtLocalPos(*actor, hit.dir * hit.length * 10.0f, localPos, physx::PxForceMode::eACCELERATION);
+			// Walker speed from this move's length (the CCT's 0.5 m step-up lets
+			// it ride over a bin within a frame or two, so a small force never
+			// had time to do anything).
+			const physx::PxF32 dt = physx::PxMax(_lastControllerMoveDt, 1e-3f);
+			const physx::PxF32 speed = physx::PxClamp(hit.length / dt, 1.5f, 7.0f);
+
+			// Only the PLAYER kicks props (the controller whose entity carries the
+			// scene's main camera, or is its ancestor). NPC walkers would otherwise
+			// shove every bin along the pavement; they get the gentle force below.
+			bool byPlayer = false;
+			if (physx::PxRigidActor* cctActor = hit.controller->getActor(); cctActor != nullptr && cctActor->userData != nullptr)
+			{
+				HexEngine::Entity* walker = static_cast<RigidBodyPhysX*>(cctActor->userData)->GetEntity();
+				if (walker != nullptr && walker->GetScene() != nullptr)
+					if (HexEngine::Camera* cam = walker->GetScene()->GetMainCamera(); cam != nullptr)
+						for (HexEngine::Entity* e = cam->GetEntity(); e != nullptr; e = e->GetParent())
+							if (e == walker) { byPlayer = true; break; }
+			}
+
+			if (byPlayer && actor->getMass() <= 60.0f)
+			{
+				// Light props (bins, bags, cones): kick them up to the walker's
+				// speed along the push, at the contact point so tall ones tip over.
+				const physx::PxF32 along = actor->getLinearVelocity().dot(horiz);
+				const physx::PxF32 want = speed * 1.1f;
+				if (along < want)
+					addForceAtLocalPos(*actor, horiz * (want - along), localPos, physx::PxForceMode::eVELOCITY_CHANGE);
+			}
+			else
+			{
+				// Heavy bodies (parked cars), and anything an NPC walks into: a
+				// capped shove (below a bin's static friction for an NPC walk).
+				const physx::PxF32 cap = byPlayer ? 600.0f : 60.0f;
+				addForceAtLocalPos(*actor, horiz * physx::PxMin(speed * 120.0f, cap), localPos, physx::PxForceMode::eFORCE);
+			}
 		}
 	}
 }

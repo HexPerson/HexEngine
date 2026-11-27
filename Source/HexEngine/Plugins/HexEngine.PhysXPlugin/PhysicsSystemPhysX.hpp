@@ -99,6 +99,10 @@ private:
 
 public:
 	bool _resetDebug = false;
+	// Time step of the controller move being processed (set by
+	// CharacterController::Move) so onShapeHit can turn the hit's motion length
+	// into the walker's speed.
+	float _lastControllerMoveDt = 1.0f / 120.0f;
 
 };
 

@@ -49,6 +49,16 @@
 
 		o.worldPos  = mul(input.position, worldMatrix).xyz;
 		o.worldPrev = mul(input.position, worldPrev).xyz;
+		// Trees (and anything else) that sway in the wind: the shell must ride the
+		// same offset as its substrate or the snow hangs in the rest pose while the
+		// canopy moves. Same call/params as Default.shader (b1 = the substrate's
+		// material, still bound from the base draw).
+		[branch]
+		if (g_material.windSwayParams.w > 0.5f)
+		{
+			o.worldPos  += WindSwayOffset(o.worldPos,  worldMatrix[3].xyz, g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_time);
+			o.worldPrev += WindSwayOffset(o.worldPrev, worldPrev[3].xyz,   g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_timePrev);
+		}
 		o.normal    = normalize(mul(input.normal,   (float3x3)normalMatrix));
 		o.tangent   = normalize(mul(input.tangent,  (float3x3)normalMatrix));
 		o.binormal  = normalize(mul(input.binormal, (float3x3)normalMatrix));

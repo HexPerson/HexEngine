@@ -291,8 +291,9 @@
 		const float dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * shelter);
 		if (dustAmount > 0.001f)
 		{
+			const float3 dustPatternPos = (g_objectFlags & OBJECT_FLAGS_DYNAMIC) ? input.lightViewPosition1.xyz : input.positionWS.xyz;
 			const float4 dustResult = ApplyDustAccumulation(
-				albedo.rgb, roughness, worldNormal, input.positionWS.xyz, dustAmount, g_textureSampler);
+				albedo.rgb, roughness, worldNormal, input.positionWS.xyz, dustPatternPos, dustAmount, g_textureSampler);
 			albedo.rgb = dustResult.rgb;
 			roughness  = dustResult.w;
 		}
@@ -368,8 +369,10 @@
 		if (shelteredSnow > 0.001f)
 		{
 			// worldNormal is inout since slice 5 - snow relief + drift banks.
+			// Moving objects key the pattern on their own space (no sliding snow).
+			const float3 snowPatternPos = (g_objectFlags & OBJECT_FLAGS_DYNAMIC) ? input.lightViewPosition1.xyz : input.positionWS.xyz;
 			const float4 snowResult = ApplySnowAccumulation(
-				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
+				albedo.rgb, roughness, worldNormal, input.positionWS.xyz, snowPatternPos,
 				shelteredSnow, g_weatherSurface.snowMelt, g_textureSampler);
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;

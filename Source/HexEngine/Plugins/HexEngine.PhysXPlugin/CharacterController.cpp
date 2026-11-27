@@ -72,6 +72,8 @@ void CharacterController::Move(const math::Vector3& dir, float minLength, float 
 			_controller->invalidateCache();
 	}
 
+	g_pPhysx->_lastControllerMoveDt = frameTime > 1e-4f ? frameTime : 1.0f / 120.0f;
+
 	g_pPhysx->GetScene()->lockRead();
 
 	_controller->move(

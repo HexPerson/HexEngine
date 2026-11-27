@@ -107,6 +107,14 @@
 		output.previousPositionUnjittered = prevFrame_clipPos;
 		output.currentPositionUnjittered = output.position;
 
+		// Object-space position in metres (scale applied, no rotation/translation)
+		// for the weather patterns of moving objects (OBJECT_FLAGS_DYNAMIC). The
+		// interpolator was unused by this VS/PS pair.
+		{
+			const float3 objScale = float3(length(worldMatrix[0].xyz), length(worldMatrix[1].xyz), length(worldMatrix[2].xyz));
+			output.lightViewPosition1 = float4(input.position.xyz * objScale, 0.0f);
+		}
+
 		// Apply TAA jitter
 		output.position.xy += g_jitterOffsets * output.position.w;
 					

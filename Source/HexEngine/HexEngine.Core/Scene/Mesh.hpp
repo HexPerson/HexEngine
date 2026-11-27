@@ -188,6 +188,8 @@ namespace HexEngine
 	// Vertices were skinned by the GpuSkinning compute pass: draw them rigidly, and
 	// read last frame's skinned position from the BLENDINDICES slot for motion vectors.
 	const int OBJECT_FLAGS_PRESKINNED				= (1 << 10);
+	// Moving object (vehicle / physics-driven): weather patterns use object space.
+	const int OBJECT_FLAGS_DYNAMIC					= (1 << 11);
 
 	class MeshRenderer;
 	class Model;

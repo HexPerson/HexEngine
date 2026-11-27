@@ -1036,11 +1036,16 @@
 	// and melt scales the height toward zero so slush flattens
 	// GEOMETRICALLY before the threshold retreat removes it. worldNormal
 	// is inout for the relief; samp samples the shelter map.
+	// patternPos keys the procedural snow (height field, parallax, noise,
+	// relief): the world position for the city, the object-space position for
+	// moving objects so the pattern rides with them. worldPos stays world for
+	// the view vector and the shelter / drift maps.
 	float4 ApplySnowAccumulation(
 		float3 baseAlbedo,
 		float baseRoughness,
 		inout float3 worldNormalWS,
 		float3 worldPos,
+		float3 patternPos,
 		float snowCoverage,
 		float snowMelt,
 		SamplerState samp)
@@ -1062,14 +1067,14 @@
 		// field, and shade the whole snow layer at the RAISED hit point
 		// `sxz` instead of the flat ground point. This is what actually
 		// sells depth - near drifts occlude the troughs behind them.
-		const float baseField = SnowHeightField(worldPos.xz);
+		const float baseField = SnowHeightField(patternPos.xz);
 		const float baseThickness = saturate(slopeMask * (0.2f + baseField * 1.4f) * snowCoverage)
 			* (1.0f - melt);
 		const float kSnowMaxHeight = 0.15f; // metres of drift at full thickness
 		const float3 viewDirWS = normalize(g_eyePos.xyz - worldPos);
 		float troughAO = 1.0f;
-		const float2 pomXZ = SnowParallax(worldPos, viewDirWS, kSnowMaxHeight * baseThickness, troughAO);
-		const float2 sxz = worldPos.xz + pomXZ;
+		const float2 pomXZ = SnowParallax(patternPos, viewDirWS, kSnowMaxHeight * baseThickness, troughAO);
+		const float2 sxz = patternPos.xz + pomXZ;
 
 		// Procedural noise so snow patches read as "actual snow with texture",
 		// not a flat white paint. Two-octave value noise sampled at the
@@ -1206,6 +1211,7 @@
 		float baseRoughness,
 		inout float3 worldNormalWS,
 		float3 worldPos,
+		float3 patternPos,
 		float dirtAmount,
 		SamplerState samp)
 	{
@@ -1216,7 +1222,7 @@
 		if (slopeMask <= 0.0f)
 			return float4(baseAlbedo, baseRoughness);
 
-		const float height = DustHeightField(worldPos.xz);
+		const float height = DustHeightField(patternPos.xz);
 		const float patchNoise = saturate(height - (1.0f - dirtAmount) * 0.35f);
 		float dustMask = saturate(slopeMask * (0.15f + patchNoise * 1.2f) * dirtAmount) * 0.85f;
 
@@ -1253,7 +1259,7 @@
 			// the camera. The normal map goes through a WORLD-aligned tangent
 			// basis (+X / +Z / up) so it never touches the substrate's faceted
 			// tangents (the snow-shell lesson). ogl green -> flip for D3D.
-			const float2 uv = worldPos.xz * g_dustParams.y;
+			const float2 uv = patternPos.xz * g_dustParams.y;
 			dustColour = g_sandAlbedo.Sample(samp, uv).rgb;
 			float3 nTS = g_sandNormal.Sample(samp, uv).xyz * 2.0f - 1.0f;
 			nTS.y = -nTS.y;
@@ -1802,5 +1808,17 @@
 
 		return float4(normalize(perturbedNormal), saturate(roughMul));
 	}
+	// Old signatures: the pattern follows the world position (static surfaces).
+	float4 ApplySnowAccumulation(float3 baseAlbedo, float baseRoughness, inout float3 worldNormalWS,
+		float3 worldPos, float snowCoverage, float snowMelt, SamplerState samp)
+	{
+		return ApplySnowAccumulation(baseAlbedo, baseRoughness, worldNormalWS, worldPos, worldPos, snowCoverage, snowMelt, samp);
+	}
+	float4 ApplyDustAccumulation(float3 baseAlbedo, float baseRoughness, inout float3 worldNormalWS,
+		float3 worldPos, float dirtAmount, SamplerState samp)
+	{
+		return ApplyDustAccumulation(baseAlbedo, baseRoughness, worldNormalWS, worldPos, worldPos, dirtAmount, samp);
+	}
+
 #endif
 }

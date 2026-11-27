@@ -16,6 +16,10 @@
 	// Skinned by the GpuSkinning compute pass: draw rigidly; last frame's skinned
 	// position is in the BLENDINDICES slot (see DefaultAnimated).
 	static const uint OBJECT_FLAGS_PRESKINNED				= (1 << 10);
+	// A moving object (vehicle, physics prop): weather patterns (snow, dust) are
+	// keyed on its OBJECT-space position so they ride with it instead of the
+	// world-space pattern sliding across the body. Set in Mesh::UpdateConstantBuffer.
+	static const uint OBJECT_FLAGS_DYNAMIC					= (1 << 11);
 
 	static const uint MAX_BONES = 70;
 
