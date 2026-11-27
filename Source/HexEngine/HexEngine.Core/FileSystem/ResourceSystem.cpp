@@ -4,6 +4,7 @@
 #include "../HexEngine.hpp"
 #include <algorithm>
 #include <cwctype>
+#include <fstream>
 
 namespace
 {
@@ -200,6 +201,78 @@ namespace HexEngine
 			}
 		}
 		return nullptr;
+	}
+
+	bool ResourceSystem::ReadFileData(const fs::path& path, std::vector<uint8_t>& outData)
+	{
+		outData.clear();
+		if (path.empty())
+			return false;
+
+		auto readDisk = [&outData](const fs::path& p) -> bool
+		{
+			std::error_code ec;
+			if (!fs::is_regular_file(p, ec) || ec)
+				return false;
+			std::ifstream in(p, std::ios::binary | std::ios::ate);
+			if (!in)
+				return false;
+			const std::streamsize size = in.tellg();
+			if (size <= 0)
+				return false;
+			in.seekg(0);
+			outData.resize((size_t)size);
+			in.read(reinterpret_cast<char*>(outData.data()), size);
+			return (bool)in;
+		};
+
+		if (path.is_absolute())
+			return readDisk(path);
+		if (readDisk(path))	// working-directory relative (what std::ifstream callers relied on)
+			return true;
+
+		// Optional "<FileSystemName>." prefix: the dot must come before the first
+		// separator, or it is just the file extension.
+		const std::wstring pathStr = path.wstring();
+		const auto firstSep = pathStr.find_first_of(L"\\/");
+		const auto dot = pathStr.find(L'.');
+		const bool hasFsPrefix = dot != std::wstring::npos && (firstSep == std::wstring::npos || dot < firstSep);
+		const std::wstring fsName = hasFsPrefix ? pathStr.substr(0, dot) : std::wstring();
+		const fs::path localPath = fs::path(hasFsPrefix ? pathStr.substr(dot + 1) : pathStr).lexically_normal();
+
+		std::vector<FileSystem*> fileSystems;
+		{
+			std::unique_lock lock(_lock);
+			fileSystems = _fileSystems;
+		}
+
+		// Loose disk folders first (an edited file beats a stale package copy),
+		// then the packages.
+		for (int pass = 0; pass < 2; ++pass)
+		{
+			for (auto* fileSystem : fileSystems)
+			{
+				if (fileSystem == nullptr || fileSystem->IsAsset() != (pass == 1))
+					continue;
+				if (hasFsPrefix && fileSystem->GetName() != fsName)
+					continue;
+
+				const fs::path resolved = fileSystem->GetLocalAbsoluteDataPath(localPath);
+				if (pass == 0)
+				{
+					if (readDisk(resolved))
+						return true;
+				}
+				else if (fileSystem->DoesAbsolutePathExist(resolved))
+				{
+					fileSystem->GetFileData(resolved, outData);
+					if (!outData.empty())
+						return true;
+				}
+			}
+		}
+		outData.clear();
+		return false;
 	}
 
 	FileSystem* ResourceSystem::FindFileSystemByName(const std::wstring& name)

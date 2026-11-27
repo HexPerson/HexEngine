@@ -244,6 +244,9 @@
 
 	GBufferOut ShaderMain(VSOut input)
 	{
+		// TerrainCutout holes (stairwells, railway cuttings): no surface here.
+		clip(IsInsideTerrainCutout(input.worldPos) ? -1.0f : 1.0f);
+
 		GBufferOut output;
 		float3 interpolatedNormal = normalize(input.normal);
 		float3 geometricNormal = normalize(cross(ddy(input.worldPos), ddx(input.worldPos)));
@@ -339,9 +342,11 @@
 		// field mirrors sky/buildings the way a wet street does.
 		// Shelter occlusion + melt-fed wetness - matches DefaultPixel.
 		const float __shelter = SampleRainShelter(input.worldPos, g_textureSampler);
+		// Wide one-sided wet fade - lockstep with DefaultPixel.
+		const float __wetShelter = SampleRainWetShelter(input.worldPos, g_textureSampler);
 		const float __shelteredWetness = saturate(
 			(g_weatherSurface.wetness
-				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * __shelter);
+				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * __wetShelter);
 		// Sea contact (underwater S4) - lockstep with DefaultPixel; see
 		// PBRutils::OceanContactWetness. Terrain is where this matters most:
 		// the beach and the seabed are terrain.

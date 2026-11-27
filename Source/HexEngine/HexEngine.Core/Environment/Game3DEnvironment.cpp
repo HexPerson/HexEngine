@@ -96,10 +96,34 @@ namespace HexEngine
 
 		env->_assetPackageManager = new AssetPackageManager;
 
-		if (options.mountEngineAssetPackage && fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
+		// Where EngineAssets.pkg lives: the working directory (the editor's run
+		// layout), else beside the executable. A shipped game started from
+		// anywhere else - a shortcut, a debugger with another working directory,
+		// a command prompt - used to miss the package and fall back to loose
+		// files that aren't there (no shaders).
+		fs::path engineAssetsRoot;
+		std::wstring engineAssetsSearched;
+		if (options.mountEngineAssetPackage)
+		{
+			std::error_code ec;
+			const fs::path roots[] = { fs::current_path(ec), FileSystem::GetExecutableDirectory() };
+			for (const fs::path& root : roots)
+			{
+				if (root.empty())
+					continue;
+				engineAssetsSearched += (engineAssetsSearched.empty() ? L"" : L" ; ") + root.wstring();
+				if (fs::exists(root / L"Data" / L"AssetPackages" / L"EngineAssets.pkg", ec))
+				{
+					engineAssetsRoot = root;
+					break;
+				}
+			}
+		}
+
+		if (!engineAssetsRoot.empty())
 		{
 			FileSystem tempFs(L"EngineDataBootStrap");
-			tempFs.SetBaseDirectory(fs::current_path());
+			tempFs.SetBaseDirectory(engineAssetsRoot);
 			env->_resourceSystem->AddFileSystem(&tempFs);
 
 			LOG_INFO("Loading standard asset package");
@@ -115,8 +139,9 @@ namespace HexEngine
 			// until the AddFileSystem dedup was added; the dedup catches it
 			// now but the second call was still pointless).
 		}
-		else
+		if (env->_fileSystem == nullptr)
 		{
+			// No package (or it failed to load): loose Data/ in the working directory.
 			env->_fileSystem = new FileSystem(L"EngineData");
 			env->_fileSystem->SetBaseDirectory(fs::current_path());
 			// Disk-based fallback was never registered with ResourceSystem
@@ -127,6 +152,17 @@ namespace HexEngine
 		// Create the log file
 		//
 		env->CreateLogFile(options);
+
+		// (The package was mounted before the log existed - report it now.)
+		if (env->_standardAssets)
+		{
+			LOG_INFO("Engine assets: mounted '%S'", (engineAssetsRoot / L"Data" / L"AssetPackages" / L"EngineAssets.pkg").wstring().c_str());
+		}
+		else if (options.mountEngineAssetPackage)
+		{
+			LOG_WARN("Engine assets: EngineAssets.pkg not found or failed to load (looked in: %S). Using loose Data/ in the working directory.",
+				engineAssetsSearched.c_str());
+		}
 
 		LOG_INFO("Creating HexEngine using Game3DEnvironment configuration");		
 
@@ -465,7 +501,14 @@ namespace HexEngine
 
 		SAFE_DELETE(_debugGui);
 		
-		SAFE_DELETE(_fileSystem);		
+		// With EngineAssets.pkg mounted, _fileSystem is the package itself, which
+		// _standardAssets (a shared_ptr) owns - deleting it here freed it twice
+		// (crash on quit in every packaged build). Only the loose-Data fallback
+		// FileSystem is ours to delete.
+		if (_fileSystem != nullptr && _fileSystem == _standardAssets.get())
+			_fileSystem = nullptr;
+		else
+			SAFE_DELETE(_fileSystem);
 
 		_modelImporter->Destroy();
 		SAFE_DELETE(_modelImporter);
@@ -725,6 +768,14 @@ namespace HexEngine
 
 			hasUpdatedOnce = true;
 		}
+
+		// A game that pauses the simulation before its first fixed tick (a front-end
+		// menu over a frozen world) accumulates no simulation time, so the loop above
+		// never runs and nothing below would ever render - a black screen in a
+		// standalone launch. (The editor hid this: edit mode had already ticked.)
+		// Paused is still a valid world to draw.
+		if (_timeManager->_simulationPaused && IsGameRunning())
+			hasUpdatedOnce = true;
 
 		if(GetHasFocus() == false)
 			std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -1102,6 +1153,15 @@ namespace HexEngine
 	void Game3DEnvironment::OnResizeWindow(Window* window, uint32_t width, uint32_t height)
 	{
 		LOG_DEBUG("Resizing game window to %dx%d", width, height);
+
+		// Minimised: WM_SIZE reports 0x0. Keep everything at the last real size.
+		// Applying it rebuilt the main camera's projection with a 0/0 aspect (NaN)
+		// and a 0x0 viewport; on restore NRD received that as the previous frame's
+		// matrices and asserted (sqrt of NaN), and the assert dialog's message pump
+		// re-entered a resize mid-frame, failing ResizeBuffers with outstanding
+		// backbuffer refs - the editor died on minimise/restore.
+		if (width == 0 || height == 0)
+			return;
 
 		_windowWidth = width;
 		_windowHeight = height;

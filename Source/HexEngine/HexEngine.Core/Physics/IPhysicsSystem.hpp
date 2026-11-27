@@ -150,5 +150,19 @@ namespace HexEngine
 			*hitInfo = hit;
 			return 1;
 		}
+
+		// ---- Ragdoll joints (declared last: earlier vtable slots unchanged) ----
+		// A ball-and-socket joint between two dynamic bodies with a cone (swing)
+		// limit and a twist limit. `jointWorld` is the joint frame in world space
+		// (SimpleMath row-vector convention); its local X is the twist axis (point
+		// it along the child limb). The joined bodies don't collide with each
+		// other. Returns an opaque handle for DestroyJoint, or null if unsupported.
+		virtual void* CreateConeJoint(IRigidBody* parent, IRigidBody* child, const math::Matrix& jointWorld,
+			float swingDegrees, float twistDegrees)
+		{
+			(void)parent; (void)child; (void)jointWorld; (void)swingDegrees; (void)twistDegrees;
+			return nullptr;
+		}
+		virtual void DestroyJoint(void* joint) { (void)joint; }
 	};
 }

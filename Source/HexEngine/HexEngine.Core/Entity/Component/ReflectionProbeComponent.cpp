@@ -8,6 +8,7 @@
 #include "../../HexEngine.hpp"
 #include "../../Graphics/IGraphicsDevice.hpp"
 #include "../../Graphics/ITexture2D.hpp"
+#include "../../Graphics/IShader.hpp"
 #include "../../GUI/Elements/ComponentWidget.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
 #include "../../GUI/Elements/Checkbox.hpp"
@@ -366,7 +367,13 @@ namespace HexEngine
 				faceViewport.MaxDepth = 1.0f;
 				g_pEnv->_graphicsDevice->SetViewport(faceViewport);
 
-				rt->BlendTo_Additive(_faces[_pendingFace]);
+				// Linear passthrough for the downsample. The default shader is
+				// the GUI basic shader: it saturates (an HDR capture lost
+				// everything above 1 - sunlit walls, the sky) and on an HDR back
+				// buffer also applies pow(x, 2.2) * 1.9. IShader::Create is a
+				// resource-cache lookup, so this costs nothing per capture.
+				const auto downsampleShader = IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
+				rt->BlendTo_Additive(_faces[_pendingFace], downsampleShader.get());
 			}
 
 			// Capture-chain dump: the rig's render target (what the scene render

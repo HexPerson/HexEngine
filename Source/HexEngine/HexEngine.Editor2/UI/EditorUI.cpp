@@ -13,6 +13,14 @@
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
 #include <HexEngine.Core\FileSystem\PrefabLoader.hpp>
 #include <HexEngine.Core\Entity\Component\PlayerStartComponent.hpp>
+#include <HexEngine.Core\Entity\Component\RigidBody.hpp>
+#include <HexEngine.Core\Physics\IRigidBody.hpp>
+#include <HexEngine.Core\Input\CommandManager.hpp>
+#include <cstring>
+#include <ctime>
+#include <map>
+#include <tuple>
+#include <unordered_set>
 
 #include "Gadgets\ScaleGadget.hpp"
 #include "Gadgets\PositionGadget.hpp"
@@ -178,9 +186,26 @@ namespace HexEditor
 
 			std::shared_ptr<HexEngine::Scene> sceneToActivateAfterLoad;
 			bool loadedGameFromIntegrator = false;
+			_projectLoading = true;
+			std::vector<std::wstring> loadedScenePaths;
 
 			for (auto& scene : file._scenes)
 			{
+				// A project file listing the same scene twice (written by the old
+				// open-during-load race) must not load it twice: two live copies
+				// saved over each other, the stale one last.
+				{
+					std::error_code pathEc;
+					std::wstring key = fs::weakly_canonical(scene->GetAbsolutePath(), pathEc).wstring();
+					std::transform(key.begin(), key.end(), key.begin(), ::towlower);
+					if (std::find(loadedScenePaths.begin(), loadedScenePaths.end(), key) != loadedScenePaths.end())
+					{
+						LOG_WARN("Project lists scene '%s' more than once - loading it once", scene->GetAbsolutePath().string().c_str());
+						continue;
+					}
+					loadedScenePaths.push_back(std::move(key));
+				}
+
 				if (scene->IsSceneAttached() == false)
 				{
 					auto newScene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(false, (EditorUI*)&HexEngine::g_pEnv->GetUIManager(), true);
@@ -201,6 +226,7 @@ namespace HexEditor
 					if (loadedGameFromIntegrator == false && _integrator.LoadGame() == false)
 					{
 						LOG_CRIT("Failed to load game");
+						_projectLoading = false;
 						return;
 					}
 
@@ -226,6 +252,7 @@ namespace HexEditor
 			HexEngine::g_pEnv->_sceneManager->SetActiveScene(sceneToActivateAfterLoad);
 
 			_projectFile->_scenes = _sceneFiles;
+			_projectLoading = false;
 			_entityListRefreshPending = true;
 
 			// Instances whose prefab changed while their scene wasn't loaded.
@@ -491,7 +518,7 @@ namespace HexEditor
 				_mainMenu->AddSubItem(scene, actionMultiplayer);
 
 				HexEngine::MenuBar::Item* actionGenerateHlod = new HexEngine::MenuBar::Item;
-				actionGenerateHlod->name = L"Generate HLOD (Scaffold)";
+				actionGenerateHlod->name = L"Generate HLOD";
 				actionGenerateHlod->action = std::bind(&EditorUI::OnGenerateHLOD, this);
 				_mainMenu->AddSubItem(scene, actionGenerateHlod);
 
@@ -927,6 +954,234 @@ namespace HexEditor
 		RecordEntityCreated(billboard);
 	}
 
+	namespace
+	{
+		// Vertex-clustering simplification (Rossignac-Borrel) for HLOD proxies.
+		// Vertices are snapped to a grid of `cell` metres and merged only when
+		// they share a cell, a dominant normal axis (hard building corners keep
+		// their shading) AND a quantised UV: Universe meshes map faces to palette
+		// swatches in a colour atlas, and merging vertices from different
+		// swatches made triangles interpolate across the atlas (rainbow stripes
+		// on roofs and pavements). Triangles that collapse, or that repeat
+		// another with the same winding, are dropped. Position, normal and UV
+		// are averaged within a bucket; the tangent frame comes from the first.
+		void SimplifyHlodGeometry(std::vector<HexEngine::MeshVertex>& vertices, std::vector<HexEngine::MeshIndexFormat>& indices, float cell)
+		{
+			if (cell <= 0.0f || vertices.empty() || indices.size() < 3)
+				return;
+
+			struct CellKey
+			{
+				int32_t x, y, z;
+				uint32_t n;
+				int32_t u, v;
+				bool operator==(const CellKey& o) const { return x == o.x && y == o.y && z == o.z && n == o.n && u == o.u && v == o.v; }
+			};
+			struct CellKeyHash
+			{
+				size_t operator()(const CellKey& k) const
+				{
+					uint64_t h = static_cast<uint64_t>(static_cast<uint32_t>(k.x)) * 0x9E3779B185EBCA87ull;
+					h ^= static_cast<uint64_t>(static_cast<uint32_t>(k.y)) * 0xC2B2AE3D27D4EB4Full + (h << 6) + (h >> 2);
+					h ^= static_cast<uint64_t>(static_cast<uint32_t>(k.z)) * 0x165667B19E3779F9ull + (h << 6) + (h >> 2);
+					h ^= static_cast<uint64_t>(k.n) * 0x27D4EB2F165667C5ull;
+					h ^= static_cast<uint64_t>(static_cast<uint32_t>(k.u)) * 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+					h ^= static_cast<uint64_t>(static_cast<uint32_t>(k.v)) * 0xBF58476D1CE4E5B9ull + (h << 6) + (h >> 2);
+					return static_cast<size_t>(h);
+				}
+			};
+			const auto normalAxis = [](const math::Vector3& n) -> uint32_t
+			{
+				const float ax = std::fabs(n.x), ay = std::fabs(n.y), az = std::fabs(n.z);
+				if (ax >= ay && ax >= az) return n.x >= 0.0f ? 0u : 1u;
+				if (ay >= az) return n.y >= 0.0f ? 2u : 3u;
+				return n.z >= 0.0f ? 4u : 5u;
+			};
+
+			const float inv = 1.0f / cell;
+			// UV quantum: 1/64 keeps palette swatches (1/16..1/32 of the atlas)
+			// apart and stops tiled textures (UVs spanning repeats) from being
+			// merged across more than a fraction of a tile.
+			constexpr float kUvQuantum = 64.0f;
+			std::unordered_map<CellKey, uint32_t, CellKeyHash> cells;
+			cells.reserve(vertices.size() / 2 + 1);
+			std::vector<uint32_t> remap(vertices.size());
+			std::vector<HexEngine::MeshVertex> merged;
+			std::vector<math::Vector3> posSum, nrmSum;
+			std::vector<math::Vector2> uvSum;
+			std::vector<uint32_t> count;
+
+			for (size_t i = 0; i < vertices.size(); ++i)
+			{
+				const auto& v = vertices[i];
+				const math::Vector3 p(v._position.x, v._position.y, v._position.z);
+				const CellKey key{
+					static_cast<int32_t>(std::floor(p.x * inv)),
+					static_cast<int32_t>(std::floor(p.y * inv)),
+					static_cast<int32_t>(std::floor(p.z * inv)),
+					normalAxis(v._normal),
+					static_cast<int32_t>(std::floor(v._texcoord.x * kUvQuantum)),
+					static_cast<int32_t>(std::floor(v._texcoord.y * kUvQuantum)) };
+				const auto [it, inserted] = cells.try_emplace(key, static_cast<uint32_t>(merged.size()));
+				if (inserted)
+				{
+					merged.push_back(v);
+					posSum.push_back(p);
+					nrmSum.push_back(v._normal);
+					uvSum.push_back(v._texcoord);
+					count.push_back(1u);
+				}
+				else
+				{
+					posSum[it->second] += p;
+					nrmSum[it->second] += v._normal;
+					uvSum[it->second] += v._texcoord;
+					++count[it->second];
+				}
+				remap[i] = it->second;
+			}
+
+			for (size_t j = 0; j < merged.size(); ++j)
+			{
+				auto& v = merged[j];
+				const math::Vector3 p = posSum[j] / static_cast<float>(count[j]);
+				v._position = math::Vector4(p.x, p.y, p.z, 1.0f);
+				v._texcoord = uvSum[j] / static_cast<float>(count[j]);
+
+				math::Vector3 n = nrmSum[j];
+				if (n.LengthSquared() > 1e-12f)
+				{
+					n.Normalize();
+					v._normal = n;
+				}
+
+				// Re-orthogonalise the representative's tangent frame against the
+				// averaged normal, keeping its handedness.
+				math::Vector3 t = v._tangent - v._normal * v._normal.Dot(v._tangent);
+				if (t.LengthSquared() > 1e-12f)
+				{
+					t.Normalize();
+					const math::Vector3 b = v._normal.Cross(t);
+					const float handed = v._bitangent.Dot(b) < 0.0f ? -1.0f : 1.0f;
+					v._tangent = t;
+					v._bitangent = b * handed;
+				}
+			}
+
+			struct TriKey
+			{
+				uint32_t a, b, c;
+				bool operator==(const TriKey& o) const { return a == o.a && b == o.b && c == o.c; }
+			};
+			struct TriKeyHash
+			{
+				size_t operator()(const TriKey& k) const
+				{
+					uint64_t h = static_cast<uint64_t>(k.a) * 0x9E3779B185EBCA87ull;
+					h ^= static_cast<uint64_t>(k.b) * 0xC2B2AE3D27D4EB4Full + (h << 6) + (h >> 2);
+					h ^= static_cast<uint64_t>(k.c) * 0x165667B19E3779F9ull + (h << 6) + (h >> 2);
+					return static_cast<size_t>(h);
+				}
+			};
+
+			std::unordered_set<TriKey, TriKeyHash> seen;
+			seen.reserve(indices.size() / 3);
+			std::vector<HexEngine::MeshIndexFormat> outIndices;
+			outIndices.reserve(indices.size());
+			std::vector<uint32_t> compact(merged.size(), UINT32_MAX);
+			std::vector<HexEngine::MeshVertex> outVertices;
+			outVertices.reserve(merged.size());
+
+			for (size_t t = 0; t + 2 < indices.size(); t += 3)
+			{
+				if (indices[t] >= remap.size() || indices[t + 1] >= remap.size() || indices[t + 2] >= remap.size())
+					continue;
+
+				const uint32_t a = remap[indices[t]];
+				const uint32_t b = remap[indices[t + 1]];
+				const uint32_t c = remap[indices[t + 2]];
+				if (a == b || b == c || a == c)
+					continue;
+
+				// Canonical rotation (smallest first) keeps the winding, so a
+				// two-sided wall's back face isn't mistaken for a duplicate.
+				const TriKey key = (a < b && a < c) ? TriKey{ a, b, c } : (b < c ? TriKey{ b, c, a } : TriKey{ c, a, b });
+				if (!seen.insert(key).second)
+					continue;
+
+				for (const uint32_t m : { a, b, c })
+				{
+					if (compact[m] == UINT32_MAX)
+					{
+						compact[m] = static_cast<uint32_t>(outVertices.size());
+						outVertices.push_back(merged[m]);
+					}
+					outIndices.push_back(compact[m]);
+				}
+			}
+
+			vertices.swap(outVertices);
+			indices.swap(outIndices);
+		}
+
+		// True when the entity, or anything above it, is hidden, opted out of
+		// HLOD, or can move: a baked proxy would freeze a mover in place and keep
+		// drawing it after it drove off.
+		bool IsHlodExcludedOrMover(HexEngine::Entity* entity)
+		{
+			static constexpr const char* kMoverComponents[] = {
+				"Vehicle", "Drivable", "PathMover", "Door", "RoutineAgent", "Ragdoll", "SkeletalAnimation", "CharacterController",
+				// Not movers, but they swap materials at runtime (signal heads light
+				// red/amber/green): a proxy would freeze one state.
+				"TrafficSignal" };
+
+			for (HexEngine::Entity* e = entity; e != nullptr; e = e->GetParent())
+			{
+				if (e->HasFlag(HexEngine::EntityFlags::ExcludeFromHLOD) || e->HasFlag(HexEngine::EntityFlags::DoNotRender) || e->IsPendingDeletion())
+					return true;
+
+				if (e->GetLayer() == HexEngine::Layer::DynamicGeometry)
+					return true;
+
+				if (auto* rb = e->GetComponent<HexEngine::RigidBody>(); rb != nullptr)
+				{
+					auto* irb = rb->GetIRigidBody();
+					if (irb != nullptr && irb->GetBodyType() != HexEngine::IRigidBody::BodyType::Static)
+						return true;
+				}
+
+				for (auto* component : e->GetAllComponents())
+				{
+					const char* name = component ? component->GetComponentName() : nullptr;
+					if (name == nullptr)
+						continue;
+					for (const char* mover : kMoverComponents)
+					{
+						if (std::strstr(name, mover) != nullptr)
+							return true;
+					}
+				}
+			}
+			return false;
+		}
+	}
+
+	namespace
+	{
+		// hlod_generate <name>: log every bake decision for entities whose name
+		// contains <name> (diagnosing a mesh missing from its proxy).
+		std::string g_hlodTraceFilter;
+	}
+
+	// Console / editor bridge: same bake as Scene > Generate HLOD.
+	HEX_COMMAND(hlod_generate)
+	{
+		g_hlodTraceFilter = (args != nullptr && args->Count() > 0) ? args->GetAll()[0] : std::string();
+		if (g_pUIManager != nullptr)
+			g_pUIManager->OnGenerateHLOD();
+		g_hlodTraceFilter.clear();
+	}
+
 	void EditorUI::OnGenerateHLOD()
 	{
 		auto* currentScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get();
@@ -939,56 +1194,6 @@ namespace HexEditor
 			return;
 		}
 
-		std::vector<HexEngine::StaticMeshComponent*> staticMeshes;
-		currentScene->GetComponents(staticMeshes);
-		if (staticMeshes.empty())
-		{
-			LOG_INFO("HLOD generation skipped: scene has no static meshes");
-			return;
-		}
-
-		struct ClusterData
-		{
-			std::vector<HexEngine::StaticMeshComponent*> meshes;
-		};
-
-		const float clusterSize = 600.0f;
-		std::unordered_map<std::string, ClusterData> clusters;
-		clusters.reserve(staticMeshes.size());
-
-		for (auto* smc : staticMeshes)
-		{
-			if (smc == nullptr || smc->GetMesh() == nullptr)
-				continue;
-
-			auto* entity = smc->GetEntity();
-			if (entity == nullptr || entity->HasFlag(HexEngine::EntityFlags::DoNotRender))
-				continue;
-
-			if (entity->HasFlag(HexEngine::EntityFlags::ExcludeFromHLOD))
-			{
-				LOG_INFO("Ignoring entity '%s' for HLOD generation", smc->GetEntity()->GetName().c_str());
-				continue;
-			}
-
-			const auto& pos = entity->GetPosition();
-			const int32_t cx = static_cast<int32_t>(std::floor(pos.x / clusterSize));
-			const int32_t cy = static_cast<int32_t>(std::floor(pos.y / clusterSize));
-			const int32_t cz = static_cast<int32_t>(std::floor(pos.z / clusterSize));
-
-			const std::string key = std::to_string(cx) + "_" + std::to_string(cy) + "_" + std::to_string(cz);
-			clusters[key].meshes.push_back(smc);
-		}
-
-		fs::path hlodOutputDir = _projectFolderPath / "Data/HLOD";
-		std::error_code mkErr;
-		fs::create_directories(hlodOutputDir, mkErr);
-		if (mkErr)
-		{
-			LOG_WARN("Failed to create HLOD output directory '%s': %s", hlodOutputDir.string().c_str(), mkErr.message().c_str());
-			return;
-		}
-
 		HexEngine::FileSystem* gameFs = HexEngine::g_pEnv->GetResourceSystem().FindFileSystemByName(L"GameData");
 		if (gameFs == nullptr)
 		{
@@ -996,118 +1201,297 @@ namespace HexEditor
 			return;
 		}
 
-		int32_t generatedClusters = 0;
-		int32_t clusterIndex = 0;
-
-		for (const auto& [clusterKey, cluster] : clusters)
+		// The cell size comes from the runtime cvar (saved with the scene), so the
+		// PVS maps each source to the same cell the bake put it in.
+		float clusterSize = 200.0f;
+		if (auto* commands = HexEngine::g_pEnv->_commandManager; commands != nullptr)
 		{
-			if (cluster.meshes.size() < 2)
+			if (auto* var = commands->FindHVar("r_hlodClusterSize"); var != nullptr)
+				clusterSize = std::max(1.0f, var->_val.f32);
+		}
+		// Meshes smaller than this (world bounding radius) are a few pixels at the
+		// switch distance: left out of the proxy, they keep drawing (and LODing)
+		// normally instead of bloating it - furniture, street props, kerbs.
+		constexpr float kMinSourceRadius = 2.0f;
+		// Vertex-clustering cell: about one pixel at 1080p / 60 deg FOV at 400 m.
+		constexpr float kSimplifyCell = 0.5f;
+		static const std::string kGroupName = "HLODProxies";
+
+		// ---- Remove the previous bake (proxies, source marks, files) ----
+		if (auto* oldGroup = currentScene->GetEntityByName(kGroupName); oldGroup != nullptr)
+			currentScene->DestroyEntity(oldGroup);
+
+		int32_t removedProxies = 0;
+		{
+			std::vector<HexEngine::StaticMeshComponent*> existing;
+			currentScene->GetComponents(existing);
+			std::vector<HexEngine::Entity*> oldProxies, oldGroups;
+			for (auto* smc : existing)
+			{
+				auto* entity = smc ? smc->GetEntity() : nullptr;
+				if (entity == nullptr || entity->IsPendingDeletion())
+					continue;
+				if (entity->GetName().rfind("HLOD_", 0) == 0)
+				{
+					oldProxies.push_back(entity);
+					// A group left behind under a deduped name ("HLODProxies_1").
+					if (auto* parent = entity->GetParent(); parent != nullptr && parent->GetName().rfind(kGroupName, 0) == 0 &&
+						std::find(oldGroups.begin(), oldGroups.end(), parent) == oldGroups.end())
+						oldGroups.push_back(parent);
+				}
+				else if (entity->HasFlag(HexEngine::EntityFlags::RepresentedByHLOD))
+					entity->ClearFlags(HexEngine::EntityFlags::RepresentedByHLOD);
+			}
+			for (auto* entity : oldProxies)
+			{
+				if (!entity->IsPendingDeletion())
+				{
+					currentScene->DestroyEntity(entity);
+					++removedProxies;
+				}
+			}
+			for (auto* oldGroupEntity : oldGroups)
+			{
+				if (!oldGroupEntity->IsPendingDeletion())
+					currentScene->DestroyEntity(oldGroupEntity);
+			}
+		}
+
+		fs::path hlodOutputDir = _projectFolderPath / "Data/HLOD";
+		std::error_code fsErr;
+		fs::create_directories(hlodOutputDir, fsErr);
+		if (fsErr)
+		{
+			LOG_WARN("Failed to create HLOD output directory '%s': %s", hlodOutputDir.string().c_str(), fsErr.message().c_str());
+			return;
+		}
+
+		int32_t removedFiles = 0;
+		std::vector<fs::path> oldFiles;
+		for (const auto& file : fs::directory_iterator(hlodOutputDir, fsErr))
+		{
+			const fs::path& path = file.path();
+			if (path.extension() == ".hmesh" && path.stem().string().rfind("HLOD_", 0) == 0)
+				oldFiles.push_back(path);
+		}
+		for (const auto& path : oldFiles)
+		{
+			{
+				std::error_code rmErr;
+				if (fs::remove(path, rmErr))
+					++removedFiles;
+				else if (rmErr)
+					LOG_WARN("HLOD: could not delete old proxy '%s': %s", path.string().c_str(), rmErr.message().c_str());
+			}
+		}
+
+		// ---- Gather sources ----
+		std::vector<HexEngine::StaticMeshComponent*> staticMeshes;
+		currentScene->GetComponents(staticMeshes);
+
+		struct Candidate
+		{
+			HexEngine::StaticMeshComponent* smc = nullptr;
+			math::Vector3 world;
+			int32_t lod = -1;
+			// Set when the coarsest-LOD mesh standing for this source made it into a
+			// proxy. Only then is the source hidden at distance: a mesh with no CPU
+			// geometry used to be marked anyway and vanished past the switch.
+			mutable bool merged = false;
+		};
+		std::vector<Candidate> candidates;
+		candidates.reserve(staticMeshes.size());
+		// LOD'd models: bake only the coarsest level present under each parent.
+		std::unordered_map<HexEngine::Entity*, int32_t> maxLodByParent;
+		int32_t skippedSmall = 0, skippedMover = 0;
+
+		const auto traced = [](HexEngine::Entity* e) { return !g_hlodTraceFilter.empty() && e != nullptr && e->GetName().find(g_hlodTraceFilter) != std::string::npos; };
+
+		for (auto* smc : staticMeshes)
+		{
+			auto* entity = smc ? smc->GetEntity() : nullptr;
+			auto mesh = smc ? smc->GetMesh() : nullptr;
+			if (entity == nullptr || mesh == nullptr || entity->IsPendingDeletion())
+			{
+				if (traced(entity)) LOG_INFO("HLOD trace '%s': no mesh / pending deletion", entity->GetName().c_str());
+				continue;
+			}
+			if (entity->GetName().rfind("HLOD_", 0) == 0)
 				continue;
 
-			std::unordered_map<std::string, std::vector<HexEngine::StaticMeshComponent*>> materialGroups;
-			materialGroups.reserve(cluster.meshes.size());
-
-			for (auto* smc : cluster.meshes)
+			const HexEngine::Layer layer = entity->GetLayer();
+			if (layer != HexEngine::Layer::StaticGeometry && layer != HexEngine::Layer::Decorative)
 			{
-				if (smc == nullptr || smc->GetMesh() == nullptr)
-					continue;
-
-				auto material = smc->GetMaterial();
-				std::string matKey = "__default";
-				if (material != nullptr)
-				{
-					auto fsPath = material->GetFileSystemPath();
-					if (!fsPath.empty())
-						matKey = fsPath.string();
-				}
-
-				materialGroups[matKey].push_back(smc);
+				if (traced(entity)) LOG_INFO("HLOD trace '%s': layer %d", entity->GetName().c_str(), (int32_t)layer);
+				continue;
+			}
+			if (entity->GetChunk() != nullptr || mesh->HasAnimations() || smc->IsBoundToBone())
+			{
+				if (traced(entity)) LOG_INFO("HLOD trace '%s': chunk %p anim %d bone %d", entity->GetName().c_str(), (void*)entity->GetChunk(), mesh->HasAnimations() ? 1 : 0, smc->IsBoundToBone() ? 1 : 0);
+				continue;
+			}
+			if (IsHlodExcludedOrMover(entity))
+			{
+				if (traced(entity)) LOG_INFO("HLOD trace '%s': excluded / mover", entity->GetName().c_str());
+				++skippedMover;
+				continue;
+			}
+			if (entity->GetWorldBoundingSphere().Radius < kMinSourceRadius)
+			{
+				if (traced(entity)) LOG_INFO("HLOD trace '%s': small (radius %.2f)", entity->GetName().c_str(), entity->GetWorldBoundingSphere().Radius);
+				++skippedSmall;
+				continue;
+			}
+			if (traced(entity))
+			{
+				const auto w = entity->GetWorldTM().Translation();
+				LOG_INFO("HLOD trace '%s': candidate, radius %.2f, lod %d, world (%.1f %.1f %.1f), %zu verts %zu indices",
+					entity->GetName().c_str(), entity->GetWorldBoundingSphere().Radius, mesh->GetLodLevel(), w.x, w.y, w.z,
+					mesh->GetVertices().size(), mesh->GetIndices().size());
 			}
 
-			int32_t materialGroupIndex = 0;
-			for (const auto& [materialKey, groupMeshes] : materialGroups)
+			Candidate c;
+			c.smc = smc;
+			c.world = entity->GetWorldTM().Translation();
+			c.lod = mesh->GetLodLevel();
+			if (c.lod != -1)
 			{
-				if (groupMeshes.empty())
-					continue;
+				int32_t& maxLod = maxLodByParent[entity->GetParent()];
+				maxLod = std::max(maxLod, c.lod);
+			}
+			candidates.push_back(c);
+		}
 
+		struct ClusterData
+		{
+			int32_t cx = 0, cy = 0, cz = 0;
+			std::vector<const Candidate*> bake;      // meshes merged into the proxy
+			std::vector<const Candidate*> sources;   // everything the proxy may stand in for (incl. finer LODs)
+			math::Vector3 centreSum = math::Vector3::Zero;
+		};
+		std::map<std::tuple<int32_t, int32_t, int32_t>, ClusterData> clusters;
+
+		for (const auto& c : candidates)
+		{
+			// Same packing as PVS::PackHlodClusterKeyFromPosition, on the WORLD position.
+			const int32_t cx = static_cast<int32_t>(std::floor(c.world.x / clusterSize));
+			const int32_t cy = static_cast<int32_t>(std::floor(c.world.y / clusterSize));
+			const int32_t cz = static_cast<int32_t>(std::floor(c.world.z / clusterSize));
+			auto& cluster = clusters[{ cx, cy, cz }];
+			cluster.cx = cx; cluster.cy = cy; cluster.cz = cz;
+			cluster.sources.push_back(&c);
+
+			const bool coarsest = c.lod == -1 || c.lod == maxLodByParent[c.smc->GetEntity()->GetParent()];
+			if (coarsest)
+			{
+				cluster.bake.push_back(&c);
+				cluster.centreSum += c.world;
+			}
+		}
+
+		auto* group = currentScene->CreateEntity(kGroupName, math::Vector3::Zero);
+		group->SetFlag(HexEngine::EntityFlags::ExcludeFromHLOD | HexEngine::EntityFlags::DoNotBlockNavMesh);
+
+		const std::string bakeStamp = std::to_string(static_cast<long long>(std::time(nullptr)));
+		int32_t generatedProxies = 0, representedSources = 0, skippedNoGeometry = 0;
+		uint64_t trianglesIn = 0, trianglesOut = 0;
+
+		for (auto& [cell, cluster] : clusters)
+		{
+			if (cluster.bake.size() < 2)
+				continue;
+
+			const std::string clusterKey = std::to_string(cluster.cx) + "_" + std::to_string(cluster.cy) + "_" + std::to_string(cluster.cz);
+			// One centre for every proxy of the cluster: the runtime switches the
+			// whole cluster on one distance, so its material groups never disagree.
+			const math::Vector3 clusterCentre = cluster.centreSum / static_cast<float>(cluster.bake.size());
+
+			// Material + UV scale: one proxy (one draw) per group.
+			std::map<std::tuple<HexEngine::Material*, float, float>, std::vector<const Candidate*>> materialGroups;
+			for (const Candidate* c : cluster.bake)
+			{
+				const auto uv = c->smc->GetUVScale();
+				materialGroups[{ c->smc->GetMaterial().get(), uv.x, uv.y }].push_back(c);
+			}
+
+			int32_t clusterProxies = 0;
+			int32_t materialGroupIndex = 0;
+			for (const auto& [groupKey, groupMeshes] : materialGroups)
+			{
 				std::vector<HexEngine::MeshVertex> combinedVertices;
 				std::vector<HexEngine::MeshIndexFormat> combinedIndices;
-				combinedVertices.reserve(8192);
-				combinedIndices.reserve(16384);
-
 				std::shared_ptr<HexEngine::Material> groupMaterial;
-				math::Vector3 accumulatedWorldPos = math::Vector3::Zero;
-				uint32_t accumulatedWorldPosCount = 0;
 
-				for (auto* smc : groupMeshes)
+				for (const Candidate* c : groupMeshes)
 				{
+					auto* smc = c->smc;
 					auto mesh = smc->GetMesh();
-					if (!mesh || mesh->HasAnimations())
-						continue;
-
-					if (!groupMaterial && smc->GetMaterial())
-					{
-						groupMaterial = smc->GetMaterial();
-					}
-
 					const auto& sourceVertices = mesh->GetVertices();
 					const auto& sourceIndices = mesh->GetIndices();
-					if (sourceVertices.empty() || sourceIndices.empty())
+					if (sourceVertices.empty() || sourceIndices.size() < 3)
 						continue;
+					c->merged = true;
 
-					const auto worldTM = smc->GetEntity()->GetWorldTM();
+					if (!groupMaterial)
+						groupMaterial = smc->GetMaterial();
+
+					const math::Matrix worldTM = smc->GetEntity()->GetWorldTM();
+					const math::Matrix normalTM = worldTM.Invert().Transpose(); // correct under non-uniform scale
+					// A mirrored instance's triangles wind the other way; the proxy is
+					// drawn unmirrored, so flip them back.
+					const bool mirrored = worldTM.Determinant() < 0.0f;
 					const auto indexOffset = static_cast<HexEngine::MeshIndexFormat>(combinedVertices.size());
 
 					for (auto vertex : sourceVertices)
 					{
-						vertex._position = math::Vector4::Transform(vertex._position, worldTM);
-						vertex._normal = math::Vector3::TransformNormal(vertex._normal, worldTM);
+						const math::Vector3 p = math::Vector3::Transform(math::Vector3(vertex._position.x, vertex._position.y, vertex._position.z), worldTM);
+						vertex._position = math::Vector4(p.x - clusterCentre.x, p.y - clusterCentre.y, p.z - clusterCentre.z, 1.0f);
+						vertex._normal = math::Vector3::TransformNormal(vertex._normal, normalTM);
 						vertex._tangent = math::Vector3::TransformNormal(vertex._tangent, worldTM);
 						vertex._bitangent = math::Vector3::TransformNormal(vertex._bitangent, worldTM);
 						vertex._normal.Normalize();
 						vertex._tangent.Normalize();
 						vertex._bitangent.Normalize();
-
-						accumulatedWorldPos += math::Vector3(vertex._position.x, vertex._position.y, vertex._position.z);
-						accumulatedWorldPosCount++;
-
 						combinedVertices.push_back(vertex);
 					}
 
-					for (const auto index : sourceIndices)
+					for (size_t i = 0; i + 2 < sourceIndices.size(); i += 3)
 					{
-						combinedIndices.push_back(index + indexOffset);
+						combinedIndices.push_back(sourceIndices[i] + indexOffset);
+						combinedIndices.push_back(sourceIndices[mirrored ? i + 2 : i + 1] + indexOffset);
+						combinedIndices.push_back(sourceIndices[mirrored ? i + 1 : i + 2] + indexOffset);
 					}
-
-					LOG_DEBUG("Mesh '%s' was added to HLOD_%d_%d with material '%s'", smc->GetMesh()->GetName().c_str(), clusterIndex, materialGroupIndex, groupMaterial->GetName().c_str());
 				}
 
-				if (combinedVertices.empty() || combinedIndices.empty() || accumulatedWorldPosCount == 0)
+				if (combinedVertices.empty() || combinedIndices.empty())
 					continue;
 
-				const math::Vector3 clusterCenter = accumulatedWorldPos / static_cast<float>(accumulatedWorldPosCount);
-				for (auto& vertex : combinedVertices)
+				bool groupTraced = false;
+				for (const Candidate* c : groupMeshes)
 				{
-					vertex._position.x -= clusterCenter.x;
-					vertex._position.y -= clusterCenter.y;
-					vertex._position.z -= clusterCenter.z;
-				}
-
-				fs::path outputPath = hlodOutputDir / ("HLOD_" + std::to_string(clusterIndex) + "_" + std::to_string(materialGroupIndex++) + ".hmesh");
-				if (fs::exists(outputPath))
-					fs::remove(outputPath);
-
-				/*{
-					for (int32_t i = 1; i < 1024; ++i)
+					if (traced(c->smc->GetEntity()))
 					{
-						fs::path candidate = hlodOutputDir / ("HLOD_" + std::to_string(clusterIndex) + "_" + std::to_string(materialGroupIndex) + "_" + std::to_string(i) + ".hmesh");
-						if (!fs::exists(candidate))
-						{
-							outputPath = candidate;
-							break;
-						}
+						groupTraced = true;
+						LOG_INFO("HLOD trace '%s': merged=%d into %s group %d (material '%s')", c->smc->GetEntity()->GetName().c_str(), c->merged ? 1 : 0,
+							clusterKey.c_str(), materialGroupIndex, groupMaterial ? groupMaterial->GetName().c_str() : "<default>");
 					}
-				}*/
+				}
+				const size_t trisBefore = combinedIndices.size() / 3;
+				trianglesIn += combinedIndices.size() / 3;
+				// Simplify in cluster-local space (positions are already relative to
+				// the centre), so the grid is anchored per cluster.
+				SimplifyHlodGeometry(combinedVertices, combinedIndices, kSimplifyCell);
+				if (groupTraced)
+					LOG_INFO("HLOD trace: group %s/%d simplified %zu -> %zu triangles", clusterKey.c_str(), materialGroupIndex, trisBefore, combinedIndices.size() / 3);
+				if (combinedVertices.empty() || combinedIndices.empty())
+					continue;
+				trianglesOut += combinedIndices.size() / 3;
+
+				const std::string proxyName = "HLOD_" + clusterKey + "_" + std::to_string(materialGroupIndex);
+				// Unique file name per bake: the resource cache keys meshes by path,
+				// so reusing a name would hand back the previous bake's mesh.
+				const fs::path outputPath = hlodOutputDir / (proxyName + "_" + bakeStamp + ".hmesh");
+				++materialGroupIndex;
 
 				auto combinedMesh = std::shared_ptr<HexEngine::Mesh>(new HexEngine::Mesh(nullptr, outputPath.stem().string()), HexEngine::ResourceDeleter());
 				combinedMesh->SetPaths(outputPath, gameFs);
@@ -1128,43 +1512,68 @@ namespace HexEditor
 				dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
 				combinedMesh->SetOBB(obb);
 
-				std::shared_ptr<HexEngine::Material> hlodMaterial = groupMaterial
-					? std::make_shared<HexEngine::Material>(*groupMaterial)
-					: HexEngine::Material::GetDefaultMaterial();
-
-				if (hlodMaterial && !hlodMaterial->GetShadowMapShader())
-				{
-					auto fallbackShadowShader = HexEngine::IShader::Create("EngineData.Shaders/ShadowMapGeometry.hcs");
-					if (!fallbackShadowShader)
-						fallbackShadowShader = hlodMaterial->GetStandardShader();
-
-					if (fallbackShadowShader)
-						hlodMaterial->SetShadowMapShader(fallbackShadowShader);
-				}
-
-				combinedMesh->SetMaterial(hlodMaterial ? hlodMaterial : HexEngine::Material::GetDefaultMaterial());
-
+				// The sources' own material (shared, saved by path) - the old bake
+				// made an unsaved in-memory copy per proxy.
+				auto proxyMaterial = groupMaterial ? groupMaterial : HexEngine::Material::GetDefaultMaterial();
+				combinedMesh->SetMaterial(proxyMaterial);
 				combinedMesh->Save();
 
-				auto loadedHlodMesh = HexEngine::Mesh::Create(outputPath);
-				if (!loadedHlodMesh)
+				auto loadedProxyMesh = HexEngine::Mesh::Create(outputPath);
+				if (!loadedProxyMesh)
 				{
 					LOG_WARN("Failed to load generated HLOD mesh '%s'", outputPath.string().c_str());
 					continue;
 				}
 
-				auto* hlodEntity = currentScene->CreateEntity("HLOD_" + clusterKey + "_" + std::to_string(materialGroupIndex), clusterCenter);
-				auto* hlodSmc = hlodEntity->AddComponent<HexEngine::StaticMeshComponent>();
-				hlodSmc->SetMesh(loadedHlodMesh);
-				hlodSmc->SetMaterial(hlodMaterial ? hlodMaterial : HexEngine::Material::GetDefaultMaterial());
+				auto* proxy = currentScene->CreateEntity(proxyName, clusterCentre);
+				proxy->SetParent(group);
+				// Not a navmesh blocker (the sources already are) and never re-baked.
+				proxy->SetFlag(HexEngine::EntityFlags::ExcludeFromHLOD | HexEngine::EntityFlags::DoNotBlockNavMesh);
+				auto* proxySmc = proxy->AddComponent<HexEngine::StaticMeshComponent>();
+				proxySmc->SetMesh(loadedProxyMesh);
+				proxySmc->SetMaterial(proxyMaterial);
+				proxySmc->SetUVScale(math::Vector2(std::get<1>(groupKey), std::get<2>(groupKey)));
+				// The sources are already in the GI; the ray-traced GI skips HLOD_
+				// proxies by name, this covers the voxel GI.
+				proxySmc->SetExcludeFromGI(true);
 
-				generatedClusters++;
+				++generatedProxies;
+				++clusterProxies;
 			}
 
-			clusterIndex++;
+			if (clusterProxies > 0)
+			{
+				// A source is hidden at distance only if its own geometry - or, for a
+				// finer LOD, its model's coarsest level - was merged.
+				std::unordered_set<HexEngine::Entity*> mergedLodParents;
+				for (const Candidate* c : cluster.bake)
+				{
+					if (c->merged && c->lod != -1)
+						mergedLodParents.insert(c->smc->GetEntity()->GetParent());
+				}
+				for (const Candidate* c : cluster.sources)
+				{
+					const bool represented = c->lod == -1 ? c->merged : mergedLodParents.count(c->smc->GetEntity()->GetParent()) != 0;
+					if (!represented)
+					{
+						++skippedNoGeometry;
+						continue;
+					}
+					c->smc->GetEntity()->SetFlag(HexEngine::EntityFlags::RepresentedByHLOD);
+					++representedSources;
+				}
+			}
 		}
 
-		LOG_INFO("HLOD scaffold generation complete. Created %d cluster mesh(es).", generatedClusters);
+		// Every PVS re-reads the cluster tables (the proxies were added through
+		// the per-entity path, which only tags roles from the PREVIOUS tables).
+		currentScene->ForceRebuildPVS();
+
+		LOG_INFO("HLOD generation complete: %d proxies over %d cell(s) of %.0f m, standing in for %d meshes; %llu -> %llu triangles after simplification. "
+			"Skipped %d small (< %.1f m radius), %d moving/excluded and %d without CPU geometry (they keep drawing). Removed %d old proxies and %d old files.",
+			generatedProxies, static_cast<int32_t>(clusters.size()), clusterSize, representedSources,
+			static_cast<unsigned long long>(trianglesIn), static_cast<unsigned long long>(trianglesOut),
+			skippedSmall, kMinSourceRadius, skippedMover, skippedNoGeometry, removedProxies, removedFiles);
 	}
 
 	void EditorUI::OnSaveAction()
@@ -1765,7 +2174,10 @@ namespace HexEditor
 				const bool shiftHeld = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 				const bool gameOwnsMouse = HexEngine::g_pEnv->_inputSystem != nullptr &&
 					HexEngine::g_pEnv->_inputSystem->GetMouseLockMode() != HexEngine::MouseLockMode::Free;
-				if (shiftHeld || gameOwnsMouse)
+				// A game with its own pause menu claims Esc (InputSystem::SetGameOwnsEscape).
+				const bool gameOwnsEscape = HexEngine::g_pEnv->_inputSystem != nullptr &&
+					HexEngine::g_pEnv->_inputSystem->GetGameOwnsEscape();
+				if (shiftHeld || (gameOwnsMouse && !gameOwnsEscape))
 					_integrator.StopGame();
 			}
 		}
@@ -2703,6 +3115,7 @@ namespace HexEditor
 	bool EditorUI::CreateProjectScene(const std::string& name, bool withSun, bool activate, std::string& error)
 	{
 		if (_projectFolderPath.empty() || _projectFile == nullptr) { error = "no project is open"; return false; }
+		if (_projectLoading) { error = "the project is still loading its scenes - retry shortly"; return false; }
 		if (IsPrefabStageActive()) { error = "close the prefab stage first"; return false; }
 		if (IsPlayModeActive()) { error = "stop play mode first"; return false; }
 		if (name.empty() || name.size() > 100 || name.find_first_of("\\/:*?\"<>|") != std::string::npos || name.front() == '.' || name.front() == ' ' || name.back() == ' ' || name.back() == '.')
@@ -2809,6 +3222,7 @@ namespace HexEditor
 	bool EditorUI::ActivateProjectScene(const std::string& nameOrPath, std::string& error)
 	{
 		if (_projectFolderPath.empty() || _projectFile == nullptr) { error = "no project is open"; return false; }
+		if (_projectLoading) { error = "the project is still loading its scenes - retry once it has finished"; return false; }
 		if (IsPrefabStageActive()) { error = "close the prefab stage first"; return false; }
 		if (IsPlayModeActive()) { error = "stop play mode first"; return false; }
 

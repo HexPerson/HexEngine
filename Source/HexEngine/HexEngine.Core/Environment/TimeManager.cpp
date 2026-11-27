@@ -104,6 +104,7 @@ namespace HexEngine
 			_pendingSimulationSteps = 0;
 		}
 		_gameFrameTime = _simulationPaused ? 0.0f : _frameTime * std::clamp(_timeScale, 0.0f, 100.0f);
+		_gameTime += _gameFrameTime;
 
 		_accumulatedSimulationTime += _gameFrameTime;
 

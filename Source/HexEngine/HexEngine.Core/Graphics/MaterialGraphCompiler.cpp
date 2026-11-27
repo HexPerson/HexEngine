@@ -482,6 +482,13 @@ namespace HexEngine
 					value.code = "g_weatherSurface.precipitationIntensity";
 				else if (key == "lightningFlash" || key == "lightning")
 					value.code = "g_weatherSurface.lightningFlash";
+				// 0 by day .. 1 at night, from the sun's light multiplier
+				// (g_globalLight.x = DayNightCycle daylight x boost, ~1.5 at noon,
+				// 0 after dusk). Rises once daylight is below ~0.5, so lit windows
+				// and signs come on through dusk, independent of the clock's
+				// hour-to-angle mapping.
+				else if (key == "night" || key == "nightFactor")
+					value.code = "saturate(1.0f - g_globalLight.x * 2.0f)";
 				else
 				{
 					ctx.errors.push_back(std::format(
@@ -725,6 +732,12 @@ namespace HexEngine
 			ss << "\t\t\toutput.position.xyz += WindSwayOffset(output.position.xyz, worldMatrix[3].xyz, g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_time);\n";
 			ss << "\t\t\toutput.positionWS = output.position;\n";
 			ss << "\t\t}\n";
+			// Write SV_CullDistance on EVERY path (see Default.shader): left
+			// undefined when g_cullDistance == 0, optimised FXC folds the guard
+			// away and culls every triangle - the "invisible mesh, shadow fine"
+			// Release-only graph-shader bug that HLSL.cpp works around by
+			// skipping optimisation for generated shaders.
+			ss << "\t\toutput.cullDistance = 1.0f;\n";
 			ss << "\t\tif(g_cullDistance > 0.0f)\n\t\t{\n";
 			ss << "\t\t\toutput.cullDistance = length(output.positionWS.xyz - g_eyePos.xyz) >= g_cullDistance ? -1.0f : 1.0f;\n";
 			ss << "\t\t}\n";

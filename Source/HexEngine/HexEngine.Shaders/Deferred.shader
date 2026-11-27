@@ -19,6 +19,8 @@
 	EnvMapCommon
 	PBRutils
 	CloudCommon
+	// Probe sky visibility for the env-spec occlusion while DDGI is active.
+	DDGICommon
 }
 "VertexShader"
 {
@@ -499,7 +501,7 @@
 				// the blue wash in window rooms. Same voxel AO as the diffuse
 				// occlusion above, separate strength (g_giComposeParams.w).
 				const float giSpecVis = saturate(1.0f - giOcc * saturate(g_giComposeParams.w));
-				pbr.rgb += EvaluateEnvSpecular(
+				float3 envSpec = EvaluateEnvSpecular(
 					g_iblSkyEnvAtlas, g_iblProbeAtlas, g_iblProbeAtlas2, g_dfgLut,
 					g_textureSampler,
 					N, V, pixelPosWS.xyz,
@@ -509,6 +511,9 @@
 					g_probeCenter, g_probeExtents, g_probeCenter2, g_probeExtents2,
 					envSpecRadianceUnused,
 					specularReflectanceUnused) * giSpecVis;
+				// DDGI probe sky visibility (no-op while DDGI is off).
+				envSpec = DdgiOccludeEnvSpecular(envSpec, specularReflectanceUnused * giSpecVis, pixelPosWS.xyz, N, V, reflect(-V, N));
+				pbr.rgb += envSpec;
 			}
 		}
 		// -------------------------------------------------------------------------------

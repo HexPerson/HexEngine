@@ -20,6 +20,7 @@
 #include "../../GUI/Elements/DragFloat.hpp"
 #include "../../GUI/Elements/AssetSearch.hpp"
 #include "../../Graphics/ITexture2D.hpp"
+#include "../../Environment/LogFile.hpp"
 #include <cfloat>
 #include <cmath>
 #include <dxgiformat.h>
@@ -27,6 +28,8 @@
 
 namespace HexEngine
 {
+	HVar cl_carrierDebug("cl_carrierDebug", "Log the player's moving-platform carry every physics tick", false, false, true);
+
 	HEX_COMMAND(MoveForwards)
 	{
 		auto controller = reinterpret_cast<FirstPersonCameraController*>(param);
@@ -238,7 +241,24 @@ namespace HexEngine
 			manualVerticalVelocity -= _verticalMovementSpeed;
 
 		math::Vector3 displacement = (planarVelocity + (math::Vector3::Up * (_verticalVelocity + manualVerticalVelocity))) * frameTime;
+
+		// Riding a bus/train: first put the capsule where the carrier has taken
+		// it, then walk relative to that.
+		const math::Vector3 dbgFoot0 = bodyController->GetPhysicsPosition();
+		FollowCarrier(bodyController);
+		const math::Vector3 dbgFoot1 = bodyController->GetPhysicsPosition();
 		bodyController->Move(displacement, 0.0f, frameTime);
+		const math::Vector3 dbgFoot2 = bodyController->GetPhysicsPosition();
+		if (cl_carrierDebug._val.b && !_carrierName.empty())
+		{
+			auto* ground = bodyController->GetGroundBody();
+			Entity* c = GetCarrier();
+			const math::Vector3 ct = c != nullptr ? c->GetWorldTM().Translation() : math::Vector3::Zero;
+			LOG_INFO("carry: foot0 (%.3f %.3f %.3f) follow (%.3f %.3f %.3f) moved (%.3f %.3f %.3f) ground %d body %p carrierT (%.3f %.3f %.3f) local (%.3f %.3f %.3f)",
+				dbgFoot0.x, dbgFoot0.y, dbgFoot0.z, dbgFoot1.x, dbgFoot1.y, dbgFoot1.z, dbgFoot2.x, dbgFoot2.y, dbgFoot2.z,
+				(int)bodyController->IsOnGround(), (void*)ground, ct.x, ct.y, ct.z, _carrierLocalFoot.x, _carrierLocalFoot.y, _carrierLocalFoot.z);
+		}
+		UpdateCarrierAfterMove(bodyController, bodyController->IsOnGround(), frameTime);
 
 		// Footsteps: accumulate grounded horizontal distance and emit a step
 		// every stride length. Distance-based cadence means sprinting (which
@@ -259,6 +279,194 @@ namespace HexEngine
 			// Prime so the first step fires right as walking resumes / after
 			// landing, instead of leaving a stride-length silent gap.
 			_distanceSinceStep = stride;
+		}
+	}
+
+	Entity* FirstPersonCameraController::FindCarrierFor(IRigidBody* groundBody)
+	{
+		// Only KINEMATIC bodies carry: they are moved by game code (vehicles,
+		// lifts). Statics never move; dynamics are pushed around by physics.
+		if (groundBody == nullptr || groundBody->IsCharacterController() || groundBody->GetBodyType() != IRigidBody::BodyType::Kinematic)
+			return nullptr;
+		auto* transform = groundBody->GetTransform();
+		return transform != nullptr ? transform->GetEntity() : nullptr;
+	}
+
+	float FirstPersonCameraController::CarrierYaw(const math::Matrix& worldTM)
+	{
+		// Rotation about +Y (counter-clockwise seen from above) taking +X to the
+		// carrier's right axis - the same sense as Camera yaw.
+		math::Vector3 right(worldTM._11, worldTM._12, worldTM._13);
+		return std::atan2(-right.z, right.x);
+	}
+
+	Entity* FirstPersonCameraController::GetCarrier() const
+	{
+		if (_carrierName.empty())
+			return nullptr;
+		auto* scene = GetEntity()->GetScene();
+		return scene != nullptr ? scene->GetEntityByName(_carrierName) : nullptr;
+	}
+
+	void FirstPersonCameraController::ClearCarrier(const char* reason)
+	{
+		if (_carrierName.empty())
+			return;
+		LOG_DEBUG("FirstPersonCameraController: off '%s' (%s)", _carrierName.c_str(), reason);
+		_carrierName.clear();
+		RestoreEyeHeight();
+		_carrierAirTime = 0.0f;
+		if (auto* transform = GetEntity()->GetComponent<Transform>())
+			transform->EnableInterpolation(_interpolationBeforeCarry);
+	}
+
+	void FirstPersonCameraController::FollowCarrier(IRigidBody* body)
+	{
+		if (_carrierName.empty() || body == nullptr)
+			return;
+		Entity* carrier = GetCarrier();
+		if (carrier == nullptr)
+		{
+			ClearCarrier("carrier gone");
+			return;
+		}
+
+		const math::Matrix tm = carrier->GetWorldTM();
+		const math::Vector3 target = math::Vector3::Transform(_carrierLocalFoot, tm);
+		const math::Vector3 foot = body->GetPhysicsPosition();
+		const math::Vector3 delta = target - foot;
+		// A huge jump means the carrier teleported (respawned / reset) - let go.
+		if (delta.LengthSquared() > 100.0f)
+		{
+			LOG_INFO("FirstPersonCameraController: carrier jump foot (%.2f %.2f %.2f) target (%.2f %.2f %.2f)", foot.x, foot.y, foot.z, target.x, target.y, target.z);
+			ClearCarrier("carrier jumped");
+			return;
+		}
+
+		if (delta.LengthSquared() > 1e-8f)
+		{
+			body->UpdatePosePosition(target);
+			if (auto* transform = GetEntity()->GetComponent<Transform>())
+				transform->SetPositionNoNotify(target);
+		}
+
+		// Turn with the carrier so the view stays fixed relative to the cabin.
+		const float yaw = CarrierYaw(tm);
+		float dYaw = yaw - _carrierYaw;
+		while (dYaw > 3.14159265f) dYaw -= 6.2831853f;
+		while (dYaw < -3.14159265f) dYaw += 6.2831853f;
+		_carrierYaw = yaw;
+		if (std::fabs(dYaw) > 1e-6f)
+		{
+			if (auto* camera = GetEntity()->GetComponent<Camera>())
+				camera->SetYaw(camera->GetYaw() + ToDegree(dYaw));
+		}
+	}
+
+	void FirstPersonCameraController::UpdateCarrierAfterMove(IRigidBody* body, bool onGround, float frameTime)
+	{
+		Entity* carrier = onGround ? FindCarrierFor(body->GetGroundBody()) : nullptr;
+		if (carrier == nullptr && !_carrierName.empty() && !onGround)
+		{
+			// A hop or a stumble inside the cabin: keep riding for a moment.
+			_carrierAirTime += frameTime;
+			if (_carrierAirTime < 1.5f)
+				carrier = GetCarrier();
+		}
+
+		if (carrier == nullptr)
+		{
+			if (!_carrierName.empty())
+			{
+				const math::Vector3 f = body->GetPhysicsPosition();
+				LOG_DEBUG("FirstPersonCameraController: no carrier under foot (%.2f %.2f %.2f) onGround %d air %.2f", f.x, f.y, f.z, (int)onGround, _carrierAirTime);
+			}
+			ClearCarrier("not standing on it");
+			return;
+		}
+
+		const math::Matrix tm = carrier->GetWorldTM();
+		if (_carrierName != carrier->GetName())
+		{
+			if (_carrierName.empty())
+			{
+				if (auto* transform = GetEntity()->GetComponent<Transform>())
+				{
+					_interpolationBeforeCarry = transform->IsInterpolationEnabled();
+					// Positioned every frame from the carrier - tick-to-tick
+					// interpolation would trail the moving cabin.
+					transform->EnableInterpolation(false);
+				}
+			}
+			_carrierName = carrier->GetName();
+			_carrierYaw = CarrierYaw(tm);
+			LOG_DEBUG("FirstPersonCameraController: riding '%s'", _carrierName.c_str());
+		}
+		if (onGround)
+			_carrierAirTime = 0.0f;
+
+		_carrierLocalFoot = math::Vector3::Transform(body->GetPhysicsPosition(), tm.Invert());
+	}
+
+	void FirstPersonCameraController::PostUpdate(float frameTime)
+	{
+		(void)frameTime;
+		if (!_controlEnabled)
+			return;
+		auto* rigidBody = GetEntity()->GetComponent<RigidBody>();
+		if (cl_carrierDebug._val.b && rigidBody != nullptr && rigidBody->GetIRigidBody() != nullptr)
+		{
+			const math::Vector3 f = rigidBody->GetIRigidBody()->GetPhysicsPosition();
+			Entity* c = GetCarrier();
+			const math::Vector3 ct = c != nullptr ? c->GetWorldTM().Translation() : math::Vector3::Zero;
+			LOG_INFO("carry post: foot (%.3f %.3f %.3f) carrierT (%.3f %.3f %.3f)", f.x, f.y, f.z, ct.x, ct.y, ct.z);
+		}
+		FollowCarrier(rigidBody != nullptr ? rigidBody->GetIRigidBody() : nullptr);
+		FitEyeUnderCeiling();
+		// Camera::Update already built this frame's view from the old spot.
+		if (auto* camera = GetEntity()->GetComponent<Camera>())
+			camera->RefreshViewMatrix();
+	}
+
+	void FirstPersonCameraController::FitEyeUnderCeiling()
+	{
+		auto* camera = GetEntity()->GetComponent<Camera>();
+		if (camera == nullptr || _carrierName.empty())
+			return;
+		if (!_eyeLowered)
+			_defaultEyeHeight = camera->GetViewOffset().y;
+
+		const math::Vector3 foot = GetEntity()->GetWorldTM().Translation();
+		// Start the probe at head height so seat backs / handrails don't count -
+		// only a real ceiling lowers the eye, and never below 1.4 m.
+		constexpr float kProbeStart = 1.4f;
+		const math::Ray ray(foot + math::Vector3(0.0f, kProbeStart, 0.0f), math::Vector3(0.0f, 1.0f, 0.0f));
+		RayHit hit;
+		const std::vector<Entity*> ignore{ GetEntity() };
+		float eye = _defaultEyeHeight;
+		if (PhysUtils::RayCast(ray, _defaultEyeHeight, LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit, ignore))
+			eye = std::min(_defaultEyeHeight, kProbeStart + hit.distance - 0.15f);
+		eye = std::max(eye, kProbeStart);
+		math::Vector3 offset = camera->GetViewOffset();
+		if (std::fabs(offset.y - eye) > 1e-3f)
+		{
+			// Ease towards it so stepping under a lower bit isn't a pop.
+			offset.y += (eye - offset.y) * 0.25f;
+			camera->SetViewOffset(offset);
+		}
+		_eyeLowered = true;
+	}
+
+	void FirstPersonCameraController::RestoreEyeHeight()
+	{
+		if (!_eyeLowered)
+			return;
+		_eyeLowered = false;
+		if (auto* camera = GetEntity()->GetComponent<Camera>())
+		{
+			math::Vector3 offset = camera->GetViewOffset();
+			offset.y = _defaultEyeHeight;
+			camera->SetViewOffset(offset);
 		}
 	}
 

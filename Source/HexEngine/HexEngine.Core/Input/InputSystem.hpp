@@ -172,6 +172,11 @@ namespace HexEngine
 		void SetMouseLockMode(MouseLockMode mode);
 		MouseLockMode GetMouseLockMode() const { return _mouseLockMode; }
 
+		/** A game with its own pause menu claims Esc: the editor then only stops play
+		 * on Shift+Esc (or Stop). Reset when play stops. */
+		void SetGameOwnsEscape(bool owns) { _gameOwnsEscape = owns; }
+		bool GetGameOwnsEscape() const { return _gameOwnsEscape; }
+
 		float GetXAxis() const;
 		float GetYAxis() const;
 
@@ -192,6 +197,7 @@ namespace HexEngine
 
 	private:
 		void ProcessMouseMovement(float frameTime);
+		void UpdateGamepad(float frameTime);   // XInput pad 0 -> key / mouse events (see SetGamepadRumble)
 
 	private:
 		HWND _targetWnd = NULL;
@@ -208,6 +214,7 @@ namespace HexEngine
 
 		std::vector<std::pair<float, float>> _smoothedMouseMovement;
 		MouseLockMode _mouseLockMode = MouseLockMode::Free;
+		bool _gameOwnsEscape = false;
 
 		bool _isInInputLoop = false;
 		std::vector<std::pair<InputEvent, IInputListener*>> _pendingListeners;
@@ -219,4 +226,17 @@ namespace HexEngine
 		math::Viewport _vp;
 		bool _hasCustomVP = false;
 	};
+
+	// ---- Gamepad (XInput pad 0) ----
+	// Polled from InputSystem::Update while the game runs. The pad is mapped onto
+	// the keyboard events everything already binds (so vehicles, the player,
+	// menus and dialogs need no gamepad code), and the right stick onto mouse
+	// look. in_gamepad 0 turns it off.
+	//   Left stick / D-pad: W A S D (D-pad also Up/Down arrows in menus)
+	//   RT: W (throttle)   LT: S (brake / reverse)
+	//   A: Space   X: E (interact)   Y: M (map)   B: Esc   Start: Esc   Back: Tab
+	//   LB: 1   RB: 2 (dialog choices)   LS click: H (bell / horn)   RS click: P (photo)
+	// Rumble for `seconds` (0..1 motor strengths); no-op without a pad.
+	HEX_API void SetGamepadRumble(float lowFrequency, float highFrequency, float seconds);
+	HEX_API bool IsGamepadConnected();
 }

@@ -24,6 +24,8 @@ public:
 	void SetUseWaypointRoute(bool enabled) { _useWaypointRoute = enabled; }
 	void SetWaypointRouteEndpoints(const std::string& startWaypointEntityName, const std::string& destinationWaypointEntityName);
 	void SetDespawnAtRouteEnd(bool enabled) { _despawnAtRouteEnd = enabled; }
+	bool GetDespawnAtRouteEnd() const { return _despawnAtRouteEnd; }
+	bool IsUsingWaypointRoute() const { return _useWaypointRoute; }
 	// A parked vehicle (an NPC's own car on its driveway, or stored at the
 	// destination) does nothing: no driving, no audio, invisible to traffic
 	// avoidance and not counted against the traffic budget.
@@ -31,6 +33,46 @@ public:
 	bool IsParked() const { return _parked; }
 	float GetCurrentSpeed() const { return _currentSpeed; }
 	bool ConsumeRouteEndReachedEvent();
+	// Comfortable braking (m/s^2) into the end of a waypoint route that is not
+	// a despawn (parking, bus stops). 0 = stop dead at the end point.
+	void SetStopDeceleration(float decel) { _stopDeceleration = decel; }
+	// Held: stopped where it is (engine idling) but still an obstacle to traffic.
+	void SetHeld(bool held) { _held = held; }
+	// Length of the planned waypoint route (0 = none could be built).
+	float GetPlannedRouteLength() const
+	{
+		float total = 0.0f;
+		for (size_t i = 1; i < _plannedRoutePoints.size(); ++i)
+			total += math::Vector3::Distance(_plannedRoutePoints[i - 1], _plannedRoutePoints[i]);
+		return total;
+	}
+	bool IsHeld() const { return _held; }
+	// Stopped for a traffic signal, or queued behind a car that is: an expected wait.
+	bool IsQueuedAtSignal() const { return _queuedAtSignal; }
+	// Off-lane legs for the NEXT RestartPath of a waypoint route: leadIn is driven
+	// before the lane route (out of a parking bay: the first point is where the car
+	// stands now; the first reverseLeadInPoints targets are reversed onto, i.e. the
+	// car backs out), leadOut after it (into a bay - the last point is the parked
+	// position). Set after SetWaypointRouteEndpoints, which clears them.
+	void SetOffLaneLegs(const std::vector<math::Vector3>& leadIn, int32_t reverseLeadInPoints, const std::vector<math::Vector3>& leadOut);
+	// On an off-lane leg (pulling out of / into a bay): slow, ignores signals.
+	bool IsOffLane() const;
+	// Speed limit on off-lane legs (m/s); reversing uses 60% of it.
+	void SetOffLaneSpeed(float speed) { _offLaneSpeed = speed; }
+
+	// Lane-graph queries (cached graph; one node per lane entity).
+	struct LaneNodeInfo
+	{
+		std::string name;
+		math::Vector3 position = math::Vector3::Zero;
+		math::Vector3 nextPosition = math::Vector3::Zero;	// first next lane (direction of travel)
+		int32_t inCount = 0;
+		int32_t outCount = 0;
+		std::vector<std::string> next;	// next lane nodes
+	};
+	static void GatherLaneNodes(HexEngine::Scene* scene, std::vector<LaneNodeInfo>& out);
+	// Driven length of the best lane route, or -1 if there is none.
+	static float EstimateLaneRouteLength(HexEngine::Scene* scene, const std::string& startWaypointEntityName, const std::string& destinationWaypointEntityName);
 
 public:
 	// Spatial grid maintenance. TrafficManagerComponent::Update calls
@@ -42,6 +84,12 @@ public:
 	// Cheap count of live vehicles - replaces scene->GetComponents() per
 	// frame in the manager's global-cap check.
 	static size_t GetAliveVehicleCount();
+	// The player's ridden vehicle, published once per frame by the traffic
+	// manager (valid=false when on foot). Cars brake for it like for a car
+	// ahead in their lane, when they are catching it up - so a bike waiting at
+	// a light or crawling in a lane isn't run over from behind, while
+	// squeezing past moving cars stays the player's risk.
+	static void SetPlayerObstacle(bool valid, const math::Vector3& pos, const math::Vector3& vel);
 
 private:
 	bool GatherPlannedRoute(std::vector<math::Vector3>& outPoints);
@@ -221,5 +269,18 @@ private:
 	// snap so it only happens once per load.
 	bool _snapToLaneOnLoad = false;
 	bool _parked = false;
+	float _stopDeceleration = 2.2f;
+	bool _held = false;
+
+	// Off-lane legs (runtime): see SetOffLaneLegs. In _plannedRoutePoints the lead-in
+	// occupies [0, _leadInEnd], the lane route follows and the lead-out starts at
+	// _leadOutStart. Targets 1.._reverseUntilIndex are driven in reverse.
+	std::vector<math::Vector3> _leadInPoints;
+	std::vector<math::Vector3> _leadOutPoints;
+	int32_t _reverseLeadInPoints = 0;
+	size_t _leadInEnd = 0;
+	size_t _leadOutStart = std::numeric_limits<size_t>::max();
+	size_t _reverseUntilIndex = 0;
+	float _offLaneSpeed = 4.5f;
 };
 

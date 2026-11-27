@@ -52,5 +52,12 @@ namespace HexEngine
 		float _timeScale = 1.0f;
 		uint32_t _pendingSimulationSteps = 0;
 		float _gameFrameTime = 0.0f;
+
+		// Running total of _gameFrameTime (scaled, zero while paused). Components
+		// that tick every N frames measure their elapsed time with this, NOT the
+		// real clock - real time kept running through every pause (tally, home
+		// computer, menus) and the city routine read frozen walkers as stuck.
+		// Appended last: Game.dll reads earlier fields by offset.
+		double _gameTime = 0.0;
 	};
 }

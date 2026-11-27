@@ -365,6 +365,77 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 		return 1.0f;
 	}
 
+	// Sun COVERAGE of a voxel's slice of a surface, for the per-voxel GI path.
+	// EvaluateSunShadowVisibility above tests ONE point at the voxel centre
+	// lifted voxelSize*(0.35..1.45) off the surface. For a floor under a low sun
+	// that point sat ~0.4 m up, whose sun ray crosses the window ~1 m away from
+	// the real patch - and a 0.3 m-wide window patch rarely contains a voxel
+	// centre anyway - so interior sun patches injected NOTHING and rooms had no
+	// sun bounce. Instead: project the centre onto the triangle's plane, test a
+	// 2x2 grid across the voxel's footprint with a small normal offset, and
+	// return the lit FRACTION, so a voxel a third in sun injects a third.
+	float EvaluateSunCoverageOnSurface(float3 voxelCenterWs, float3 planePointWs, float3 normalWs, float voxelSize)
+	{
+		const float3 sunDirWs = normalize(g_giParams3.xyz + float3(1e-6f, 1e-6f, 1e-6f));
+		const float ndotl = saturate(dot(normalWs, -sunDirWs));
+		const float3 surfWs = voxelCenterWs - normalWs * dot(voxelCenterWs - planePointWs, normalWs);
+		const float3 helper = (abs(normalWs.y) < 0.9f) ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+		const float3 t = normalize(cross(helper, normalWs));
+		const float3 b = cross(normalWs, t);
+		const float normalBiasWs = 0.04f + 0.04f * (1.0f - ndotl);
+		const float compareBias = max(0.00005f, voxelSize * (0.0009f + (1.0f - ndotl) * 0.0015f));
+		const float tapOffset = voxelSize * 0.25f;
+
+		// Cost: this runs for every voxel a sunlit triangle touches. The first
+		// version searched 6 cascades and ran a 3x3 PCF for each of the 4 taps
+		// (36 shadow reads/voxel) and halved the editor frame rate at the 4096
+		// voxel-test budget. The 2x2 grid already provides the soft coverage,
+		// so: pick the cascade ONCE at the voxel's surface point, then one
+		// depth compare per tap (4 reads/voxel).
+		if ((uint)max(g_giParams9.w, 0.0f) == 0u)
+			return 1.0f;
+		const float3 centreWs = surfWs + normalWs * normalBiasWs;
+		uint cascade = 6u;
+		float2 uvC = 0.0f.xx;
+		float depthC = 0.0f;
+		[loop]
+		for (uint c = 0u; c < 6u; ++c)
+		{
+			if (ProjectToShadowCascade(c, centreWs, uvC, depthC))
+			{
+				cascade = c;
+				break;
+			}
+		}
+		if (cascade >= 6u)
+			return 1.0f; // outside all cascades: lit (matches EvaluateSunShadowVisibility)
+
+		uint width = 0u;
+		uint height = 0u;
+		GetShadowMapDimensions(cascade, width, height);
+		if (width == 0u || height == 0u)
+			return 1.0f;
+		const int2 maxCoord = int2((int)width - 1, (int)height - 1);
+		const float2 dims = float2((float)width, (float)height);
+
+		float lit = 0.0f;
+		[loop]
+		for (uint k = 0u; k < 4u; ++k)
+		{
+			const float3 tapWs = centreWs + (t * ((k & 1u) ? 1.0f : -1.0f) + b * ((k & 2u) ? 1.0f : -1.0f)) * tapOffset;
+			float2 uv = 0.0f.xx;
+			float depth = 0.0f;
+			if (!ProjectToShadowCascade(cascade, tapWs, uv, depth))
+			{
+				lit += 1.0f;
+				continue;
+			}
+			const int2 coord = clamp((int2)(saturate(uv) * dims), int2(0, 0), maxCoord);
+			lit += ((depth - compareBias) <= LoadShadowDepth(cascade, coord)) ? 1.0f : 0.0f;
+		}
+		return lit * 0.25f;
+	}
+
 	// Scale RGB down so BOTH its perceptual luminance AND its peak channel stay <= maxLuma.
 	// Earlier this used a 1.5x ratio for the channel arm, which let pure single-channel
 	// inputs like (0, 8, 0) slip through (luma 5.7 under cap, channel 8 under 12) - SSR's
@@ -717,7 +788,7 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					float sunVisibility = triSunVisibility;
 					if (sunShadowPerVoxel && sunDirectionality > 0.001f && triSunFacing > 0.02f)
 					{
-						sunVisibility = EvaluateSunShadowVisibility(voxelCenterWs, n, voxelSize);
+						sunVisibility = EvaluateSunCoverageOnSurface(voxelCenterWs, triCenterWs, n, voxelSize);
 
 						// Add short-range occupancy occlusion from last-frame voxels to retain local thickness.
 						float localVoxelOcclusion = 1.0f;

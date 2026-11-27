@@ -44,6 +44,8 @@
 		// already the bounding radius of range + shape, so the sphere test below
 		// needs no special case.
 		float4 shape;
+		float4 ext0;           // points: room box min xyz, w shadow cross-fade (ClusteredLighting.hpp)
+		float4 ext1;           // points: room box max xyz, w unshadowed visibility scale
 	};
 
 	StructuredBuffer<GpuLight>  g_lights        : register(t0);

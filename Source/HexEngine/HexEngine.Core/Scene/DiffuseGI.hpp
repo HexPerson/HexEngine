@@ -174,6 +174,7 @@ namespace HexEngine
 			math::Vector4 params12; // x=live source-triangle count this update, y=candidate routing active, z=snap boost, w reserved
 			math::Vector4 params13; // x=litInjection strength, y=litInjection maxLuma, z=feedback accum bound for this level, w=directional voxels active
 			math::Vector4 params14; // x=ssgi intensity (0=off), y=ssgi radius (world m), z=lit cache active, w reserved
+			math::Vector4 params15; // x=cone gather strength (0=off), y=cone max distance (m), z=cone occlusion -> AO blend, w=cone gather saturation
 		};
 
 		struct GpuVoxelTriangle

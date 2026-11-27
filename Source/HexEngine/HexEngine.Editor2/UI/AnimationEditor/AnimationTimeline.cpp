@@ -481,6 +481,64 @@ namespace HexEditor
 		}
 	}
 
+	int32_t AnimationTimeline::EventLaneTop() const
+	{
+		return GetAbsolutePosition().y + _size.y - kEventLane;
+	}
+
+	int32_t AnimationTimeline::HitEvent(int32_t mx, int32_t my) const
+	{
+		const Animation* clip = _editor->Doc().GetClip();
+		if (clip == nullptr || my < EventLaneTop() || my > EventLaneTop() + kEventLane)
+			return -1;
+		int32_t best = -1, bestDist = 6;
+		for (int32_t i = 0; i < (int32_t)clip->events.size(); ++i)
+		{
+			const int32_t d = std::abs(TimeToX(clip->events[i].time) - mx);
+			if (d <= bestDist)
+			{
+				best = i;
+				bestDist = d;
+			}
+		}
+		return best;
+	}
+
+	void AnimationTimeline::RenderEvents(GuiRenderer* renderer)
+	{
+		const auto abs = GetAbsolutePosition();
+		const int32_t top = EventLaneTop();
+		renderer->FillQuad(abs.x, top, _size.x, kEventLane, AnimEditorColours::Panel);
+		renderer->FillQuad(abs.x, top, _size.x, 1, AnimEditorColours::PanelBorder);
+		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, abs.x + 6, top + kEventLane / 2, AnimEditorColours::Text, FontAlign::CentreUD, L"Events");
+
+		const Animation* clip = _editor->Doc().GetClip();
+		if (clip == nullptr)
+			return;
+		if (clip->events.empty())
+		{
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, GraphLeft() + 6, top + kEventLane / 2, AnimEditorColours::TextDim, FontAlign::CentreUD,
+				L"double-click to add an event here, or 'Detect Steps' for footsteps");
+			return;
+		}
+
+		const int32_t selected = _editor->GetSelectedEvent();
+		for (int32_t i = 0; i < (int32_t)clip->events.size(); ++i)
+		{
+			const AnimationEvent& ev = clip->events[i];
+			const float t = (_drag == DragKind::MoveEvent && i == _dragEvent) ? _dragEventTime : ev.time;
+			const int32_t x = TimeToX(t);
+			if (x < GraphLeft() - 4 || x > GraphRight() + 4)
+				continue;
+			const math::Color c = i == selected ? AnimEditorColours::KeySelected : AnimEditorColours::Playhead;
+			// A thin line up through the tracks, a flag in the lane, and the name.
+			renderer->FillQuad(x, RowsTop(), 1, top - RowsTop(), math::Color(c.x, c.y, c.z, 0.25f));
+			renderer->FillQuad(x - 3, top + 4, 7, kEventLane - 8, c);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, x + 6, top + kEventLane / 2, i == selected ? AnimEditorColours::Text : AnimEditorColours::TextDim,
+				FontAlign::CentreUD, s2ws(ev.name));
+		}
+	}
+
 	void AnimationTimeline::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		const auto abs = GetAbsolutePosition();
@@ -495,6 +553,8 @@ namespace HexEditor
 			RenderDopesheet(renderer);
 		else
 			RenderCurves(renderer);
+
+		RenderEvents(renderer);
 
 		// Playhead
 		const int32_t x = TimeToX(_editor->GetTime());
@@ -531,6 +591,30 @@ namespace HexEditor
 				_drag = DragKind::Pan;
 				return true;
 			}
+			if (my >= EventLaneTop())
+			{
+				const int32_t hit = HitEvent(mx, my);
+				if (data->MouseDown.button == VK_RBUTTON)
+				{
+					if (hit >= 0)
+					{
+						_editor->SelectEvent(hit);
+						_editor->DeleteSelectedEvent();
+					}
+					return true;
+				}
+				if (data->MouseDown.button != VK_LBUTTON)
+					return true;
+				_editor->SelectEvent(hit);
+				if (hit >= 0)
+				{
+					_drag = DragKind::MoveEvent;
+					_dragEvent = hit;
+					_dragEventTime = _editor->Doc().GetClip()->events[hit].time;
+				}
+				return true;
+			}
+
 			if (data->MouseDown.button != VK_LBUTTON)
 				return true;
 
@@ -622,6 +706,10 @@ namespace HexEditor
 
 			switch (_drag)
 			{
+			case DragKind::MoveEvent:
+				_dragEventTime = std::clamp(Snap(XToTime(mx)), 0.0f, std::max(0.0f, _editor->GetClipLength()));
+				break;
+
 			case DragKind::Scrub:
 				_editor->SetTime(std::clamp(Snap(XToTime(mx)), 0.0f, std::max(_editor->GetClipLength(), XToTime(GraphRight()))));
 				break;
@@ -673,7 +761,14 @@ namespace HexEditor
 			const DragKind finished = _drag;
 			_drag = DragKind::None;
 
-			if (finished == DragKind::MoveKeys && std::abs(_dragDeltaTicks) > 1e-4f)
+			if (finished == DragKind::MoveEvent && _dragEvent >= 0)
+			{
+				const Animation* clip = _editor->Doc().GetClip();
+				if (clip != nullptr && _dragEvent < (int32_t)clip->events.size() && clip->events[_dragEvent].time != _dragEventTime)
+					_editor->MoveEvent(_dragEvent, _dragEventTime);
+				_dragEvent = -1;
+			}
+			else if (finished == DragKind::MoveKeys && std::abs(_dragDeltaTicks) > 1e-4f)
 				_editor->MoveSelectedKeys(_dragDeltaTicks);
 			else if (finished == DragKind::BoxSelect)
 				SelectBox();
@@ -681,6 +776,17 @@ namespace HexEditor
 				_editor->Doc().EndEdit();
 
 			_dragDeltaTicks = 0.0f;
+			return true;
+		}
+
+		case InputEvent::MouseDoubleClick:
+		{
+			int32_t mx = 0, my = 0;
+			g_pEnv->_inputSystem->GetMousePosition(mx, my);
+			if (!over || my < EventLaneTop() || mx < GraphLeft())
+				return false;
+			if (HitEvent(mx, my) < 0)
+				_editor->AddEvent(std::max(0.0f, Snap(XToTime(mx))));
 			return true;
 		}
 

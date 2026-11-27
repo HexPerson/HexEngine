@@ -33,7 +33,7 @@ namespace HexEditor
 		void FitView();
 
 	private:
-		enum class DragKind { None, Scrub, MoveKeys, BoxSelect, Pan, CurveValue };
+		enum class DragKind { None, Scrub, MoveKeys, BoxSelect, Pan, CurveValue, MoveEvent };
 
 		struct RowKey
 		{
@@ -44,6 +44,7 @@ namespace HexEditor
 		static constexpr int32_t kRulerHeight = 22;
 		static constexpr int32_t kLabelWidth = 112;
 		static constexpr int32_t kRowHeight = 20;
+		static constexpr int32_t kEventLane = 22;		// clip-event markers along the bottom
 
 		int32_t TimeToX(float ticks) const;
 		float XToTime(int32_t x) const;
@@ -73,6 +74,9 @@ namespace HexEditor
 		void RenderRuler(HexEngine::GuiRenderer* renderer);
 		void RenderDopesheet(HexEngine::GuiRenderer* renderer);
 		void RenderCurves(HexEngine::GuiRenderer* renderer);
+		void RenderEvents(HexEngine::GuiRenderer* renderer);
+		int32_t EventLaneTop() const;
+		int32_t HitEvent(int32_t mx, int32_t my) const;	// event index under the mouse, -1 = none
 		void SelectBox();
 
 		AnimationEditor* _editor = nullptr;
@@ -87,6 +91,8 @@ namespace HexEditor
 		HexEngine::Point _dragStart;
 		HexEngine::Point _dragLast;
 		float _dragDeltaTicks = 0.0f;
+		int32_t _dragEvent = -1;
+		float _dragEventTime = 0.0f;
 
 		// Curves state
 		float _curveMin = -1.0f;

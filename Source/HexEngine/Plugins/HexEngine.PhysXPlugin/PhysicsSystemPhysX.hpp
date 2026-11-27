@@ -9,7 +9,7 @@
 
 #define PX_RELEASE(x)	if(x)	{ x->release(); x = NULL;	}
 
-class PhysicsSystemPhysX : public HexEngine::IPhysicsSystem, public physx::PxUserControllerHitReport, public physx::PxSimulationEventCallback, public physx::PxErrorCallback
+class PhysicsSystemPhysX : public HexEngine::IPhysicsSystem, public physx::PxUserControllerHitReport, public physx::PxControllerBehaviorCallback, public physx::PxSimulationEventCallback, public physx::PxErrorCallback
 {
 public:
 	virtual bool Create() override;
@@ -41,6 +41,9 @@ public:
 	virtual void SetGravity(const math::Vector3& gravity) override;
 
 	virtual void CreateHingeJoint(HexEngine::IRigidBody* bodies[2], const math::Vector3 axes[2], const math::Vector3 offsets[2]) override;
+	virtual void* CreateConeJoint(HexEngine::IRigidBody* parent, HexEngine::IRigidBody* child, const math::Matrix& jointWorld,
+		float swingDegrees, float twistDegrees) override;
+	virtual void DestroyJoint(void* joint) override;
 
 	physx::PxPhysics* GetPhysics();
 	physx::PxMaterial* GetDefaultMaterial();
@@ -55,6 +58,13 @@ public:
 	virtual void onShapeHit(const physx::PxControllerShapeHit& hit) override;
 	virtual void onControllerHit(const physx::PxControllersHit& hit) override;
 	virtual void onObstacleHit(const physx::PxControllerObstacleHit& hit) override;
+
+	// PxControllerBehaviorCallback: riding moving platforms is done by the
+	// game-side controller (FirstPersonCameraController), not PhysX's built-in
+	// ride, so a kinematic bus floor never carries the capsule twice.
+	virtual physx::PxControllerBehaviorFlags getBehaviorFlags(const physx::PxShape& shape, const physx::PxActor& actor) override;
+	virtual physx::PxControllerBehaviorFlags getBehaviorFlags(const physx::PxController& controller) override;
+	virtual physx::PxControllerBehaviorFlags getBehaviorFlags(const physx::PxObstacle& obstacle) override;
 
 	// PxSimulationEventCallback
 	//

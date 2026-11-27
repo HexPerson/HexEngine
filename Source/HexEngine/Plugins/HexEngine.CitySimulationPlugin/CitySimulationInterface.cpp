@@ -18,6 +18,14 @@
 #include "AmbientZoneComponent.hpp"
 #include "AmbientEmitterComponent.hpp"
 #include "PathMoverComponent.hpp"
+#include "SeatComponent.hpp"
+#include "ParkingLotComponent.hpp"
+#include "DistrictGateComponent.hpp"
+#include "TransitStopComponent.hpp"
+#include "TransitLineComponent.hpp"
+#include "TransitVehicleComponent.hpp"
+#include "TransitPortalComponent.hpp"
+#include "BuildingLightsComponent.hpp"
 #include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
 #include <algorithm>
 #include <cfloat>
@@ -47,6 +55,14 @@ namespace
 		"AmbientZoneComponent",
 		"AmbientEmitterComponent",
 		"PathMoverComponent",
+		"BuildingLightsComponent",
+		"TransitStopComponent",
+		"TransitLineComponent",
+		"TransitVehicleComponent",
+		"TransitPortalComponent",
+		"SeatComponent",
+		"ParkingLotComponent",
+		"DistrictGateComponent",
 	};
 
 	math::Vector3 ResolveRoadForwardVector(RoadComponent::ForwardAxis axis)
@@ -98,6 +114,14 @@ bool CitySimulationInterface::Create()
 	REG_CLASS(AmbientZoneComponent);
 	REG_CLASS(AmbientEmitterComponent);
 	REG_CLASS(PathMoverComponent);
+	REG_CLASS(BuildingLightsComponent);
+	REG_CLASS(TransitStopComponent);
+	REG_CLASS(TransitLineComponent);
+	REG_CLASS(TransitVehicleComponent);
+	REG_CLASS(TransitPortalComponent);
+	REG_CLASS(SeatComponent);
+	REG_CLASS(ParkingLotComponent);
+	REG_CLASS(DistrictGateComponent);
 
 	// Walkers wait at signal-controlled crossings showing DON'T WALK.
 	NavigationComponent::SetSegmentGate(&TrafficSignalControllerComponent::IsPedestrianStepAllowed);

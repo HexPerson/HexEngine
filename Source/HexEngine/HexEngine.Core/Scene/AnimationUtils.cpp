@@ -114,6 +114,7 @@ namespace HexEngine
 			copy.ticksPerSecond = source.ticksPerSecond;
 			copy.duration = source.duration;
 			copy._globalInverseTransform = source._globalInverseTransform;
+			copy.events = source.events;
 			copy.channels = source.channels;	// keys copied; tree pointers fixed below
 			RelinkTree(source, copy);
 			return copy;

@@ -11,6 +11,9 @@
 
 namespace HexEngine
 {
+	// Optional trailing .hmesh block holding per-clip animation events ('HEVT').
+	static constexpr uint32_t kAnimEventsMagic = 0x54564548u;
+
 	MeshLoader::MeshLoader()
 	{
 		g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
@@ -338,6 +341,50 @@ namespace HexEngine
 		mesh->SetAABB(aabb);
 		mesh->SetOBB(obb);
 
+		// Optional trailing block: per-clip animation events ("HEVT"). Files written
+		// before events existed simply end here. A malformed block is ignored rather
+		// than failing the mesh - the geometry and clips above are already valid.
+		if (hasAnimations && r.Good() && r.Remaining() >= 8)
+		{
+			uint32_t magic = 0;
+			const size_t mark = r.Position();
+			if (r.Read(magic) && magic == kAnimEventsMagic)
+			{
+				auto animData = static_cast<AnimatedMesh*>(mesh.get())->GetAnimationData();
+				uint32_t clipCount = 0;
+				bool ok = r.Read(clipCount) && animData != nullptr;
+				std::vector<std::vector<AnimationEvent>> perClip;
+				for (uint32_t c = 0; ok && c < clipCount; ++c)
+				{
+					uint32_t n = 0;
+					ok = r.ReadCount(n, 4 + 4);
+					auto& list = perClip.emplace_back();
+					for (uint32_t i = 0; ok && i < n; ++i)
+					{
+						AnimationEvent ev;
+						ok = r.Read(ev.time) && r.ReadString(ev.name);
+						if (ok)
+							list.push_back(std::move(ev));
+					}
+				}
+				if (ok && r.Good())
+				{
+					for (size_t c = 0; c < perClip.size() && c < animData->_animations.size(); ++c)
+						animData->_animations[c].events = std::move(perClip[c]);
+				}
+				else
+				{
+					LOG_WARN("Mesh '%s': ignoring a malformed animation-event block", sourcePath.string().c_str());
+					r.ClearFailure();
+					r.Seek(mark);
+				}
+			}
+			else
+			{
+				r.Seek(mark);
+			}
+		}
+
 		// Final integrity gate: if any read past this point (or earlier scalar
 		// reads) ran the stream dry, the reader has latched failure - reject the
 		// whole mesh rather than hand back a half-populated one.
@@ -555,6 +602,13 @@ namespace HexEngine
 			file.Write<bool>(true);
 			file.WriteString(animatedForMaterial->GetFileMaterialName());
 		}
+		else if (animatedForMaterial != nullptr && animatedForMaterial->GetFileMaterialName().empty() &&
+			(material == nullptr || material->GetFileSystemPath().generic_string().find("DefaultAnimated.hmat") != std::string::npos))
+		{
+			// The file named no material and runs on the DefaultAnimated fallback:
+			// keep it unnamed rather than baking the fallback into the file.
+			file.Write<bool>(false);
+		}
 		else if (material)
 		{
 			file.Write<bool>(true);
@@ -577,6 +631,31 @@ namespace HexEngine
 		}
 		file.Write<dx::BoundingBox>(aabb);
 		file.Write<dx::BoundingOrientedBox>(obb);
+
+		// Animation events: an optional trailing block, only when some clip has any
+		// (so files without events stay byte-identical to the old format).
+		if (mesh->HasAnimations())
+		{
+			auto animData = static_cast<const AnimatedMesh*>(mesh)->GetAnimationData();
+			bool anyEvents = false;
+			if (animData != nullptr)
+				for (const auto& anim : animData->_animations)
+					anyEvents = anyEvents || !anim.events.empty();
+			if (anyEvents)
+			{
+				file.Write<uint32_t>(kAnimEventsMagic);
+				file.Write<uint32_t>((uint32_t)animData->_animations.size());
+				for (const auto& anim : animData->_animations)
+				{
+					file.Write<uint32_t>((uint32_t)anim.events.size());
+					for (const auto& ev : anim.events)
+					{
+						file.Write<float>(ev.time);
+						file.WriteString(ev.name);
+					}
+				}
+			}
+		}
 
 		// finally close the file
 		file.Close();

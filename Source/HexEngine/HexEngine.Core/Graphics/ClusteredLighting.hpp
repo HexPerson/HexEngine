@@ -1,5 +1,7 @@
 #pragma once
 
+#include <unordered_map>
+
 #include "../Required.hpp"
 #include "IShader.hpp"
 
@@ -64,8 +66,17 @@ namespace HexEngine
 		// apply shades it from the atlas instead of skipping it. Shadowed
 		// point lights stay on the per-light path in v1 (six-face cube
 		// sampling is a follow-up; the neon-street acceptance scene is spots).
+		// pointAtlas (2026-11-21): a shadowed point whose six faces all hold
+		// valid tiles shades HERE too - params.w = 1, the six tile indices in
+		// dirCone.xyzw + shape.xy; its matrices live at tile VP [kSpotTileVps + i].
+		// A shadowed point without a complete cube this frame is treated as
+		// unshadowed (room clip / r_pointShadowFallback).
 		void UpdateAndCull(Scene* scene, Camera* camera, const std::vector<class Light*>& shadowCasters,
-			const class ShadowAtlas* atlas = nullptr);
+			const class ShadowAtlas* atlas = nullptr, const class ShadowAtlas* pointAtlas = nullptr,
+			const std::unordered_map<const void*, float>* shadowFade = nullptr);
+
+		static constexpr uint32_t kSpotTileVps = 16;    // spot atlas tiles first ...
+		static constexpr uint32_t kPointTileVps = 64;   // ... then the point atlas tiles
 
 		// Bind/unbind the lists + constants for the fullscreen apply pass
 		// (raw PS slots t21..t23 and b5 - the engine API has no PS
@@ -112,9 +123,16 @@ namespace HexEngine
 			math::Vector4 colorStrength;
 			math::Vector4 dirCone;
 			math::Vector4 params;	// x cos(inner) | area range, y type (0 point, 1 spot, 2 tube, 3 rect), z shadowed, w atlas tile
-			math::Vector4 shape;	// area lights: xyz rect up * halfHeight, w two-sided
+			math::Vector4 shape;	// area lights: xyz rect up * halfHeight, w two-sided. points: xy atlas tiles 4,5, w fog scale
+			// Points (2026-11-21): room clip box + shadow cross-fade.
+			// ext0 = (box min xyz, shadow blend 0..1), ext1 = (box max xyz, unshadowed visibility scale).
+			// Visibility = lerp(unshadowed, atlas shadow, blend) where unshadowed =
+			// (inside box if params.x) * ext1.w - so a light gaining or losing its
+			// shadow slot fades between its indoor-only and spill-outside looks.
+			math::Vector4 ext0;
+			math::Vector4 ext1;
 		};
-		static_assert(sizeof(GpuLight) == 80, "update the HLSL GpuLight mirrors");
+		static_assert(sizeof(GpuLight) == 112, "update the HLSL GpuLight mirrors");
 
 		struct ClusterConstants
 		{
@@ -146,6 +164,10 @@ namespace HexEngine
 		void* _normalDepthSrvSource = nullptr;
 
 		uint32_t _lastLightCount = 0;
+		// Per-light shadow cross-fade weight (0 = unshadowed look, 1 = atlas
+		// shadowed). Keys are compared, never dereferenced; stale entries from
+		// deleted lights are pruned when not seen for a frame.
+		std::unordered_map<const void*, float> _shadowBlend;
 
 		// Area-light image array (see kAreaTextureSize).
 		struct AreaTextureSlot

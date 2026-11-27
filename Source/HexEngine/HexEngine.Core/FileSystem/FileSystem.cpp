@@ -90,23 +90,20 @@ namespace HexEngine
 		return baseDir;
 	}
 
-	namespace
+	fs::path FileSystem::GetExecutableDirectory()
 	{
-		fs::path GetExecutableDirectory()
+		std::wstring buffer(MAX_PATH, L'\0');
+		for (;;)
 		{
-			std::wstring buffer(MAX_PATH, L'\0');
-			for (;;)
+			const DWORD len = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+			if (len == 0)
+				return fs::current_path();
+			if (len < buffer.size())
 			{
-				const DWORD len = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-				if (len == 0)
-					return fs::current_path();
-				if (len < buffer.size())
-				{
-					buffer.resize(len);
-					return fs::path(buffer).parent_path();
-				}
-				buffer.resize(buffer.size() * 2);
+				buffer.resize(len);
+				return fs::path(buffer).parent_path();
 			}
+			buffer.resize(buffer.size() * 2);
 		}
 	}
 

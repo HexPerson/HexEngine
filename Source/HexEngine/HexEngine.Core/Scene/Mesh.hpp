@@ -125,11 +125,22 @@ namespace HexEngine
 		std::vector<AnimChannel*> children;
 	};
 
+	// A named moment in a clip (e.g. "FootL" when the left foot plants). Fired by
+	// SkeletalAnimationComponent as playback passes it, as an AnimationEventMessage
+	// to every component on the entity. Stored in the .hmesh's optional trailing
+	// HEVT block (older files simply have none).
+	struct AnimationEvent
+	{
+		float time = 0.0f;   // clip time in key units (ticks), like key times
+		std::string name;
+	};
+
 	struct Animation
 	{
 		std::string name;
 		float ticksPerSecond;
 		float duration;
+		std::vector<AnimationEvent> events;   // sorted by time
 		//float speed = 0.5f;
 		//float time = 0.0f;
 

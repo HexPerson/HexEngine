@@ -9,9 +9,27 @@
 #include <HexEngine.Core/GUI/Elements/ArrayElement.hpp>
 #include <HexEngine.Core/GUI/Elements/AssetSearch.hpp>
 #include <functional>
+#include <limits>
+#include <queue>
 #include <unordered_map>
+#include <unordered_set>
 
 std::vector<TrafficVehicleComponent*> TrafficVehicleComponent::s_allVehicles;
+
+namespace
+{
+	// Player's ridden vehicle (TrafficVehicleComponent::SetPlayerObstacle).
+	bool s_playerObstacleValid = false;
+	math::Vector3 s_playerObstaclePos;
+	math::Vector3 s_playerObstacleVel;
+}
+
+void TrafficVehicleComponent::SetPlayerObstacle(bool valid, const math::Vector3& pos, const math::Vector3& vel)
+{
+	s_playerObstacleValid = valid;
+	s_playerObstaclePos = pos;
+	s_playerObstacleVel = vel;
+}
 
 namespace
 {
@@ -47,6 +65,7 @@ namespace
 		math::Vector3 position = math::Vector3::Zero;
 		float cornerRadius = 0.0f;
 		std::vector<std::string> neighbours;
+		int32_t inCount = 0;
 	};
 
 	void DrawPointMarker(const math::Vector3& position, float extent, const math::Color& colour)
@@ -69,7 +88,148 @@ namespace
 
 		auto& neighbours = fromIt->second.neighbours;
 		if (std::find(neighbours.begin(), neighbours.end(), to) == neighbours.end())
+		{
 			neighbours.push_back(to);
+			toIt->second.inCount += 1;
+		}
+	}
+
+	// The lane graph (one node per lane entity, directed edges along "Next
+	// Lanes"). Planning used to rebuild it from every lane component for each
+	// route; trips now compare several candidate end nodes (parking access), so
+	// it is cached and rebuilt only when the scene or its lane count changes
+	// (lanes don't move in play; in the editor it refreshes every second).
+	struct LaneGraphCache
+	{
+		HexEngine::Scene* scene = nullptr;
+		size_t laneCount = 0;
+		uint32_t topologyRevision = 0;	// TrafficLaneComponent open/close changes
+		std::chrono::steady_clock::time_point builtAt{};
+		std::unordered_map<std::string, WaypointGraphNode> graph;
+	};
+
+	const std::unordered_map<std::string, WaypointGraphNode>& GetLaneGraph(HexEngine::Scene* scene)
+	{
+		static LaneGraphCache cache;
+		std::vector<TrafficLaneComponent*> lanes;
+		if (scene != nullptr)
+			scene->GetComponents<TrafficLaneComponent>(lanes);
+
+		const auto now = std::chrono::steady_clock::now();
+		const bool editing = HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->IsEditorMode() && !HexEngine::g_pEnv->IsGameRunning();
+		const uint32_t revision = TrafficLaneComponent::GetTopologyRevision();
+		const bool stale = cache.scene != scene || cache.laneCount != lanes.size() ||
+			cache.topologyRevision != revision ||
+			(editing && now - cache.builtAt > std::chrono::seconds(1));
+		if (!stale)
+			return cache.graph;
+
+		cache.scene = scene;
+		cache.laneCount = lanes.size();
+		cache.topologyRevision = revision;
+		cache.builtAt = now;
+		cache.graph.clear();
+		if (scene == nullptr)
+			return cache.graph;
+
+		auto& graph = cache.graph;
+		for (auto* lane : lanes)
+		{
+			if (lane == nullptr || lane->GetEntity() == nullptr || lane->GetEntity()->IsPendingDeletion() || lane->IsClosed())
+				continue;
+			auto& node = graph[lane->GetEntity()->GetName()];
+			node.position = lane->GetEntity()->GetWorldTM().Translation();
+			node.cornerRadius = lane->GetCornerRadius();
+		}
+		for (auto* lane : lanes)
+		{
+			if (lane == nullptr || lane->GetEntity() == nullptr || lane->GetEntity()->IsPendingDeletion() || lane->IsClosed())
+				continue;
+			// A lane is a single node, so its only edges are its "Next Lanes".
+			for (const auto& nextLaneName : lane->GetNextLaneEntityNames())
+			{
+				if (nextLaneName.empty())
+					continue;
+				auto* nextLaneEntity = scene->GetEntityByName(nextLaneName);
+				auto* nextLaneComp = nextLaneEntity != nullptr ? nextLaneEntity->GetComponent<TrafficLaneComponent>() : nullptr;
+				if (nextLaneEntity == nullptr || nextLaneEntity->IsPendingDeletion() || nextLaneComp == nullptr || nextLaneComp->IsClosed())
+					continue;
+				AddWaypointEdge(graph, lane->GetEntity()->GetName(), nextLaneName);
+			}
+		}
+		return cache.graph;
+	}
+
+	// A* over the lane graph. outLength = driven length along the nodes.
+	bool PlanOnLaneGraph(const std::unordered_map<std::string, WaypointGraphNode>& graph, const std::string& startName,
+		const std::string& destinationName, std::vector<std::string>* outPath, float* outLength)
+	{
+		const auto startIt = graph.find(startName);
+		const auto destIt = graph.find(destinationName);
+		if (startIt == graph.end() || destIt == graph.end())
+			return false;
+		const math::Vector3 goal = destIt->second.position;
+
+		struct OpenNode
+		{
+			float f = 0.0f;
+			const std::string* name = nullptr;
+		};
+		auto cmp = [](const OpenNode& a, const OpenNode& b) { return a.f > b.f; };
+		std::priority_queue<OpenNode, std::vector<OpenNode>, decltype(cmp)> open(cmp);
+		std::unordered_map<std::string, float> gScore;
+		std::unordered_map<std::string, const std::string*> cameFrom;
+		std::unordered_set<std::string> closed;
+
+		gScore[startName] = 0.0f;
+		open.push({ (startIt->second.position - goal).Length(), &startIt->first });
+		bool found = startName == destinationName;
+		while (!open.empty() && !found)
+		{
+			const OpenNode current = open.top();
+			open.pop();
+			if (!closed.insert(*current.name).second)
+				continue;
+			if (*current.name == destinationName)
+			{
+				found = true;
+				break;
+			}
+			const auto& currentNode = graph.at(*current.name);
+			const float currentG = gScore[*current.name];
+			for (const auto& neighbourName : currentNode.neighbours)
+			{
+				const auto neighbourIt = graph.find(neighbourName);
+				if (neighbourIt == graph.end())
+					continue;
+				const float tentativeG = currentG + (neighbourIt->second.position - currentNode.position).Length();
+				auto gIt = gScore.find(neighbourName);
+				if (gIt != gScore.end() && tentativeG >= gIt->second)
+					continue;
+				gScore[neighbourName] = tentativeG;
+				cameFrom[neighbourName] = current.name;
+				open.push({ tentativeG + (neighbourIt->second.position - goal).Length(), &neighbourIt->first });
+			}
+		}
+		if (!found)
+			return false;
+
+		if (outLength != nullptr)
+			*outLength = gScore[destinationName];
+		if (outPath != nullptr)
+		{
+			outPath->clear();
+			outPath->push_back(destinationName);
+			while (outPath->back() != startName)
+			{
+				auto it = cameFrom.find(outPath->back());
+				if (it == cameFrom.end())
+					return false;
+				outPath->push_back(*it->second);
+			}
+			std::reverse(outPath->begin(), outPath->end());
+		}
+		return true;
 	}
 
 	bool TryResolveNextLane(HexEngine::Scene* scene, TrafficLaneComponent* currentLane, std::string& outNextLaneName, TrafficLaneComponent*& outNextLane)
@@ -96,8 +256,8 @@ namespace
 				continue;
 
 			auto* nextLane = nextLaneEntity->GetComponent<TrafficLaneComponent>();
-			if (nextLane == nullptr)
-				continue;
+			if (nextLane == nullptr || nextLane->IsClosed())
+				continue;	// closed = into a locked district (DistrictGateComponent)
 
 			outNextLaneName = candidateName;
 			outNextLane = nextLane;
@@ -519,6 +679,24 @@ void TrafficVehicleComponent::SetWaypointRouteEndpoints(const std::string& start
 {
 	_startWaypointEntityName = startWaypointEntityName;
 	_destinationWaypointEntityName = destinationWaypointEntityName;
+	// Off-lane legs belong to one trip: whoever re-targets the route sets them again.
+	_leadInPoints.clear();
+	_leadOutPoints.clear();
+	_reverseLeadInPoints = 0;
+}
+
+void TrafficVehicleComponent::SetOffLaneLegs(const std::vector<math::Vector3>& leadIn, int32_t reverseLeadInPoints, const std::vector<math::Vector3>& leadOut)
+{
+	_leadInPoints = leadIn;
+	_leadOutPoints = leadOut;
+	_reverseLeadInPoints = std::clamp(reverseLeadInPoints, 0, (int32_t)leadIn.size());
+}
+
+bool TrafficVehicleComponent::IsOffLane() const
+{
+	if (!_useWaypointRoute || _plannedRoutePoints.empty())
+		return false;
+	return _targetIndex <= _leadInEnd || _targetIndex >= _leadOutStart;
 }
 
 bool TrafficVehicleComponent::ConsumeRouteEndReachedEvent()
@@ -538,6 +716,8 @@ void TrafficVehicleComponent::RestartPath()
 	_cornerSpeedScale = 1.0f;
 	_pendingNextLaneName.clear();
 	_chainedLaneNames.clear();
+	_leadInEnd = 0;
+	_leadOutStart = std::numeric_limits<size_t>::max();
 
 	if (_useWaypointRoute)
 	{
@@ -547,7 +727,28 @@ void TrafficVehicleComponent::RestartPath()
 		{
 			// Pre-bake the corner fillets straight into the planned route so
 			// the vehicle sweeps corners instead of point-turning at nodes.
-			LanePathSmoothing::SmoothPolyline(route, cornerRadii, _plannedRoutePoints);
+			std::vector<math::Vector3> laneRoute;
+			LanePathSmoothing::SmoothPolyline(route, cornerRadii, laneRoute);
+
+			// Off-lane legs (out of a parking bay / driveway, into one) wrap the
+			// lane route. They are driven slowly and are not smoothed: bays are
+			// entered square.
+			auto appendDistinct = [this](const math::Vector3& p)
+			{
+				if (_plannedRoutePoints.empty() || (p - _plannedRoutePoints.back()).LengthSquared() > 0.04f)
+					_plannedRoutePoints.push_back(p);
+			};
+			for (const auto& p : _leadInPoints)
+				appendDistinct(p);
+			_leadInEnd = _plannedRoutePoints.empty() ? 0 : _plannedRoutePoints.size() - 1;
+			_reverseUntilIndex = (size_t)std::min<int32_t>(_reverseLeadInPoints, (int32_t)_leadInEnd);
+			for (const auto& p : laneRoute)
+				appendDistinct(p);
+			_leadOutStart = _leadOutPoints.empty() ? std::numeric_limits<size_t>::max() : _plannedRoutePoints.size();
+			for (const auto& p : _leadOutPoints)
+				appendDistinct(p);
+			if (_plannedRoutePoints.size() < 2)
+				_plannedRoutePoints.clear();
 		}
 	}
 
@@ -583,182 +784,13 @@ bool TrafficVehicleComponent::BuildWaypointRoute(std::vector<math::Vector3>& out
 
 	auto* entity = GetEntity();
 	auto* scene = entity != nullptr ? entity->GetScene() : nullptr;
-	if (scene == nullptr)
+	if (scene == nullptr || _startWaypointEntityName.empty() || _destinationWaypointEntityName.empty())
 		return false;
 
-	if (_startWaypointEntityName.empty() || _destinationWaypointEntityName.empty())
-		return false;
-
-	auto* startEntity = scene->GetEntityByName(_startWaypointEntityName);
-	auto* destinationEntity = scene->GetEntityByName(_destinationWaypointEntityName);
-	if (startEntity == nullptr || destinationEntity == nullptr)
-		return false;
-
-	std::unordered_map<std::string, WaypointGraphNode> graph;
-	std::unordered_map<HexEngine::Entity*, std::vector<HexEngine::Entity*>> laneWaypointCache;
-
-	std::vector<TrafficLaneComponent*> lanes;
-	scene->GetComponents<TrafficLaneComponent>(lanes);
-
-	for (auto* lane : lanes)
-	{
-		if (lane == nullptr || lane->GetEntity() == nullptr || lane->GetEntity()->IsPendingDeletion())
-			continue;
-
-		std::vector<HexEngine::Entity*> laneWaypoints;
-		lane->GatherLaneWaypointEntities(laneWaypoints);
-		laneWaypointCache[lane->GetEntity()] = laneWaypoints;
-
-		for (auto* waypoint : laneWaypoints)
-		{
-			if (waypoint == nullptr || waypoint->IsPendingDeletion())
-				continue;
-
-			auto& node = graph[waypoint->GetName()];
-			node.position = waypoint->GetWorldTM().Translation();
-			node.cornerRadius = lane->GetCornerRadius();
-		}
-	}
-
-	for (auto* lane : lanes)
-	{
-		if (lane == nullptr || lane->GetEntity() == nullptr || lane->GetEntity()->IsPendingDeletion())
-			continue;
-
-		const auto cacheIt = laneWaypointCache.find(lane->GetEntity());
-		if (cacheIt == laneWaypointCache.end())
-			continue;
-
-		const auto& laneWaypoints = cacheIt->second;
-		if (laneWaypoints.empty())
-			continue;
-
-		for (size_t i = 0; i + 1 < laneWaypoints.size(); ++i)
-		{
-			auto* a = laneWaypoints[i];
-			auto* b = laneWaypoints[i + 1];
-			if (a == nullptr || b == nullptr || a->IsPendingDeletion() || b->IsPendingDeletion())
-				continue;
-
-			AddWaypointEdge(graph, a->GetName(), b->GetName());
-			AddWaypointEdge(graph, b->GetName(), a->GetName());
-		}
-
-		if (lane->IsLooping() && laneWaypoints.size() > 2)
-		{
-			auto* first = laneWaypoints.front();
-			auto* last = laneWaypoints.back();
-			if (first != nullptr && last != nullptr && !first->IsPendingDeletion() && !last->IsPendingDeletion())
-			{
-				AddWaypointEdge(graph, last->GetName(), first->GetName());
-				AddWaypointEdge(graph, first->GetName(), last->GetName());
-			}
-		}
-
-		const auto& nextLaneNames = lane->GetNextLaneEntityNames();
-		if (!nextLaneNames.empty())
-		{
-			auto* laneEntity = lane->GetEntity();
-			auto* laneTerminal = laneWaypoints.back();
-			if (laneEntity != nullptr && laneTerminal != nullptr && !laneTerminal->IsPendingDeletion())
-			{
-				for (const auto& nextLaneName : nextLaneNames)
-				{
-					if (nextLaneName.empty())
-						continue;
-
-					auto* nextLaneEntity = scene->GetEntityByName(nextLaneName);
-					if (nextLaneEntity == nullptr || nextLaneEntity->IsPendingDeletion())
-						continue;
-
-					auto* nextLane = nextLaneEntity->GetComponent<TrafficLaneComponent>();
-					if (nextLane == nullptr)
-						continue;
-
-					const auto nextCacheIt = laneWaypointCache.find(nextLaneEntity);
-					if (nextCacheIt == laneWaypointCache.end())
-						continue;
-
-					const auto& nextWaypoints = nextCacheIt->second;
-					if (nextWaypoints.empty() || nextWaypoints.front() == nullptr || nextWaypoints.front()->IsPendingDeletion())
-						continue;
-
-					AddWaypointEdge(graph, laneTerminal->GetName(), nextWaypoints.front()->GetName());
-				}
-			}
-		}
-	}
-
-	const std::string startName = startEntity->GetName();
-	const std::string destinationName = destinationEntity->GetName();
-	if (graph.find(startName) == graph.end() || graph.find(destinationName) == graph.end())
-		return false;
-
-	struct OpenNode
-	{
-		float f = 0.0f;
-		std::string name;
-	};
-	auto cmp = [](const OpenNode& a, const OpenNode& b) { return a.f > b.f; };
-	std::priority_queue<OpenNode, std::vector<OpenNode>, decltype(cmp)> open(cmp);
-	std::unordered_map<std::string, float> gScore;
-	std::unordered_map<std::string, std::string> cameFrom;
-	std::unordered_set<std::string> closed;
-
-	for (const auto& [name, node] : graph)
-		gScore[name] = std::numeric_limits<float>::infinity();
-
-	gScore[startName] = 0.0f;
-	open.push({ (graph[startName].position - graph[destinationName].position).Length(), startName });
-
-	while (!open.empty())
-	{
-		const OpenNode current = open.top();
-		open.pop();
-
-		if (closed.find(current.name) != closed.end())
-			continue;
-		closed.insert(current.name);
-
-		if (current.name == destinationName)
-			break;
-
-		const auto currentIt = graph.find(current.name);
-		if (currentIt == graph.end())
-			continue;
-
-		const auto& currentNode = currentIt->second;
-		for (const auto& neighbourName : currentNode.neighbours)
-		{
-			const auto neighbourIt = graph.find(neighbourName);
-			if (neighbourIt == graph.end())
-				continue;
-
-			const float travelCost = (neighbourIt->second.position - currentNode.position).Length();
-			const float tentativeG = gScore[current.name] + travelCost;
-			if (tentativeG >= gScore[neighbourName])
-				continue;
-
-			cameFrom[neighbourName] = current.name;
-			gScore[neighbourName] = tentativeG;
-			const float h = (neighbourIt->second.position - graph[destinationName].position).Length();
-			open.push({ tentativeG + h, neighbourName });
-		}
-	}
-
-	if (startName != destinationName && cameFrom.find(destinationName) == cameFrom.end())
-		return false;
-
+	const auto& graph = GetLaneGraph(scene);
 	std::vector<std::string> pathNames;
-	pathNames.push_back(destinationName);
-	while (pathNames.back() != startName)
-	{
-		auto it = cameFrom.find(pathNames.back());
-		if (it == cameFrom.end())
-			return false;
-		pathNames.push_back(it->second);
-	}
-	std::reverse(pathNames.begin(), pathNames.end());
+	if (!PlanOnLaneGraph(graph, _startWaypointEntityName, _destinationWaypointEntityName, &pathNames, nullptr))
+		return false;
 
 	outPoints.reserve(pathNames.size());
 	outCornerRadii.reserve(pathNames.size());
@@ -773,6 +805,41 @@ bool TrafficVehicleComponent::BuildWaypointRoute(std::vector<math::Vector3>& out
 	}
 
 	return outPoints.size() >= 2;
+}
+
+float TrafficVehicleComponent::EstimateLaneRouteLength(HexEngine::Scene* scene, const std::string& startWaypointEntityName, const std::string& destinationWaypointEntityName)
+{
+	if (scene == nullptr)
+		return -1.0f;
+	float length = 0.0f;
+	if (!PlanOnLaneGraph(GetLaneGraph(scene), startWaypointEntityName, destinationWaypointEntityName, nullptr, &length))
+		return -1.0f;
+	return length;
+}
+
+void TrafficVehicleComponent::GatherLaneNodes(HexEngine::Scene* scene, std::vector<LaneNodeInfo>& out)
+{
+	out.clear();
+	if (scene == nullptr)
+		return;
+	const auto& graph = GetLaneGraph(scene);
+	out.reserve(graph.size());
+	for (const auto& [name, node] : graph)
+	{
+		LaneNodeInfo info;
+		info.name = name;
+		info.position = node.position;
+		info.inCount = node.inCount;
+		info.outCount = (int32_t)node.neighbours.size();
+		info.next = node.neighbours;
+		if (!node.neighbours.empty())
+		{
+			auto it = graph.find(node.neighbours.front());
+			if (it != graph.end())
+				info.nextPosition = it->second.position;
+		}
+		out.push_back(std::move(info));
+	}
 }
 
 bool TrafficVehicleComponent::AdvancePlannedRouteIndex(size_t numPoints)
@@ -1298,6 +1365,32 @@ float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& curren
 	if (!bypassStillAhead)
 		_gridlockBypass = nullptr;
 
+	// The player's bike / vehicle in our lane ahead (see SetPlayerObstacle).
+	if (s_playerObstacleValid)
+	{
+		const math::Vector3 toPlayer = s_playerObstaclePos - currentPosition;
+		const float projected = toPlayer.Dot(moveDirection);
+		if (std::abs(toPlayer.y) <= 3.0f && projected > 0.0f && projected <= lookAhead)
+		{
+			const float lateralSq = std::max(0.0f, toPlayer.LengthSquared() - projected * projected);
+			// Narrower than a car's corridor: a bike hugging the kerb or the
+			// centre line beside us is being passed, not followed.
+			const float half = laneHalfWidth * 0.75f;
+			const float playerAlong = s_playerObstacleVel.Dot(moveDirection);
+			if (lateralSq <= half * half && playerAlong < _currentSpeed + 0.5f)
+			{
+				// A bike is ~2 m shorter than a car: measure to its rear.
+				const float gap = std::max(0.0f, projected - 1.0f);
+				if (gap < nearestAheadDistance)
+				{
+					nearestAheadDistance = gap;
+					_debugBlockerPos = s_playerObstaclePos;
+					_avoidanceBlockerQueued = false;
+				}
+			}
+		}
+	}
+
 	if (nearestAheadDistance == std::numeric_limits<float>::max())
 		return maxSpeed;
 	if (nearestAheadDistance <= followDistance)
@@ -1331,6 +1424,16 @@ void TrafficVehicleComponent::Update(float frameTime)
 	auto* transform = GetEntity()->GetComponent<HexEngine::Transform>();
 	if (transform == nullptr)
 		return;
+
+	// Held (a bus dwelling at a stop): stand still with the engine idling but
+	// stay a solid obstacle for the traffic behind, unlike parked.
+	if (_held)
+	{
+		_currentSpeed = 0.0f;
+		_waitTime = 0.0f;
+		UpdateAudio(transform->GetPosition(), frameTime);
+		return;
+	}
 
 	std::vector<math::Vector3> points;
 	if (!GatherPlannedRoute(points))
@@ -1471,6 +1574,11 @@ void TrafficVehicleComponent::Update(float frameTime)
 	// Slow through active corner fillets - sharper turn, stronger slow-down.
 	if (!_cornerPoints.empty())
 		maxSpeed *= _cornerSpeedScale;
+	// Pulling out of / into a parking bay or driveway: walking pace, backing out slower.
+	const bool offLane = IsOffLane();
+	const bool reversing = _useWaypointRoute && _targetIndex >= 1 && _targetIndex <= _reverseUntilIndex;
+	if (offLane)
+		maxSpeed = std::min(maxSpeed, reversing ? _offLaneSpeed * 0.6f : _offLaneSpeed);
 	if (maxSpeed <= 0.0f)
 	{
 		_currentSpeed = 0.0f;
@@ -1478,10 +1586,30 @@ void TrafficVehicleComponent::Update(float frameTime)
 	}
 
 	float desiredSpeed = ComputeAvoidanceSpeed(currentPosition, toTarget, maxSpeed);
+
+	// A waypoint route that ends in a stop (parking, a bus stop) brakes
+	// smoothly to the end point instead of halting dead on arrival:
+	// v <= sqrt(2 * a * remaining).
+	if (_useWaypointRoute && !_despawnAtRouteEnd && _stopDeceleration > 0.0f && !points.empty())
+	{
+		float remaining = distanceToTarget;
+		for (size_t i = _targetIndex; i + 1 < points.size(); ++i)
+		{
+			remaining += math::Vector3::Distance(points[i], points[i + 1]);
+			if (remaining > 200.0f)
+				break;
+		}
+		const float stopCap = std::sqrt(2.0f * _stopDeceleration * std::max(0.0f, remaining - arrivalDistance)) + 0.6f;
+		desiredSpeed = std::min(desiredSpeed, stopCap);
+	}
+
 	const float accel = std::max(_acceleration, 0.0f);
 	const float brake = std::max(_brakingStrength, 0.0f);
 
-	// Traffic signals: stop at the line on red (and on amber when we can).
+	// Traffic signals: stop at the line on red (and on amber when we can). Not on an
+	// off-lane leg: a car park aisle near a junction isn't behind its stop line.
+	_queuedAtSignal = false;
+	if (!offLane)
 	{
 		const bool avoidanceBinds = desiredSpeed < maxSpeed - 0.01f;
 		bool heldBySignal = false;
@@ -1501,7 +1629,11 @@ void TrafficVehicleComponent::Update(float frameTime)
 		_currentSpeed = std::max(_currentSpeed - brake * frameTime, desiredSpeed);
 	}
 
-	currentPosition += toTarget * (_currentSpeed * frameTime);
+	// Never step past the current target. On a long frame (hitch, load spike)
+	// speed * dt overshot the waypoint / corner sample; next frame the target
+	// was BEHIND the car, toTarget flipped and the heading slerped round towards
+	// it - the car spun for a moment (Trello #48). The node is consumed next frame.
+	currentPosition += toTarget * std::min(_currentSpeed * frameTime, distanceToTarget);
 	transform->SetPositionNoNotify(currentPosition);
 
 	if (_speed > 0.1f && _currentSpeed <= 0.5f && !_queuedAtSignal)
@@ -1509,7 +1641,9 @@ void TrafficVehicleComponent::Update(float frameTime)
 	else
 		_waitTime = 0.0f;
 
-	const float yaw = atan2f(toTarget.x, toTarget.z);
+	// Backing out of a bay: the car keeps facing away from where it is going.
+	const math::Vector3 noseDirection = reversing ? -toTarget : toTarget;
+	const float yaw = atan2f(noseDirection.x, noseDirection.z);
 	const auto targetRotation = math::Quaternion::CreateFromYawPitchRoll(yaw, 0.0f, 0.0f);
 	// Frame-rate-independent exponential damping. The old `clamp(dt*k, 0, 1)`
 	// formula scaled the per-frame blend factor LINEARLY with dt, which

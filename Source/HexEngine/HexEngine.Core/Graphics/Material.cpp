@@ -151,6 +151,8 @@ namespace HexEngine
 		_hasGraph = material._hasGraph;
 		_hasGraphInstance = material._hasGraphInstance;
 		InvalidateGiGraphTintCache();
+
+		_cachedTextureArray.clear();
 	}
 
 	Material::Material(const Material& other)
@@ -184,6 +186,8 @@ namespace HexEngine
 			else
 				_objectFlags |= flag;
 		}
+
+		_cachedTextureArray.clear();
 	}
 
 	void Material::SetEmissiveAffectsGI(bool value)

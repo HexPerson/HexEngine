@@ -3,6 +3,7 @@
 
 #include "../../Environment/IEnvironment.hpp"
 #include "../../Environment/ClassRegistry.hpp"
+#include "ComponentSignature.hpp"
 
 namespace HexEngine
 {
@@ -23,12 +24,4 @@ virtual HexEngine::ComponentId GetComponentId() override {\
 virtual const char* GetComponentName() override {\
 	return std::decay_t<decltype(*this)>::_GetComponentName();\
 }
-
-	using ComponentId = uint32_t;
-	// 64 component types (up from 32). Game/plugin DLLs share this global registry
-	// and we keep adding components, so the signature is a 64-bit mask. IMPORTANT:
-	// every `signature bit` must be built as ((ComponentSignature)1 << compId) -
-	// a bare `1 << compId` is a signed int and sign-extends past bit 31.
-	const ComponentId MAX_COMPONENTS = 64;
-	using ComponentSignature = uint64_t;
 }

@@ -10,6 +10,8 @@
 #include "../Entity/Component/AreaLight.hpp"
 #include "../Entity/Component/Light.hpp"
 #include "ShadowAtlas.hpp"
+#include "../Environment/TimeManager.hpp"
+#include <unordered_set>
 
 #include <d3d11.h>
 
@@ -105,7 +107,7 @@ namespace HexEngine
 		// Per-atlas-tile view-proj matrices (slice 7). CPU-written when
 		// UpdateAndCull runs with an atlas; sized to the atlas tile count.
 		{
-			constexpr uint32_t kTileVpElements = 16; // ShadowAtlas::kTileCount
+			constexpr uint32_t kTileVpElements = kSpotTileVps + kPointTileVps; // spot tiles, then point tiles
 			D3D11_BUFFER_DESC desc = {};
 			desc.ByteWidth = sizeof(math::Matrix) * kTileVpElements;
 			desc.Usage = D3D11_USAGE_DYNAMIC;
@@ -386,12 +388,15 @@ namespace HexEngine
 	extern HVar r_physicalLightUnits;
 
 	void ClusteredLighting::UpdateAndCull(Scene* scene, Camera* camera, const std::vector<Light*>& shadowCasters,
-		const ShadowAtlas* atlas)
+		const ShadowAtlas* atlas, const ShadowAtlas* pointAtlas,
+		const std::unordered_map<const void*, float>* shadowFade)
 	{
 		const bool physicalUnits = r_physicalLightUnits._val.b;
 		constexpr float kPi = 3.14159265358979f;
 		if (scene == nullptr || camera == nullptr || _cullShader == nullptr || _lightsBuffer == nullptr)
 			return;
+		static HVar* fallbackVar = g_pEnv->_commandManager->FindHVar("r_pointShadowFallback");
+		const float pointShadowFallback = fallbackVar != nullptr ? std::clamp(fallbackVar->_val.f32, 0.0f, 1.0f) : 1.0f;
 
 		ID3D11DeviceContext* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
 		if (context == nullptr)
@@ -400,6 +405,20 @@ namespace HexEngine
 		// ---- Gather every light, no closest-N cap -------------------------
 		std::vector<GpuLight> lights;
 		lights.reserve(256);
+
+		// Shadow cross-fade: ~0.5 s either way.
+		const float frameDt = (g_pEnv != nullptr && g_pEnv->_timeManager != nullptr)
+			? std::clamp(g_pEnv->_timeManager->GetFrameTime(), 0.0f, 0.1f) : (1.0f / 60.0f);
+		const float blendStep = frameDt * 2.0f;
+		// Distance fade of a selected caster's shadow (1 when not provided).
+		auto fadeOf = [shadowFade](const void* light)
+			{
+				if (shadowFade == nullptr)
+					return 1.0f;
+				auto it = shadowFade->find(light);
+				return it != shadowFade->end() ? it->second : 1.0f;
+			};
+		std::vector<const void*> seenBlend;
 
 		std::vector<PointLight*> points;
 		if (scene->GetComponents<PointLight>(points))
@@ -419,13 +438,77 @@ namespace HexEngine
 
 				GpuLight gl = {};
 				const auto pos = l->GetEntity()->GetWorldTM().Translation();
+				const bool isCaster = std::find(shadowCasters.begin(), shadowCasters.end(),
+					static_cast<Light*>(l)) != shadowCasters.end();
+
+				// Atlas mode. The cube's tiles may still hold valid content after
+				// the light dropped out of the caster set (until LRU-stolen), which
+				// is what lets it FADE OUT; a new caster fades in once all six
+				// faces are rendered.
+				float pointTiles[6] = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f };
+				bool tilesValid = false;
+				if (pointAtlas != nullptr && l->GetDoesCastShadows())
+				{
+					tilesValid = true;
+					for (uint8_t f = 0; f < 6 && tilesValid; ++f)
+					{
+						const int32_t t = pointAtlas->FindContentTile(static_cast<Light*>(l), f);
+						if (t < 0 || t >= (int32_t)kPointTileVps)
+							tilesValid = false;
+						else
+							pointTiles[f] = (float)t;
+					}
+				}
+				float blend = 0.0f;
+				if (pointAtlas != nullptr && tilesValid)
+				{
+					float& b = _shadowBlend[l];
+					const float target = isCaster ? fadeOf(l) : 0.0f;
+					const float step = blendStep;
+					b = b < target ? std::min(target, b + step) : std::max(target, b - step);
+					blend = b;
+					seenBlend.push_back(l);
+				}
+				const bool atlasPoint = pointAtlas != nullptr && tilesValid && blend > 0.0f;
+				// Legacy path (no point atlas): a caster is drawn by the per-light
+				// sphere pass and skipped here (params.z).
+				const bool legacyShadowed = pointAtlas == nullptr && isCaster;
+
+				// Unshadowed look: inside the room box only, or - for a caster with
+				// no box - scaled by r_pointShadowFallback (it would leak).
+				const bool roomClip = l->HasRoomClip();
+				float unshadowedScale = 1.0f;
+				if (!roomClip && l->GetDoesCastShadows() && blend < 1.0f && !legacyShadowed)
+					unshadowedScale = pointShadowFallback;
+				if (!atlasPoint && !legacyShadowed && unshadowedScale <= 0.0f)
+					continue;
+
 				gl.posRadius = math::Vector4(pos.x, pos.y, pos.z, std::max(0.05f, l->GetRadius()));
 				gl.colorStrength = math::Vector4(diffuse.x, diffuse.y, diffuse.z, strength);
-				const bool shadowed = std::find(shadowCasters.begin(), shadowCasters.end(),
-					static_cast<Light*>(l)) != shadowCasters.end();
-				gl.params = math::Vector4(0.0f, 0.0f, shadowed ? 1.0f : 0.0f, 0.0f);
+				gl.params = math::Vector4(roomClip ? 1.0f : 0.0f, 0.0f,
+					(atlasPoint || legacyShadowed) ? 1.0f : 0.0f, atlasPoint ? 1.0f : 0.0f);
+				if (atlasPoint)
+				{
+					gl.dirCone = math::Vector4(pointTiles[0], pointTiles[1], pointTiles[2], pointTiles[3]);
+					gl.shape = math::Vector4(pointTiles[4], pointTiles[5], 0.0f, 0.0f);
+				}
+				const auto lo = pos + l->GetRoomClipMin();
+				const auto hi = pos + l->GetRoomClipMax();
+				gl.ext0 = math::Vector4(lo.x, lo.y, lo.z, atlasPoint ? blend : 0.0f);
+				gl.ext1 = math::Vector4(hi.x, hi.y, hi.z, unshadowedScale);
+				// Points: shape.w = fog scale.
+				gl.shape.w = std::clamp(l->GetFogScale(), 0.0f, 1.0f);
 				lights.push_back(gl);
 			}
+		}
+
+		// Drop cross-fade state for lights not seen with valid tiles this frame
+		// (deleted, tiles stolen, atlas off) - a stolen cube snaps back to 0.
+		if (!_shadowBlend.empty())
+		{
+			std::unordered_set<const void*> seen(seenBlend.begin(), seenBlend.end());
+			for (auto it = _shadowBlend.begin(); it != _shadowBlend.end();)
+				it = seen.count(it->first) ? std::next(it) : _shadowBlend.erase(it);
 		}
 
 		std::vector<SpotLight*> spots;
@@ -466,6 +549,8 @@ namespace HexEngine
 				if (shadowed && atlas != nullptr)
 					atlasTile = (float)atlas->FindContentTile(static_cast<Light*>(l), 0);
 				gl.params = math::Vector4(cosf(ToRadian(l->GetInnerConeAngle() * 0.5f)), 1.0f, shadowed ? 1.0f : 0.0f, atlasTile);
+				// Spots: ext0.w = shadow strength (distance fade; 1 = full shadow).
+				gl.ext0 = math::Vector4(0.0f, 0.0f, 0.0f, shadowed ? fadeOf(l) : 1.0f);
 				lights.push_back(gl);
 			}
 		}
@@ -543,12 +628,18 @@ namespace HexEngine
 
 		// Tile view-proj matrices for the atlas sampling path. TRANSPOSED
 		// like every engine cbuffer/structured matrix (shaders mul(vec, m)).
-		if (atlas != nullptr && _tileVpBuffer != nullptr &&
+		if ((atlas != nullptr || pointAtlas != nullptr) && _tileVpBuffer != nullptr &&
 			SUCCEEDED(context->Map(_tileVpBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		{
 			auto* dst = reinterpret_cast<math::Matrix*>(mapped.pData);
-			for (int32_t i = 0; i < ShadowAtlas::kTileCount && i < 16; ++i)
-				dst[i] = atlas->GetTile(i).viewProj.Transpose();
+			for (uint32_t i = 0; i < kSpotTileVps + kPointTileVps; ++i)
+				dst[i] = math::Matrix::Identity;
+			if (atlas != nullptr)
+				for (int32_t i = 0; i < atlas->GetTileCount() && i < (int32_t)kSpotTileVps; ++i)
+					dst[i] = atlas->GetTile(i).viewProj.Transpose();
+			if (pointAtlas != nullptr)
+				for (int32_t i = 0; i < pointAtlas->GetTileCount() && i < (int32_t)kPointTileVps; ++i)
+					dst[kSpotTileVps + i] = pointAtlas->GetTile(i).viewProj.Transpose();
 			context->Unmap(_tileVpBuffer, 0);
 		}
 

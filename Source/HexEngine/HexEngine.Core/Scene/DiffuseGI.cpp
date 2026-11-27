@@ -1,6 +1,7 @@
 #include "DiffuseGI.hpp"
 
 #include "../HexEngine.hpp"
+#include "../Entity/Component/SkeletalAnimationComponent.hpp"
 #include "../Entity/Component/Camera.hpp"
 #include "../Entity/Component/DirectionalLight.hpp"
 #include "../Entity/Component/PointLight.hpp"
@@ -19,6 +20,18 @@
 #include <cstring>
 #include <limits>
 #include <unordered_set>
+
+namespace
+{
+	// Skinned characters (and their bone-bound hair / hats) are not GI geometry:
+	// they move constantly, so keeping them in the voxel world re-baked GI every
+	// few frames for a bounce nobody can see. Mirrors Scene::IsGiContributor.
+	bool IsGiCharacterMesh(HexEngine::StaticMeshComponent* smc)
+	{
+		auto* entity = smc->GetEntity();
+		return smc->IsBoundToBone() || (entity != nullptr && entity->HasA<HexEngine::SkeletalAnimationComponent>());
+	}
+}
 
 namespace HexEngine
 {
@@ -92,7 +105,10 @@ namespace HexEngine
 	HVar r_giGpuMaterialProxyBlend("r_giGpuMaterialProxyBlend", "Blend amount for GPU material proxy albedo in eval path (0=triangle albedo, 1=material proxy)", 0.15f, 0.0f, 1.0f);
 	HVar r_giGpuEvalTriangleBudget("r_giGpuEvalTriangleBudget", "Triangle budget used by GPU material-eval voxelization path", 7000, 512, 300000);
 	HVar r_giGpuComputeBaseSun("r_giGpuComputeBaseSun", "Compute base diffuse/sun/emissive GI injection in GPU eval path", true, false, true);
-	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (lower is faster)", 64, 1, 256);
+	// Budget is the triangle's voxel-AABB VOLUME. At the old 256 cap a room-sized floor
+	// triangle (~22x52x2 voxels) stepped every 3rd-6th voxel, so window sun patches
+	// fell between samples and never reached the voxel field. ~4096 voxelises it at step 1.
+	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (voxel-AABB volume; lower is faster, sparser on big triangles)", 64, 1, 8192);
 	HVar r_giGpuSunShadowMode("r_giGpuSunShadowMode", "GPU GI sun-shadow mode (0=off,1=single tap,2=PCF 3x3)", 1, 0, 2);
 	HVar r_giGpuSunShadowPerVoxel("r_giGpuSunShadowPerVoxel", "Evaluate GPU GI sun shadow per voxel hit (expensive); when off uses per-triangle sun visibility", false, false, true);
 	HVar r_giGpuEdgeSmoothThreshold("r_giGpuEdgeSmoothThreshold", "Coverage threshold where GPU edge smoothing starts (higher = wider smoothing band)", 0.90f, 0.0f, 1.0f);
@@ -124,13 +140,23 @@ namespace HexEngine
 	// it removes (DiffuseGITraceBlur.shader). Only runs while SSGI is on.
 	HVar r_giSSGIBlur("r_giSSGIBlur", "Bilateral pre-blur of the GI trace when SSGI is on (kills residual SSGI grain)", true, false, true);
 	HVar r_giSSGIBlurRadius("r_giSSGIBlurRadius", "SSGI pre-blur radius in half-res texels", 2.0f, 1.0f, 3.0f);
+	// Long-range cone-traced gather (DiffuseGITrace.shader ConeTraceGather). The
+	// per-clip evaluation only reaches ~0.5 m (+ two taps 1-2 m along the normal),
+	// so a sun patch or lamp-lit wall never lit the rest of a room. 6 cones march
+	// the clipmaps; their radiance adds to GI and their sky visibility feeds the
+	// AO channel, so with r_giSkyOcclusion 1 the flat ambient/sky fill becomes
+	// "sky light x actual visibility" (bright by windows, gone in closed rooms).
+	HVar r_giConeGather("r_giConeGather", "Long-range cone-traced GI gather strength (0 = off)", 0.0f, 0.0f, 16.0f);
+	HVar r_giConeGatherDistance("r_giConeGatherDistance", "Max cone march distance in metres", 8.0f, 1.0f, 32.0f);
+	HVar r_giConeGatherOcclusion("r_giConeGatherOcclusion", "Blend of the cones' sky occlusion into the GI AO channel (0 = local voxel AO only)", 1.0f, 0.0f, 1.0f);
+	HVar r_giConeGatherSaturation("r_giConeGatherSaturation", "Saturation of cone-gathered bounce (the injection bleed boosts over-saturate long-range bounce)", 0.55f, 0.0f, 1.0f);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
 	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
 	// Diagnostic: log every CPU voxel-triangle rebuild with the cache-rejection
 	// reason and build duration. Turn on, reproduce a hitch (e.g. a weather
 	// transition), read the log - the failing condition names the culprit.
 	HVar r_giLogRebuilds("r_giLogRebuilds", "Log GI voxel-triangle cache rebuilds with rejection reasons + duration", false, false, true);
-	HVar r_giDebugView("r_giDebugView", "GI debug view (0=off, 1=indirect, 2=probes, 3=voxel, 4=clipmap, 5=voxel albedo)", 0, 0, 5);
+	HVar r_giDebugView("r_giDebugView", "GI debug view (0=off, 1=indirect, 2=probes, 3=voxel, 4=clipmap, 5=voxel albedo, 6=raw surface voxel radiance, 7=cone sky visibility (R) + surface coverage (G), 8=cone-gathered radiance)", 0, 0, 8);
 	HVar r_giVoxelResolution("r_giVoxelResolution", "Per-clipmap voxel resolution", 128, 16, 256);
 	HVar r_giClipmapBaseExtent("r_giClipmapBaseExtent", "Half-extent of first GI clipmap in world units", 56.0f, 16.0f, 4096.0f);
 }
@@ -1545,6 +1571,13 @@ namespace HexEngine
 			_voxelTriangleGpuValid[i] = false;
 						_cachedVoxelTrianglesFrame[i] = 0ull;
 						_clipmapWarmFramesRemaining[i] = (i == 0u) ? 2u : 1u;
+						// The volumes are NOT cleared on a jump - the resolve blends with the
+						// previous contents and the lit cache forgets at x0.9995 per update -
+						// so light from the OLD location sat in the new one (a glowing strip
+						// along interior ceiling lines after teleporting back into a house).
+						// The injection snap ages the lit cache at x0.55 and lowers the
+						// resolve keep: arm it so stale content washes out in a few updates.
+						_injectSnapFramesRemaining = std::max(_injectSnapFramesRemaining, 12u);
 					}
 					else
 					{
@@ -2099,7 +2132,7 @@ namespace HexEngine
 		// which is shared across every mesh using that material.
 		meshesInBounds.erase(
 			std::remove_if(meshesInBounds.begin(), meshesInBounds.end(),
-				[](StaticMeshComponent* smc) { return smc != nullptr && (smc->GetExcludeFromGI() || smc->IsGiMotionExcluded()); }),
+				[](StaticMeshComponent* smc) { return smc != nullptr && (smc->GetExcludeFromGI() || smc->IsGiMotionExcluded() || IsGiCharacterMesh(smc)); }),
 			meshesInBounds.end());
 
 		std::vector<StaticMeshComponent*> prioritized;
@@ -2429,7 +2462,7 @@ namespace HexEngine
 		_constants.params9 = math::Vector4(
 			sunStrength,
 			std::max(0.0f, r_giUnlitAlbedoInjection._val.f32 * sunPresenceMask),
-			static_cast<float>(std::clamp(r_giGpuEvalMaxVoxelTestsPerTriangle._val.i32, 1, 256)),
+			static_cast<float>(std::clamp(r_giGpuEvalMaxVoxelTestsPerTriangle._val.i32, 1, 8192)),
 			static_cast<float>(std::clamp(r_giGpuSunShadowMode._val.i32, 0, 2)));
 		_constants.params10 = math::Vector4(
 			std::clamp(r_giGpuEdgeSmoothThreshold._val.f32, 0.0f, 1.0f),
@@ -2458,6 +2491,11 @@ namespace HexEngine
 			std::clamp(r_giSSGIRadius._val.f32, 0.25f, 8.0f),
 			(r_giLitInjection._val.f32 > 0.0001f && _clipmaps[0].litCacheVolume != nullptr) ? 1.0f : 0.0f,
 			(r_giSSGI._val.b && r_giSSGIBlur._val.b) ? std::clamp(r_giSSGIBlurRadius._val.f32, 1.0f, 3.0f) : 0.0f);
+		_constants.params15 = math::Vector4(
+			std::clamp(r_giConeGather._val.f32, 0.0f, 16.0f),
+			std::clamp(r_giConeGatherDistance._val.f32, 1.0f, 32.0f),
+			std::clamp(r_giConeGatherOcclusion._val.f32, 0.0f, 1.0f),
+			std::clamp(r_giConeGatherSaturation._val.f32, 0.0f, 1.0f));
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresenceMask;
@@ -3734,7 +3772,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		// which is shared across every mesh using that material.
 		meshesInBounds.erase(
 			std::remove_if(meshesInBounds.begin(), meshesInBounds.end(),
-				[](StaticMeshComponent* smc) { return smc != nullptr && (smc->GetExcludeFromGI() || smc->IsGiMotionExcluded()); }),
+				[](StaticMeshComponent* smc) { return smc != nullptr && (smc->GetExcludeFromGI() || smc->IsGiMotionExcluded() || IsGiCharacterMesh(smc)); }),
 			meshesInBounds.end());
 		outMeshes.reserve(meshesInBounds.size());
 		outMaterials.reserve(meshesInBounds.size());
@@ -6639,7 +6677,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			return;
 
 		const int32_t debugView = r_giDebugView._val.i32;
-		if (debugView == 1 || debugView == 3 || debugView == 4)
+		if (debugView == 1 || debugView == 3 || debugView == 4 || debugView >= 6)
 		{
 			auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
 			if (guiRenderer == nullptr)
@@ -6653,7 +6691,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			return;
 		}
 
-		_giResolved->BlendTo_Additive(beautyTarget, nullptr);
+		// Linear passthrough, NOT the default (nullptr) shader: that is the GUI
+		// basic shader, which saturates and - on an HDR back buffer
+		// (UIBasicHDR) - applies pow(x, 2.2) * 1.9. It clipped every GI value
+		// above 1 (no bloom on bright bounce) and crushed dim bounce.
+		_giResolved->BlendTo_Additive(beautyTarget, _fullScreenShader.get());
 	}
 
 	void DiffuseGI::DebugDrawProbeGrid(uint32_t levelIndex) const

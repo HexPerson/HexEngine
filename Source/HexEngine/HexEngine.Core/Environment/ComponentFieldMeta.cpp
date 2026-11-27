@@ -113,10 +113,10 @@ namespace HexEngine
 		Register("DoorComponent", "_easing", Desc("Swing easing curve: -1 = linear, otherwise an easing_functions value (5 = EaseInOutQuad; see Math/easing.h)."));
 		Register("DoorComponent", "_openAngle", Range("Open angle.", -180.0, 180.0, "degrees"));
 		Register("InteractionComponent", "_interactKey", Desc("Virtual-key code of the interact key (69 = 'E')."));
-		Register("InteractionComponent", "_interactionRange", Range("Max interaction distance.", 0.0, 1000.0, "m"));
 		Register("DayNightCycleComponent", "_currentTimeHours", Range("Time of day.", 0.0, 24.0, "hours"));
 		Register("DayNightCycleComponent", "_simulateCycle", Desc("Advance time automatically; false freezes the time of day."));
 		Register("DayNightCycleComponent", "_sunYawDegrees", Range("Compass direction of the sun's path.", -360.0, 360.0, "degrees"));
+		Register("DayNightCycleComponent", "_sunTiltDegrees", Range("Tilt of the sun's daily arc (latitude stand-in): noon elevation = 90 - tilt. 0 = straight overhead.", -80.0, 80.0, "degrees"));
 		Register("SoundEffectComponent", "_volume", Range("Playback volume.", 0.0, 1.0));
 		Register("SoundEffectComponent", "_radius", Range("3D audible radius.", 0.0, 10000.0, "m"));
 		Register("MotorComponent", "_speed", Desc("Constant movement speed along _direction.", "m/s"));

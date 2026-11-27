@@ -158,6 +158,8 @@
 		float4 dirCone;
 		float4 params;
 		float4 shape;
+		float4 ext0;           // points: room box min xyz, w shadow cross-fade (ClusteredLighting.hpp)
+		float4 ext1;           // points: room box max xyz, w unshadowed visibility scale
 	};
 	StructuredBuffer<ClFwdLight> g_clfLights : register(t27);
 	StructuredBuffer<uint>       g_clfCounts : register(t28);
@@ -235,8 +237,21 @@
 							cl.posRadius.xyz, cl.dirCone, cl.shape, cl.params.x);
 						continue;
 					}
+					// Points: room box (params.x) and unshadowed scale (ext1.w).
+					// Forward has no point atlas sampling: an atlas point shades
+					// unshadowed here (glass), fading its box in as ext0.w drops.
+					float clVis = 1.0f;
+					if (cl.params.y < 0.5f)
+					{
+						float unsh = cl.ext1.w;
+						if (cl.params.x > 0.5f && (any(worldPos < cl.ext0.xyz) || any(worldPos > cl.ext1.xyz)))
+							unsh = 0.0f;
+						clVis = (cl.params.w > 0.5f) ? lerp(unsh, 1.0f, saturate(cl.ext0.w)) : unsh;
+						if (clVis <= 0.0f)
+							continue;
+					}
 					const float3 clL = clToLight / clDist;
-					float coneAtten = 1.0f;
+					float coneAtten = clVis;
 					if (abs(cl.params.y - 1.0f) < 0.5f)
 					{
 						const float cosOuter = cl.dirCone.w;
@@ -482,9 +497,11 @@
 		// only the drip perturbation below stays per-material.
 		// Shelter occlusion + melt-fed wetness - matches DefaultPixel.
 		const float shelter = SampleRainShelterN(input.positionWS.xyz, normalize(input.normal), g_textureSampler);
+		// Wide one-sided wet fade - lockstep with DefaultPixel.
+		const float wetShelter = SampleRainWetShelterN(input.positionWS.xyz, normalize(input.normal), g_textureSampler);
 		const float shelteredWetness = saturate(
 			(g_weatherSurface.wetness
-				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);
+				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * wetShelter);
 
 		float wetFilm = 0.0f;
 		// Sea contact (underwater S4) - lockstep with DefaultPixel; see

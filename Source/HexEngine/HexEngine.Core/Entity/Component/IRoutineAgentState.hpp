@@ -35,5 +35,11 @@ namespace HexEngine
 		// advance, and it idles. Releasing resumes the same trip.
 		virtual void SetConversationPaused(bool paused) = 0;
 		virtual bool IsConversationPaused() const = 0;
+		// Planning: will the agent's day put it at its post (its workplace, or home
+		// when it has none) at game hour `hour`? From the schedule (with the same
+		// per-agent jitter the routine system applies) or the workplace's shifts.
+		// Lets game code post a job for later in the day that the sender will be
+		// there for. Declared last so existing vtable slots don't move.
+		virtual bool IsScheduledAtPost(float hour) const { (void)hour; return true; }
 	};
 }

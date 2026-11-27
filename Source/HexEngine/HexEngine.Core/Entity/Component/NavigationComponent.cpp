@@ -1,6 +1,7 @@
 
 #include "NavigationComponent.hpp"
 #include "Transform.hpp"
+#include "../../Input/HVar.hpp"
 #include "Camera.hpp"
 #include "../Entity.hpp"
 #include "../../Math/FloatMath.hpp"
@@ -63,6 +64,8 @@ namespace HexEngine
 			g_pEnv->_inputSystem->RemoveInputListener(this);
 	}
 
+	HVar nav_logPartialPaths("nav_logPartialPaths", "Log every FindPath whose target is not reachable (agent name, from, to)", false, false, true);
+
 	void NavigationComponent::FindPath(NavMeshId id, const math::Vector3& from, const math::Vector3& to, float stepSize)
 	{
 		_result.path.clear();
@@ -80,7 +83,12 @@ namespace HexEngine
 
 		_targetPosition = to;
 
+		_result.partial = false;
 		g_pEnv->_navMeshProvider->FindPath(path, _result);
+
+		if (_result.partial && nav_logPartialPaths._val.b && GetEntity() != nullptr)
+			LOG_INFO("nav partial: '%s' (%.1f %.1f %.1f) -> (%.1f %.1f %.1f)", GetEntity()->GetName().c_str(),
+				from.x, from.y, from.z, to.x, to.y, to.z);
 	}
 
 	void NavigationComponent::ClearPath()

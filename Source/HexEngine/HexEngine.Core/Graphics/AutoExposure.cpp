@@ -133,6 +133,21 @@ namespace HexEngine
 			"r_autoExposureEvCompSlope",
 			"EV of darkening applied per metered EV below the break (0 = off, 1 = hold, >1 = dimmer than metered)",
 			2.0f, 0.0f, 3.0f);
+		// Daytime overrides for the curve above, blended in by the same
+		// nightWeight the legacy mode uses (sun elevation). Reason: a daylit
+		// INTERIOR and a lamp-lit NIGHT street meter the same EV (~12-13.5),
+		// so one break can't both pull interiors below the ~15 day street and
+		// leave the night street alone. Day break sits just under the day
+		// street; the gentle day slope darkens interiors ~0.5-1 EV. Negative
+		// = inherit the base cvar (keeps scenes that never set these as-is).
+		HVar r_autoExposureEvCompBreakDay(
+			"r_autoExposureEvCompBreakDay",
+			"Daytime EV100 break for the auto EC curve (<0 = use r_autoExposureEvCompBreak); blends to the base break by night weight",
+			-1.0f, -10.0f, 30.0f);
+		HVar r_autoExposureEvCompSlopeDay(
+			"r_autoExposureEvCompSlopeDay",
+			"Daytime slope for the auto EC curve (<0 = use r_autoExposureEvCompSlope); blends to the base slope by night weight",
+			-1.0f, -1.0f, 3.0f);
 		HVar r_autoExposureEvCompMax(
 			"r_autoExposureEvCompMax",
 			"Cap on the auto EC curve's total darkening, in EV",
@@ -451,8 +466,14 @@ namespace HexEngine
 					const float evClamped = std::clamp(ev100, evMin, evMax);
 					// Auto EC curve (see the cvar comments): negative below the
 					// break, on top of the user's manual compensation.
-					const float evDeficit = std::max(r_autoExposureEvCompBreak._val.f32 - evClamped, 0.0f);
-					const float autoComp = -std::min(evDeficit * r_autoExposureEvCompSlope._val.f32,
+					const float baseBreak = r_autoExposureEvCompBreak._val.f32;
+					const float baseSlope = r_autoExposureEvCompSlope._val.f32;
+					const float dayBreak = (r_autoExposureEvCompBreakDay._val.f32 < 0.0f) ? baseBreak : r_autoExposureEvCompBreakDay._val.f32;
+					const float daySlope = (r_autoExposureEvCompSlopeDay._val.f32 < 0.0f) ? baseSlope : r_autoExposureEvCompSlopeDay._val.f32;
+					const float compBreak = dayBreak + (baseBreak - dayBreak) * nightWeight;
+					const float compSlope = daySlope + (baseSlope - daySlope) * nightWeight;
+					const float evDeficit = std::max(compBreak - evClamped, 0.0f);
+					const float autoComp = -std::min(evDeficit * compSlope,
 						r_autoExposureEvCompMax._val.f32);
 					const float evFinal = evClamped - (r_exposureCompensation._val.f32 + autoComp);
 					debugAutoComp = autoComp;

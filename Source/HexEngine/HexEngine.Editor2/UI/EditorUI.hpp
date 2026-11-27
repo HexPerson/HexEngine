@@ -143,6 +143,9 @@ public:
 
 		const std::vector<Gadget*> GetAllGadgets() const { return _gadgets; }
 
+		// Scene > Generate HLOD (also the hlod_generate console command).
+		void OnGenerateHLOD();
+
 	private:		
 		void CreateMenuBar();
 		void CreateDocks(uint32_t width, uint32_t height);
@@ -172,7 +175,6 @@ public:
 		void OnAddBillboard();
 		void OnAddDecal();
 		void OnAddPlayerStart();
-		void OnGenerateHLOD();
 		void OnProjectManagerCompleted(const fs::path& projectFolder, const std::string& projectName, bool didLoadExisting, const std::wstring& namespaceName, HexEngine::LoadingDialog* loadingDlg);
 		void OnAddPrimitive(PrimitiveType type);
 
@@ -240,6 +242,11 @@ public:
 		// touches the entity list / inspector / dialogs, so it runs on the main
 		// thread in Update.
 		std::atomic_bool _prefabLoadCheckPending = false;
+		// True while OnProjectManagerCompleted loads the project's scenes on its worker
+		// thread. Scene open/create from the main thread (bridge, menus) must wait: a
+		// scene isn't in _sceneFiles until its load finishes, so opening it meanwhile
+		// loaded a SECOND copy, concurrently, and appended it to the project file again.
+		std::atomic_bool _projectLoading = false;
 		// Component-state snapshots between Begin/EndComponentEdit (bridge).
 		std::unordered_map<HexEngine::Entity*, Detail::EntityComponentStateSnapshot> _programmaticComponentEdits;
 

@@ -26,6 +26,13 @@ public:
 
 	virtual bool IsCharacterController() const override { return true; }
 
+	// Releases the PxController (which owns its kinematic actor). The base
+	// Destroy released only the actor, leaving the controller registered with a
+	// dangling actor - the controller manager then crashed releasing it on exit.
+	virtual void Destroy() override;
+
+	virtual HexEngine::IRigidBody* GetGroundBody() const override;
+
 private:
 	physx::PxController* _controller;
 };

@@ -485,7 +485,7 @@ namespace
 				{"allowInEditMode", Bool("Also send while NOT playing (default false): the editor's own shortcuts react to it.")},
 			}, { "events" }) });
 		v.push_back({ "capture_frame", w("Save the main camera's rendered frame to an image file. Waits waitFrames (default 2) editor frames first so recent edits are visible. Not batchable."),
-			Obj(json{ {"path", Str("Absolute output path (.png / .jpg / .dds).")}, {"waitFrames", Int("Frames to wait before capturing (default 2).")} }, { "path" }) });
+			Obj(json{ {"path", Str("Absolute output path (.png / .jpg / .dds).")}, {"waitFrames", Int("Frames to wait before capturing (default 2).")}, {"includeUi", Bool("true = the final presented frame incl. the game HUD/menus and editor chrome (back buffer, PNG); default false = main camera's 3D render only.")} }, { "path" }) });
 
 		// --- batch ---
 		v.push_back({ "batch", "FAST PATH: run many bridge methods (any of the above not marked \"Not batchable\", names WITHOUT the hex_ prefix) in ONE editor frame and ONE undo step. "

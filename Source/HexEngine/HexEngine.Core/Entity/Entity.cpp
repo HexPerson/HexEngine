@@ -1,5 +1,6 @@
 
 #include "Entity.hpp"
+#include <functional>
 #include "Component\Transform.hpp"
 #include "../HexEngine.hpp"
 #include "../Scene/Scene.hpp"
@@ -71,12 +72,18 @@ namespace HexEngine
 
 	void Entity::SetFlag(EntityFlags flags)
 	{
+		const bool shadowChange = (flags & EntityFlags::DoNotCastShadows) != EntityFlags::None && !HasFlag(EntityFlags::DoNotCastShadows);
 		_flags |= flags;
+		if (shadowChange)
+			OnCastShadowsChanged();
 	}
 
 	void Entity::ClearFlags(EntityFlags flags)
 	{
+		const bool shadowChange = (flags & EntityFlags::DoNotCastShadows) != EntityFlags::None && HasFlag(EntityFlags::DoNotCastShadows);
 		_flags &= ~flags;
+		if (shadowChange)
+			OnCastShadowsChanged();
 	}
 
 	EntityFlags Entity::GetFlags() const
@@ -334,7 +341,8 @@ namespace HexEngine
 
 		ComponentSignature previousSignature = _componentsSignature;
 
-		_componentsSignature = previousSignature & ~((ComponentSignature)1 << componentId);
+		_componentsSignature = previousSignature;
+		_componentsSignature.Clear(componentId);
 
 		auto* componentToDestroy = it->component;
 		_components.erase(it);
@@ -357,7 +365,8 @@ namespace HexEngine
 
 		ComponentSignature previousSignature = _componentsSignature;
 
-		_componentsSignature = previousSignature & ~((ComponentSignature)1 << id);
+		_componentsSignature = previousSignature;
+		_componentsSignature.Clear(id);
 
 		for (auto it = _components.begin(); it != _components.end(); it++)
 		{
@@ -401,19 +410,12 @@ namespace HexEngine
 
 		ComponentId newCompId = component->GetComponentId();
 
-		_componentsSignature |= ((ComponentSignature)1 << newCompId);
-
-		// strip off all the other components signatures first otherwise we will get overlap
-		/*for (auto& comp : _components)
-		{
-			if (comp.component != component)
-				_componentsSignature &= ~(1 << comp.id);
-		}*/
+		_componentsSignature.Set(newCompId);
 
 		// Does this component inherit from UpdateComponent? if so it should have its signature adjusted so it can be updated
 		if (component->CastAs<UpdateComponent>() != nullptr)
 		{
-			_componentsSignature |= ((ComponentSignature)1 << UpdateComponent::_GetComponentId());
+			_componentsSignature.Set(UpdateComponent::_GetComponentId());
 		}
 
 		_scene->OnEntityAddComponent(this, previousSignature, component);
@@ -449,7 +451,7 @@ namespace HexEngine
 
 		for (auto&& component : _components)
 		{
-			if ((signature & ((ComponentSignature)1 << component.id)) != 0)
+			if (signature.Has(component.id))
 				result.push_back(component.component);
 		}
 
@@ -1114,7 +1116,26 @@ namespace HexEngine
 
 	void Entity::SetCastsShadows(bool castsShadows)
 	{
-		_canCastShadows = castsShadows;
+		if (castsShadows)
+			ClearFlags(EntityFlags::DoNotCastShadows);
+		else
+			SetFlag(EntityFlags::DoNotCastShadows);
+	}
+
+	void Entity::OnCastShadowsChanged()
+	{
+		// The shadow PVSes cache their casters: re-flush this entity and everything
+		// under it (the flag is inherited) so the change shows without a rebuild.
+		if (_scene == nullptr || !HasFlag(EntityFlags::HasBeenCreated))
+			return;
+		std::function<void(Entity*)> visit = [&](Entity* e)
+		{
+			_scene->FlushPVS(e);
+			for (auto* child : e->GetChildren())
+				if (child != nullptr)
+					visit(child);
+		};
+		visit(this);
 	}
 
 	bool Entity::GetCastsShadows()
@@ -1127,12 +1148,12 @@ namespace HexEngine
 		// change, marking a parent non-casting cascades to anything beneath it in the
 		// hierarchy, which is the natural semantic for opting an entire prefab/group out
 		// of shadow casting.
-		if (!_canCastShadows)
+		if (HasFlag(EntityFlags::DoNotCastShadows))
 			return false;
 
 		for (Entity* parent = _parent; parent != nullptr; parent = parent->_parent)
 		{
-			if (!parent->_canCastShadows)
+			if (parent->HasFlag(EntityFlags::DoNotCastShadows))
 				return false;
 		}
 
@@ -1336,7 +1357,10 @@ namespace HexEngine
 				return;
 			}
 
-			if (mask != 0 && (((ComponentSignature)1 << component->GetComponentId()) & mask) != mask)
+			// `mask` (a 32-bit Deserialize filter, e.g. "the Transform only") selects one
+			// component type by its bit; types past bit 31 are never selected by it.
+			const ComponentId maskedId = component->GetComponentId();
+			if (mask != 0 && (maskedId >= 32 || ((1u << maskedId) & mask) != mask))
 				continue;
 
 			component->Deserialize(comp.value(), file, mask);

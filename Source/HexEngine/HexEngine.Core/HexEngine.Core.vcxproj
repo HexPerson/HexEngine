@@ -440,11 +440,14 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\Camera.hpp" />
     <ClInclude Include="Entity\Component\Collider.hpp" />
     <ClInclude Include="Entity\Component\ComponentTypes.hpp" />
+    <ClInclude Include="Entity\Component\ComponentSignature.hpp" />
     <ClInclude Include="Graphics\BlurEffect.hpp" />
     <ClInclude Include="Graphics\MaterialLoader.hpp" />
     <ClInclude Include="HexEngine.hpp" />
     <ClInclude Include="Entity\Component\InteractionComponent.hpp" />
     <ClInclude Include="Entity\Component\DoorComponent.hpp" />
+    <ClInclude Include="Entity\Component\FootstepComponent.hpp" />
+    <ClInclude Include="Entity\Component\RagdollComponent.hpp" />
     <ClInclude Include="Entity\Component\SoundEffectComponent.hpp" />
     <ClInclude Include="Entity\Component\SpotLight.hpp" />
     <ClInclude Include="Entity\Component\AreaLight.hpp" />
@@ -462,10 +465,12 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\SnowFootprintsComponent.hpp" />
     <ClInclude Include="Entity\Component\ReflectionProbeComponent.hpp" />
     <ClInclude Include="Entity\Component\NavMeshBlockingVolume.hpp" />
+    <ClInclude Include="Entity\Component\TerrainCutout.hpp" />
     <ClInclude Include="Entity\Component\NavMeshLinkComponent.hpp" />
     <ClInclude Include="Entity\Component\PlayerStartComponent.hpp" />
     <ClInclude Include="Entity\Component\DrivableComponent.hpp" />
     <ClInclude Include="Entity\Component\IRoutineAgentState.hpp" />
+    <ClInclude Include="Entity\Component\IDistrictGate.hpp" />
     <ClInclude Include="Entity\Component\ParticleSystemComponent.hpp" />
     <ClInclude Include="Entity\Component\Transform.hpp" />
     <ClInclude Include="Entity\Component\UpdateComponent.hpp" />
@@ -483,6 +488,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Environment\IGameExtension.hpp" />
     <ClInclude Include="Environment\Profiler.hpp" />
     <ClInclude Include="FileSystem\SceneSaveFile.hpp" />
+    <ClInclude Include="FileSystem\GameStateSave.hpp" />
     <ClInclude Include="Graphics\GBuffer.hpp" />
     <ClInclude Include="Graphics\IFontResource.hpp" />
     <ClInclude Include="Graphics\IFontImporter.hpp" />
@@ -501,6 +507,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Input\InputSystem.hpp" />
     <ClInclude Include="Environment\LogFile.hpp" />
     <ClInclude Include="Environment\TimeManager.hpp" />
+    <ClInclude Include="Environment\TransitPlayerState.hpp" />
     <ClInclude Include="FileSystem\FileSystem.hpp" />
     <ClInclude Include="FileSystem\BinaryReader.hpp" />
     <ClInclude Include="FileSystem\PackageVerification.hpp" />
@@ -535,6 +542,9 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Reflection\IObject.hpp" />
     <ClInclude Include="Required.hpp" />
     <ClInclude Include="Scene\DiffuseGI.hpp" />
+    <ClInclude Include="Scene\DDGI.hpp" />
+    <ClInclude Include="Scene\RtScene.hpp" />
+    <ClInclude Include="Graphics\GpuProfiler.hpp" />
     <ClInclude Include="Scene\GpuVisibilityCulling.hpp" />
     <ClInclude Include="Scene\IEntityListener.hpp" />
     <ClInclude Include="Scene\MeshInstance.hpp" />
@@ -591,6 +601,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Graphics\OffscreenRenderHooks.cpp" />
     <ClCompile Include="Scene\AnimationRetarget.cpp" />
     <ClCompile Include="Scene\AnimationUtils.cpp" />
+    <ClCompile Include="Scene\AnimationEvents.cpp" />
     <ClCompile Include="Graphics\ShadowAtlas.cpp" />
     <ClCompile Include="Graphics\MeshLoader.cpp" />
     <ClCompile Include="Graphics\TextureLoader.cpp" />
@@ -667,6 +678,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\Collider.cpp" />
     <ClCompile Include="Entity\Component\InteractionComponent.cpp" />
     <ClCompile Include="Entity\Component\DoorComponent.cpp" />
+    <ClCompile Include="Entity\Component\FootstepComponent.cpp" />
+    <ClCompile Include="Entity\Component\RagdollComponent.cpp" />
     <ClCompile Include="Entity\Component\SoundEffectComponent.cpp" />
     <ClCompile Include="Entity\Component\Light.cpp" />
     <ClCompile Include="Entity\Component\SpotLight.cpp" />
@@ -684,6 +697,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\SnowFootprintsComponent.cpp" />
     <ClCompile Include="Entity\Component\ReflectionProbeComponent.cpp" />
     <ClCompile Include="Entity\Component\NavMeshBlockingVolume.cpp" />
+    <ClCompile Include="Entity\Component\TerrainCutout.cpp" />
     <ClCompile Include="Entity\Component\NavMeshLinkComponent.cpp" />
     <ClCompile Include="Entity\Component\PlayerStartComponent.cpp" />
     <ClCompile Include="Entity\Component\DrivableComponent.cpp" />
@@ -697,6 +711,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Environment\IEnvironment.cpp" />
     <ClCompile Include="Environment\Profiler.cpp" />
     <ClCompile Include="FileSystem\SceneSaveFile.cpp" />
+    <ClCompile Include="FileSystem\GameStateSave.cpp" />
     <ClCompile Include="Graphics\BlurEffect.cpp" />
     <ClCompile Include="Graphics\GBuffer.cpp" />
     <ClCompile Include="Graphics\Material.cpp" />
@@ -713,6 +728,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Input\InputSystem.cpp" />
     <ClCompile Include="Environment\LogFile.cpp" />
     <ClCompile Include="Environment\TimeManager.cpp" />
+    <ClCompile Include="Environment\TransitPlayerState.cpp" />
     <ClCompile Include="FileSystem\FileSystem.cpp" />
     <ClCompile Include="FileSystem\DiskFile.cpp" />
     <ClCompile Include="FileSystem\MemoryFile.cpp" />
@@ -727,6 +743,9 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Math\FloatMath.cpp" />
     <ClCompile Include="Graphics\IInputLayout.cpp" />
     <ClCompile Include="Scene\DiffuseGI.cpp" />
+    <ClCompile Include="Scene\DDGI.cpp" />
+    <ClCompile Include="Scene\RtScene.cpp" />
+    <ClCompile Include="Graphics\GpuProfiler.cpp" />
     <ClCompile Include="Graphics\DiffuseGIAOProvider.cpp" />
     <ClCompile Include="Graphics\AtmosphereLUTs.cpp" />
     <ClCompile Include="Graphics\VolumetricScattering.cpp" />
@@ -740,7 +759,9 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
       <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
     </ClCompile>
     <ClCompile Include="Scene\SceneManager.cpp" />
-    <ClCompile Include="Scene\SceneRenderer.cpp" />
+    <ClCompile Include="Scene\SceneRenderer.cpp">
+      <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="Scene\SnowFootprintSystem.cpp" />
     <ClCompile Include="Terrain\HeightMapGenerator.cpp" />
     <ClCompile Include="Terrain\TerrainGenerator.cpp" />

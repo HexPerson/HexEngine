@@ -221,9 +221,12 @@
 		// Melting snow (slice 4) feeds ground wetness - slush darkens and
 		// glosses the surface it sits on.
 		const float shelter = SampleRainShelterN(input.positionWS.xyz, normalize(input.normal), g_textureSampler);
+		// Wetness uses the wide one-sided fade (soft wet/dry edge at cover);
+		// snow and dust below keep the tighter centred `shelter`.
+		const float wetShelter = SampleRainWetShelterN(input.positionWS.xyz, normalize(input.normal), g_textureSampler);
 		const float shelteredWetness = saturate(
 			(g_weatherSurface.wetness
-				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);
+				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * wetShelter);
 
 		float wetFilm = 0.0f;
 #ifndef SNOW_SHELL_NO_CLIP

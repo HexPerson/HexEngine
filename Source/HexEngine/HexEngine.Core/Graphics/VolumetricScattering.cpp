@@ -2,6 +2,8 @@
 #include "../HexEngine.hpp"
 #include "../Scene/SceneRenderer.hpp"
 #include "../Scene/DiffuseGI.hpp"
+#include "../Scene/DDGI.hpp"
+#include "GpuProfiler.hpp"
 #include "IGraphicsDevice.hpp"
 #include "IConstantBuffer.hpp"
 #include "IShader.hpp"
@@ -828,7 +830,9 @@ namespace HexEngine
 						_clAtlasSrv, _clAtlasTileVpSrv };
 					context->CSSetShaderResources(12, 5, clSrvs);
 					// t22: rect light images - the fog uses each one's average colour.
-					context->CSSetShaderResources(22, 1, &_clAreaTexturesSrv);
+					// t23: point-light shadow atlas (tile matrices at t16[16+]).
+					ID3D11ShaderResourceView* t22t23[2] = { _clAreaTexturesSrv, _clPointAtlasSrv };
+					context->CSSetShaderResources(22, 2, t22t23);
 				}
 
 				// t17 = GI blurred voxel AO: the density CS occludes the fog
@@ -844,7 +848,10 @@ namespace HexEngine
 						{
 							if (auto* aoTex = gi->GetBlurredAOTexture(); aoTex != nullptr)
 								giSrvs[0] = reinterpret_cast<ID3D11ShaderResourceView*>(aoTex->GetNativeShaderView());
-							for (uint32_t c = 0u; c < 3u; ++c)
+							// The voxel field is not updated while DDGI owns GI -
+							// don't glow from a frozen field.
+							const bool voxelLive = g_pEnv->_sceneRenderer->GetDDGI() == nullptr || !g_pEnv->_sceneRenderer->GetDDGI()->IsActive();
+							for (uint32_t c = 0u; c < 3u && voxelLive; ++c)
 								giSrvs[1u + c] = gi->GetClipRadianceSrv(c);
 						}
 					}
@@ -865,14 +872,24 @@ namespace HexEngine
 					context->CSSetConstantBuffers(4, 1, &cloudCb);
 				}
 
-				context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
+				// DDGI probes (t56-64, b8) for the indoor fog term; nulls b8 when
+				// DDGI is inactive so the shader skips it.
+				DDGI* ddgi = g_pEnv->_sceneRenderer != nullptr ? g_pEnv->_sceneRenderer->GetDDGI() : nullptr;
+				if (ddgi != nullptr)
+					ddgi->BindForCS();
+				{
+					GPU_SCOPE("Froxel.Scatter");
+					context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
+				}
+				if (ddgi != nullptr)
+					ddgi->UnbindCS();
 
 				if (clusteredFog)
 				{
 					ID3D11ShaderResourceView* clNulls[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
 					context->CSSetShaderResources(12, 5, clNulls);
-					ID3D11ShaderResourceView* nullArea = nullptr;
-					context->CSSetShaderResources(22, 1, &nullArea);
+					ID3D11ShaderResourceView* nullAreaPoint[2] = { nullptr, nullptr };
+					context->CSSetShaderResources(22, 2, nullAreaPoint);
 				}
 				{
 					// t17 AO + t18..t20 radiance clips. The radiance volumes are

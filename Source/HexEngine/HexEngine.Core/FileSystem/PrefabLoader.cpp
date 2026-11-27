@@ -499,6 +499,53 @@ namespace
 		return true;
 	}
 
+	bool LoadPrefabAssetToSceneFromMemory(
+		const std::vector<uint8_t>& data,
+		const fs::path& prefabAssetPath,
+		const std::shared_ptr<HexEngine::Scene>& targetScene,
+		std::unordered_set<std::wstring>& recursionGuard);
+
+	// Finds a prefab inside a mounted asset package (GameData.pkg in a shipped
+	// build). TryResolvePrefabPathToAbsolute only finds files ON DISK, so a
+	// variant whose base lives in a package - every variant in a packaged game,
+	// since the base path is "<variant's folder>/<basePrefab>" - failed with
+	// "Failed to resolve prefab path" (a critical error) the moment one spawned.
+	bool TryReadPrefabFromPackages(const fs::path& prefabAssetPath, std::vector<uint8_t>& outData, fs::path& outPackagePath)
+	{
+		outData.clear();
+		outPackagePath.clear();
+		if (prefabAssetPath.empty() || HexEngine::g_pEnv == nullptr)
+			return false;
+
+		const std::wstring pathStr = prefabAssetPath.wstring();
+		const auto firstSep = pathStr.find_first_of(L"\\/");
+		const auto dot = pathStr.find(L'.');
+		const bool hasFsPrefix = dot != std::wstring::npos && (firstSep == std::wstring::npos || dot < firstSep);
+		const std::wstring fsPrefix = hasFsPrefix ? pathStr.substr(0, dot) : std::wstring();
+		const std::wstring localPath = hasFsPrefix ? pathStr.substr(dot + 1) : pathStr;
+
+		for (auto* fileSystem : HexEngine::g_pEnv->GetResourceSystem().GetFileSystems())
+		{
+			if (fileSystem == nullptr || !fileSystem->IsAsset())
+				continue;
+			if (hasFsPrefix && fileSystem->GetName() != fsPrefix)
+				continue;
+
+			// Package keys are forward-slashed (GetLocalAbsoluteDataPath normalises).
+			const fs::path packagePath = fileSystem->GetLocalAbsoluteDataPath(fs::path(localPath).lexically_normal());
+			if (!fileSystem->DoesAbsolutePathExist(packagePath))
+				continue;
+
+			fileSystem->GetFileData(packagePath, outData);
+			if (outData.empty())
+				continue;
+
+			outPackagePath = packagePath;
+			return true;
+		}
+		return false;
+	}
+
 	bool LoadPrefabAssetToSceneRecursive(
 		const fs::path& prefabAssetPath,
 		const std::shared_ptr<HexEngine::Scene>& targetScene,
@@ -510,6 +557,11 @@ namespace
 		fs::path resolvedPrefabPath;
 		if (!TryResolvePrefabPathToAbsolute(prefabAssetPath, resolvedPrefabPath))
 		{
+			std::vector<uint8_t> packagedData;
+			fs::path packagePath;
+			if (TryReadPrefabFromPackages(prefabAssetPath, packagedData, packagePath))
+				return LoadPrefabAssetToSceneFromMemory(packagedData, packagePath, targetScene, recursionGuard);
+
 			LOG_CRIT("Failed to resolve prefab path '%s' to an absolute path.", prefabAssetPath.string().c_str());
 			return false;
 		}

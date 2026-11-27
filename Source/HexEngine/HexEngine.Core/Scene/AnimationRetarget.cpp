@@ -315,6 +315,7 @@ namespace HexEngine
 			out.name = srcAnim.name;
 			out.ticksPerSecond = srcAnim.ticksPerSecond;
 			out.duration = srcAnim.duration;
+			out.events = srcAnim.events;   // footstep etc. events carry over (same timeline)
 			out._globalInverseTransform = math::Matrix::Identity;	// evaluator falls back to the target's
 			out.channels.reserve(bones.size());
 			std::unordered_map<std::string, size_t> channelIndex;

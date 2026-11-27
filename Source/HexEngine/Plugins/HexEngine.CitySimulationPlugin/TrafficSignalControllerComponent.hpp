@@ -86,4 +86,24 @@ private:
 	std::vector<CrossingEnds> _crossings;
 	bool _crossingsResolved = false;
 	float _clock = 0.0f;
+
+	// Demand-actuated stage machine (replaces the fixed clock: every junction
+	// ran a 65 s cycle of four separate greens plus a walk stage whether anyone
+	// was waiting or not, so cars sat ~1 min per junction and pedestrians missed
+	// the 8 s walk). Stage index 0..arms-1 = that arm's green, == arms.size() =
+	// the pedestrian stage. Demand is reported by the callers themselves:
+	// ComputeVehicleSpeedCap (a car approaching an arm) and
+	// IsPedestrianStepAllowed (someone held at the kerb).
+	enum class Phase : int32_t { Green, Amber, AllRed, Walk, Clear, Idle };
+	void StartNextStage();
+	bool HasArmDemand(size_t armIndex) const;
+	bool HasPedestrianDemand() const;
+	size_t _stageIndex = 0;
+	Phase _phase = Phase::Green;
+	float _phaseTimer = 0.0f;
+	std::vector<float> _armDemandTime;	// per arm: _clock when a vehicle last approached
+	float _pedDemandTime = -1e9f;		// _clock when a pedestrian was last held
+	// cs_signalLog diagnostics: when the current wait at each stage began (-1 = none).
+	std::vector<float> _armWaitSince;
+	float _pedWaitSince = -1.0f;
 };

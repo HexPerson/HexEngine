@@ -1,10 +1,21 @@
 #include "TrafficManagerComponent.hpp"
+#include <cfloat>
 #include "TrafficLaneComponent.hpp"
 #include "TrafficSpawnerComponent.hpp"
 #include "TrafficVehicleComponent.hpp"
 #include "CityAssetPins.hpp"
 #include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
 #include <HexEngine.Core/Entity/Component/DayNightCycleComponent.hpp>
+#include <HexEngine.Core/Entity/Component/DrivableComponent.hpp>
+#include <HexEngine.Core/Environment/TransitPlayerState.hpp>
+#include <unordered_map>
+#include <HexEngine.Core/Entity/Component/SpotLight.hpp>
+#include <HexEngine.Core/Entity/Component/ParticleSystemComponent.hpp>
+#include <HexEngine.Core/Scene/Scene.hpp>
+#include <HexEngine.Core/Environment/TimeManager.hpp>
+#include <HexEngine.Core/Entity/Component/Transform.hpp>
+#include <HexEngine.Core/Input/HVar.hpp>
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -157,7 +168,15 @@ int32_t TrafficManagerComponent::SpawnVehicleFromSpawner(TrafficSpawnerComponent
 	for (auto* spawned : spawnedEntities)
 	{
 		if (spawned != nullptr)
+		{
 			spawned->SetFlag(HexEngine::EntityFlags::DoNotSave);
+			// Transient movers are not GI geometry (spawning one used to rebuild every
+			// GI clipmap's triangle list); flagged in the spawn frame, before the
+			// scene resolves the add (Scene::ProcessPendingGiMeshes).
+			for (auto* smc : spawned->GetComponents<HexEngine::StaticMeshComponent>())
+				if (smc != nullptr)
+					smc->SetExcludeFromVoxelGI(true);
+		}
 	}
 
 	std::vector<HexEngine::Entity*> rootEntities;
@@ -172,14 +191,14 @@ int32_t TrafficManagerComponent::SpawnVehicleFromSpawner(TrafficSpawnerComponent
 
 		if (auto mesh = spawned->GetComponent<HexEngine::StaticMeshComponent>(); mesh != nullptr)
 		{
-			mesh->SetExcludeFromGI(true);
+			mesh->SetExcludeFromVoxelGI(true);
 		}
 
 		for (auto& child : spawned->GetChildren())
 		{
 			if (auto mesh = child->GetComponent<HexEngine::StaticMeshComponent>(); mesh != nullptr)
 			{
-				mesh->SetExcludeFromGI(true);
+				mesh->SetExcludeFromVoxelGI(true);
 			}
 		}
 	}
@@ -398,4 +417,359 @@ void TrafficManagerComponent::Update(float frameTime)
 
 		UpdateSpawner(spawner, camera, frameTime, activeGlobalCount);
 	}
+
+	UpdateNearMisses(scene);
+	UpdateHeadlights(scene, camera);
+}
+
+HexEngine::HVar cs_trafficHeadlights("cs_trafficHeadlights", "Night headlights for the nearest traffic vehicles (two lamps each; 0 = off)", 12, 0, 32);
+
+const TrafficManagerComponent::LampPair& TrafficManagerComponent::LampsFor(HexEngine::Entity* vehicle)
+{
+	auto it = _lampCache.find(vehicle->GetName());
+	if (it != _lampCache.end())
+		return it->second;
+	if (_lampCache.size() > 512)
+		_lampCache.clear();
+
+	// The body's extent in the vehicle's own space: every mesh part's world box
+	// corners taken back through the root's inverse (handles nested parts, part
+	// scales and the mirrored bus alike). Vehicles drive along local +Z.
+	const math::Matrix toLocal = vehicle->GetWorldTM().Invert();
+	math::Vector3 mn(FLT_MAX, FLT_MAX, FLT_MAX), mx(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+	bool any = false;
+	std::vector<HexEngine::Entity*> stack{ vehicle };
+	while (!stack.empty())
+	{
+		HexEngine::Entity* e = stack.back();
+		stack.pop_back();
+		if (e == nullptr)
+			continue;
+		if (e->GetComponent<HexEngine::StaticMeshComponent>() != nullptr)
+		{
+			const dx::BoundingBox& wb = e->GetWorldAABB();
+			math::Vector3 corners[8];
+			wb.GetCorners(corners);
+			for (const auto& c : corners)
+			{
+				const math::Vector3 l = math::Vector3::Transform(c, toLocal);
+				mn = math::Vector3::Min(mn, l);
+				mx = math::Vector3::Max(mx, l);
+			}
+			any = true;
+		}
+		for (auto* c : e->GetChildren())
+			stack.push_back(c);
+	}
+
+	LampPair lamps;
+	if (!any || !(mx.z - mn.z > 0.5f))
+	{
+		lamps.left = math::Vector3(-0.6f, 0.7f, 2.2f);   // typical car if it can't be measured
+		lamps.right = math::Vector3(0.6f, 0.7f, 2.2f);
+	}
+	else
+	{
+		const float height = mx.y - mn.y;
+		const float y = mn.y + std::clamp(height * 0.33f, 0.5f, 0.85f);
+		const float cx = (mn.x + mx.x) * 0.5f;
+		const float halfW = (mx.x - mn.x) * 0.5f;
+		const float z = mx.z - 0.05f;   // just ahead of the nose's front face
+		lamps.left = math::Vector3(cx - halfW * 0.7f, y, z);
+		lamps.right = math::Vector3(cx + halfW * 0.7f, y, z);
+	}
+	return _lampCache.emplace(vehicle->GetName(), lamps).first->second;
+}
+
+void TrafficManagerComponent::UpdateHeadlights(HexEngine::Scene* scene, HexEngine::Camera* camera)
+{
+	const int32_t wantCars = cs_trafficHeadlights._val.i32;
+	const int32_t want = wantCars * 2;   // a lamp per headlight
+	// Resolve the pool by name every frame; drop any that no longer exist (play
+	// stop / scene reload destroyed them) so they are recreated below.
+	std::vector<HexEngine::Entity*> pool;
+	pool.reserve(_headlights.size());
+	for (auto it = _headlights.begin(); it != _headlights.end();)
+	{
+		HexEngine::Entity* e = scene->GetEntityByName(*it);
+		if (e == nullptr || e->IsPendingDeletion())
+		{
+			it = _headlights.erase(it);
+			continue;
+		}
+		pool.push_back(e);
+		++it;
+	}
+	const auto lampOff = [](HexEngine::Entity* e)
+	{
+		if (auto* l = e->GetComponent<HexEngine::SpotLight>())
+			l->SetDiffuseColour(math::Color(1.0f, 0.93f, 0.8f, 0.0f));
+	};
+	if (want <= 0 || _nightFactor <= 0.01f)
+	{
+		for (auto* e : pool)
+			lampOff(e);
+		return;
+	}
+	while ((int32_t)pool.size() < want)
+	{
+		auto* e = scene->CreateEntity("TrafficHeadlight_" + std::to_string(pool.size()));
+		if (e == nullptr)
+			break;
+		e->SetFlag(HexEngine::EntityFlags::DoNotSave);
+		auto* l = e->AddComponent<HexEngine::SpotLight>();
+		if (l != nullptr)
+		{
+			l->SetDoesCastShadows(false);
+			l->SetInjectIntoGI(false);
+			l->SetIsVolumetric(false);
+			l->SetRadius(24.0f);
+			l->SetInnerConeAngle(24.0f);
+			l->SetOuterConeAngle(48.0f);
+			l->SetLightStength(70.0f);   // per lamp; two per vehicle
+		}
+		_headlights.push_back(e->GetName());
+		pool.push_back(e);
+	}
+
+	// Nearest moving vehicles to the camera.
+	const math::Vector3 camPos = camera->GetEntity()->GetWorldTM().Translation();
+	std::vector<TrafficVehicleComponent*> cars;
+	TrafficVehicleComponent::QueryNearbyVehicles(camPos, 90.0f, cars);
+	cars.erase(std::remove_if(cars.begin(), cars.end(), [](TrafficVehicleComponent* v)
+		{ return v == nullptr || v->IsParked() || v->GetEntity() == nullptr || v->GetEntity()->IsPendingDeletion(); }), cars.end());
+	std::sort(cars.begin(), cars.end(), [&](TrafficVehicleComponent* a, TrafficVehicleComponent* b)
+		{
+			return (a->GetEntity()->GetWorldTM().Translation() - camPos).LengthSquared() <
+				(b->GetEntity()->GetWorldTM().Translation() - camPos).LengthSquared();
+		});
+
+	for (size_t i = 0; i < pool.size(); ++i)
+	{
+		auto* e = pool[i];
+		auto* l = e->GetComponent<HexEngine::SpotLight>();
+		const size_t car = i / 2;
+		if (l == nullptr)
+			continue;
+		if (car >= cars.size())
+		{
+			lampOff(e);
+			continue;
+		}
+		HexEngine::Entity* vehicle = cars[car]->GetEntity();
+		const math::Matrix tm = vehicle->GetWorldTM();
+		const LampPair& lamps = LampsFor(vehicle);
+		// Cars drive along local +Z; a spot shines along its world -Z, so turn it
+		// round and dip it ~7 degrees at the road.
+		math::Vector3 fwd = math::Vector3::TransformNormal(math::Vector3::Backward, tm);
+		fwd.y = 0.0f;
+		if (fwd.LengthSquared() < 1e-6f)
+			continue;
+		fwd.Normalize();
+		const float yaw = std::atan2(fwd.x, fwd.z) + 3.14159265f;
+		const math::Vector3 pos = math::Vector3::Transform((i % 2) == 0 ? lamps.left : lamps.right, tm);
+		if (auto* tf = e->GetComponent<HexEngine::Transform>())
+		{
+			tf->SetPosition(pos);
+			tf->SetRotation(math::Quaternion::CreateFromYawPitchRoll(yaw, -0.12f, 0.0f));
+		}
+		l->SetDiffuseColour(math::Color(1.0f, 0.93f, 0.8f, std::clamp(_nightFactor, 0.0f, 1.0f)));
+	}
+}
+
+// Near-miss detection (Drop 05): track each car close to the player's ridden
+// vehicle; when it pulls away again after a pass that came within
+// kNearGap of its body without touching, at a real closing speed, count one.
+namespace
+{
+	// Drop 07: a headlight on whatever the player rides, at night. One pooled
+	// SpotLight found by name (DoNotSave), like the traffic headlights - and
+	// tuned the same (no shadows, GI or volumetrics).
+	void UpdatePlayerHeadlight(HexEngine::Scene* scene, bool riding, const math::Vector3& pos, const math::Vector3& fwd, float night, float noseAhead)
+	{
+		static const char* kName = "PlayerHeadlight";
+		HexEngine::Entity* e = scene->GetEntityByName(kName);
+		if (e != nullptr && e->IsPendingDeletion())
+			e = nullptr;
+		const bool on = riding && night > 0.01f && fwd.LengthSquared() > 1e-6f;
+		if (e == nullptr)
+		{
+			if (!on)
+				return;
+			e = scene->CreateEntity(kName);
+			if (e == nullptr)
+				return;
+			e->SetFlag(HexEngine::EntityFlags::DoNotSave);
+			if (auto* l = e->AddComponent<HexEngine::SpotLight>())
+			{
+				l->SetDoesCastShadows(false);
+				l->SetInjectIntoGI(false);
+				l->SetIsVolumetric(false);
+				// Tuned in play 2026-11-27: 90 lm / 44 deg blew out a white pool right in
+				// front of the rider (the lamp is a metre from the camera, the car lamps
+				// never are).
+				l->SetRadius(28.0f);
+				l->SetInnerConeAngle(14.0f);
+				l->SetOuterConeAngle(32.0f);
+				l->SetLightStength(28.0f);
+			}
+		}
+		auto* l = e->GetComponent<HexEngine::SpotLight>();
+		if (l == nullptr)
+			return;
+		if (!on)
+		{
+			l->SetDiffuseColour(math::Color(1.0f, 0.96f, 0.88f, 0.0f));
+			return;
+		}
+		// A spot shines along its local -Z: turn it to the travel direction and
+		// dip it ~8 degrees at the road (as the car lamps).
+		const float yaw = std::atan2(fwd.x, fwd.z) + 3.14159265f;
+		if (auto* tf = e->GetComponent<HexEngine::Transform>())
+		{
+			// At the vehicle's nose (half the wheelbase + a bit), not inside a van cab.
+			tf->SetPosition(pos + fwd * noseAhead + math::Vector3(0.0f, 0.95f, 0.0f));
+			tf->SetRotation(math::Quaternion::CreateFromYawPitchRoll(yaw, -0.09f, 0.0f));
+		}
+		l->SetDiffuseColour(math::Color(1.0f, 0.96f, 0.88f, std::clamp(night, 0.0f, 1.0f)));
+	}
+}
+
+namespace
+{
+	// Drop 08: spray kicked up behind the ridden vehicle on a wet road. One
+	// pooled ParticleSystemComponent (DoNotSave) parked at the rear wheel,
+	// fed particles by Trigger() in proportion to speed x wetness (the effect's
+	// own rate is 0).
+	void UpdatePlayerSpray(HexEngine::Scene* scene, bool riding, const math::Vector3& pos, const math::Vector3& fwd,
+		float speed, float frameTime)
+	{
+		static const char* kName = "PlayerWheelSpray";
+		static float s_carry = 0.0f;
+		const float wet = scene->GetWeatherSurfaceParams().wetness;
+		const float amount = riding ? std::clamp((wet - 0.25f) / 0.5f, 0.0f, 1.0f) * std::clamp((std::fabs(speed) - 3.0f) / 9.0f, 0.0f, 1.0f) : 0.0f;
+		HexEngine::Entity* e = scene->GetEntityByName(kName);
+		if (e != nullptr && e->IsPendingDeletion())
+			e = nullptr;
+		if (e == nullptr)
+		{
+			if (amount <= 0.0f)
+				return;
+			e = scene->CreateEntity(kName);
+			if (e == nullptr)
+				return;
+			e->SetFlag(HexEngine::EntityFlags::DoNotSave);
+			if (auto* ps = e->AddComponent<HexEngine::ParticleSystemComponent>())
+			{
+				ps->SetEffectPath("GameData.Particles/WheelSpray.hparticles");
+				ps->SetReceiveLighting(true);
+			}
+		}
+		auto* ps = e->GetComponent<HexEngine::ParticleSystemComponent>();
+		if (ps == nullptr || amount <= 0.0f || frameTime <= 0.0f)
+		{
+			s_carry = 0.0f;
+			return;
+		}
+		if (auto* tf = e->GetComponent<HexEngine::Transform>())
+			tf->SetPosition(pos - fwd * 0.75f + math::Vector3(0.0f, 0.12f, 0.0f));
+		// Up to ~140 puffs a second at full speed in a downpour.
+		s_carry += 140.0f * amount * std::min(frameTime, 0.1f);
+		const uint32_t n = (uint32_t)s_carry;
+		s_carry -= (float)n;
+		if (n > 0)
+			ps->Trigger(n);
+	}
+}
+
+void TrafficManagerComponent::UpdateNearMisses(HexEngine::Scene* scene)
+{
+	auto& st = HexEngine::GetTrafficPlayerState();
+	HexEngine::DrivableComponent* ride = nullptr;
+	{
+		std::vector<HexEngine::DrivableComponent*> drivables;
+		scene->GetComponents<HexEngine::DrivableComponent>(drivables);
+		for (auto* d : drivables)
+			if (d != nullptr && d->IsPlayerControlled() && d->GetEntity() != nullptr) { ride = d; break; }
+	}
+	if (ride == nullptr)
+	{
+		_nearTracks.clear();
+		st.nearbyVehicles = 0;
+		TrafficVehicleComponent::SetPlayerObstacle(false, math::Vector3::Zero, math::Vector3::Zero);
+		UpdatePlayerHeadlight(scene, false, math::Vector3::Zero, math::Vector3::Zero, _nightFactor, 0.0f);
+		UpdatePlayerSpray(scene, false, math::Vector3::Zero, math::Vector3::Zero, 0.0f, 0.0f);
+		return;
+	}
+
+	constexpr float kTrackRadius = 12.0f;   // start watching a car inside this (centre distance)
+	constexpr float kNearGap = 1.1f;        // body gap that counts as "near" (m)
+	constexpr float kMinClosing = 4.0f;     // closing speed below this is just traffic (m/s)
+	constexpr float kHalfWidth = 0.95f, kHalfLength = 2.3f;   // typical car body (local X / Z)
+
+	const math::Matrix bikeTM = ride->GetEntity()->GetWorldTM();
+	const math::Vector3 bikePos = bikeTM.Translation();
+	math::Vector3 bikeFwd = math::Vector3::TransformNormal(math::Vector3::Forward, bikeTM) * ride->GetTuning().forwardSign;
+	bikeFwd.y = 0.0f;
+	if (bikeFwd.LengthSquared() > 1e-6f) bikeFwd.Normalize();
+	const math::Vector3 bikeVel = bikeFwd * ride->GetForwardSpeed();
+	const bool crashed = ride->CrashRemountSecondsLeft() > 0.0f;
+	// Cars brake for the ridden vehicle in their lane (TrafficVehicleComponent).
+	TrafficVehicleComponent::SetPlayerObstacle(true, bikePos, bikeVel);
+	UpdatePlayerHeadlight(scene, true, bikePos, bikeFwd, _nightFactor, ride->GetTuning().wheelbase * 0.5f + 0.5f);
+	UpdatePlayerSpray(scene, !crashed, bikePos, bikeFwd, ride->GetForwardSpeed(),
+		HexEngine::g_pEnv->_timeManager != nullptr ? HexEngine::g_pEnv->_timeManager->GetGameFrameTime() : 0.0f);
+
+	std::vector<TrafficVehicleComponent*> nearby;
+	TrafficVehicleComponent::QueryNearbyVehicles(bikePos, kTrackRadius, nearby);
+	st.nearbyVehicles = (uint32_t)nearby.size();
+
+	std::unordered_map<TrafficVehicleComponent*, NearTrack> next;
+	for (auto* v : nearby)
+	{
+		if (v == nullptr || v->GetEntity() == nullptr || v->GetEntity()->IsPendingDeletion())
+			continue;
+		const math::Matrix tm = v->GetEntity()->GetWorldTM();
+		math::Vector3 ax = math::Vector3::TransformNormal(math::Vector3::Right, tm); ax.y = 0.0f; ax.Normalize();
+		math::Vector3 az = math::Vector3::TransformNormal(math::Vector3::Backward, tm); az.y = 0.0f; az.Normalize();
+		const math::Vector3 d = bikePos - tm.Translation();
+		const float lx = std::max(0.0f, std::fabs(d.Dot(ax)) - kHalfWidth);
+		const float lz = std::max(0.0f, std::fabs(d.Dot(az)) - kHalfLength);
+		const float gap = std::sqrt(lx * lx + lz * lz);
+		if (std::fabs(d.y) > 3.0f)
+			continue;   // a bridge / underpass, not a pass
+
+		// Car velocity along whichever local axis is its heading: its speed with the
+		// sign of the motion (cars drive along their length axis).
+		const math::Vector3 carVel = az * v->GetCurrentSpeed();
+		const float closing = std::min((bikeVel - carVel).Length(), (bikeVel + carVel).Length());
+
+		NearTrack tr;
+		auto it = _nearTracks.find(v);
+		if (it != _nearTracks.end())
+			tr = it->second;
+		if (gap < tr.minGap)
+		{
+			tr.minGap = gap;
+			tr.closingAtMin = closing;
+		}
+		if (crashed)
+			tr.spoiled = true;
+
+		// Passed: was near, now clearly pulling away.
+		if (!tr.spoiled && !tr.counted && tr.minGap < kNearGap && gap > tr.minGap + 1.5f)
+		{
+			if (tr.minGap > 0.02f && tr.closingAtMin >= kMinClosing)
+			{
+				++st.nearMisses;
+				st.lastGap = tr.minGap;
+				st.lastRelativeSpeed = tr.closingAtMin;
+				ride->AddCameraShake(0.25f);
+				LOG_INFO("traffic: NEAR MISS gap %.2f m at %.1f m/s", tr.minGap, tr.closingAtMin);
+			}
+			tr.counted = true;
+		}
+		next[v] = tr;
+	}
+	_nearTracks.swap(next);
 }

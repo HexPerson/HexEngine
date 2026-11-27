@@ -5,6 +5,7 @@
 #include <HexEngine.Core/HexEngine.hpp>
 #include <extensions\PxExtensionsAPI.h>
 #include <cmath>
+#include <algorithm>
 
 namespace
 {
@@ -222,6 +223,7 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CreateController(const HexEngine::Con
 	desc.density = params.density;
 
 	desc.reportCallback = this;
+	desc.behaviorCallback = this;
 
 	auto controller = _controllerManager->createController(desc);
 
@@ -273,6 +275,10 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CreateRigidBody(HexEngine::Transform*
 
 		actor->userData = rigidBody;
 		_scene->addActor(*actor);
+		// Character controllers only see a new body once scene-query updates are
+		// flushed (they did when something was REMOVED, which flushes) - a bus
+		// spawned mid-game was walked straight through until then.
+		_scene->flushQueryUpdates();
 
 		_scene->unlockWrite();
 		//_scene->unlockRead();
@@ -347,6 +353,12 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 				rigidBody->_geometry = geomCopy;
 				rigidBody->_shape = _physics->createShape(*geomCopy, rigidBody->_customMaterial ? *rigidBody->_customMaterial : *_defaultMaterial, true);
 
+				// Keep the box's offset (its AABB centre): without it a prefab-spawned
+				// box sat centred on the entity origin - a van whose box should start
+				// at the ground rode a metre up / sank half into the road.
+				if (physxBody->_shape)
+					rigidBody->_shape->setLocalPose(physxBody->_shape->getLocalPose());
+
 				break;
 			}
 
@@ -376,6 +388,9 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 
 				rigidBody->_geometry = geomCopy;
 				rigidBody->_shape = _physics->createShape(*geomCopy, rigidBody->_customMaterial ? *rigidBody->_customMaterial : *_defaultMaterial, true);
+
+				if (physxBody->_shape)
+					rigidBody->_shape->setLocalPose(physxBody->_shape->getLocalPose());
 
 				break;
 			}
@@ -1045,6 +1060,24 @@ void PhysicsSystemPhysX::onObstacleHit(const physx::PxControllerObstacleHit& hit
 
 }
 
+physx::PxControllerBehaviorFlags PhysicsSystemPhysX::getBehaviorFlags(const physx::PxShape& shape, const physx::PxActor& actor)
+{
+	(void)shape; (void)actor;
+	return physx::PxControllerBehaviorFlag::eCCT_USER_DEFINED_RIDE;
+}
+
+physx::PxControllerBehaviorFlags PhysicsSystemPhysX::getBehaviorFlags(const physx::PxController& controller)
+{
+	(void)controller;
+	return physx::PxControllerBehaviorFlags(0);
+}
+
+physx::PxControllerBehaviorFlags PhysicsSystemPhysX::getBehaviorFlags(const physx::PxObstacle& obstacle)
+{
+	(void)obstacle;
+	return physx::PxControllerBehaviorFlags(0);
+}
+
 void PhysicsSystemPhysX::onContact(const physx::PxContactPairHeader& pairHeader, const physx::PxContactPair* pairs, physx::PxU32 nbPairs)
 {
 	//_scene->lockRead();
@@ -1146,4 +1179,54 @@ void PhysicsSystemPhysX::CreateHingeJoint(HexEngine::IRigidBody* bodies[2], cons
 	_scene->unlockWrite();
 
 	//joint->set
+}
+
+void* PhysicsSystemPhysX::CreateConeJoint(HexEngine::IRigidBody* parent, HexEngine::IRigidBody* child, const math::Matrix& jointWorld,
+	float swingDegrees, float twistDegrees)
+{
+	auto* a = parent != nullptr ? ((RigidBodyPhysX*)parent)->GetRigidActor() : nullptr;
+	auto* b = child != nullptr ? ((RigidBodyPhysX*)child)->GetRigidActor() : nullptr;
+	if (a == nullptr || b == nullptr || _physics == nullptr)
+		return nullptr;
+
+	// SimpleMath rows are the frame's axes + translation (row-vector convention).
+	physx::PxMat44 m(physx::PxIDENTITY::PxIdentity);
+	m.column0 = physx::PxVec4(jointWorld._11, jointWorld._12, jointWorld._13, 0.0f);
+	m.column1 = physx::PxVec4(jointWorld._21, jointWorld._22, jointWorld._23, 0.0f);
+	m.column2 = physx::PxVec4(jointWorld._31, jointWorld._32, jointWorld._33, 0.0f);
+	m.column3 = physx::PxVec4(jointWorld._41, jointWorld._42, jointWorld._43, 1.0f);
+	physx::PxTransform world(m);
+	world.q.normalize();
+
+	_scene->lockWrite();
+	const physx::PxTransform localA = a->getGlobalPose().getInverse() * world;
+	const physx::PxTransform localB = b->getGlobalPose().getInverse() * world;
+	physx::PxD6Joint* joint = physx::PxD6JointCreate(*_physics, a, localA, b, localB);
+	if (joint != nullptr)
+	{
+		const float deg = 3.14159265f / 180.0f;
+		const float swing = std::clamp(swingDegrees, 1.0f, 170.0f) * deg;
+		const float twist = std::clamp(twistDegrees, 1.0f, 170.0f) * deg;
+		joint->setMotion(physx::PxD6Axis::eX, physx::PxD6Motion::eLOCKED);
+		joint->setMotion(physx::PxD6Axis::eY, physx::PxD6Motion::eLOCKED);
+		joint->setMotion(physx::PxD6Axis::eZ, physx::PxD6Motion::eLOCKED);
+		joint->setMotion(physx::PxD6Axis::eTWIST, physx::PxD6Motion::eLIMITED);
+		joint->setMotion(physx::PxD6Axis::eSWING1, physx::PxD6Motion::eLIMITED);
+		joint->setMotion(physx::PxD6Axis::eSWING2, physx::PxD6Motion::eLIMITED);
+		joint->setTwistLimit(physx::PxJointAngularLimitPair(-twist, twist));
+		joint->setSwingLimit(physx::PxJointLimitCone(swing, swing));
+		// Joined limbs never collide with each other (they overlap at the joint).
+		joint->setConstraintFlag(physx::PxConstraintFlag::eCOLLISION_ENABLED, false);
+	}
+	_scene->unlockWrite();
+	return joint;
+}
+
+void PhysicsSystemPhysX::DestroyJoint(void* joint)
+{
+	if (joint == nullptr)
+		return;
+	_scene->lockWrite();
+	static_cast<physx::PxJoint*>(joint)->release();
+	_scene->unlockWrite();
 }

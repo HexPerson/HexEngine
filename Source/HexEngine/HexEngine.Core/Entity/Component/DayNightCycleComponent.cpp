@@ -32,6 +32,7 @@ namespace HexEngine
 		_minSegmentLength = copy->_minSegmentLength;
 		_simulateCycle = copy->_simulateCycle;
 		_sunYawDegrees = copy->_sunYawDegrees;
+		_sunTiltDegrees = copy->_sunTiltDegrees;
 		_dayAmbientLight = copy->_dayAmbientLight;
 		_nightAmbientLight = copy->_nightAmbientLight;
 
@@ -93,6 +94,16 @@ namespace HexEngine
 
 	void DayNightCycleComponent::Serialize(json& data, JsonFile* file)
 	{
+		// A game save (GameStateSave) keeps only the runtime clock. Writing the
+		// whole component froze its DESIGN values (day/night length, sunrise
+		// hours, ambient) into every save, so re-tuning the day in the scene
+		// never reached an existing save.
+		if (file != nullptr && file->IsGameStateSave())
+		{
+			SERIALIZE_VALUE(_simulateCycle);
+			SERIALIZE_VALUE(_currentTimeHours);
+			return;
+		}
 		SERIALIZE_VALUE(_simulateCycle);
 		SERIALIZE_VALUE(_dayLengthSeconds);
 		SERIALIZE_VALUE(_nightLengthSeconds);
@@ -104,6 +115,7 @@ namespace HexEngine
 		SERIALIZE_VALUE(_sunsetEndHour);
 		SERIALIZE_VALUE(_minSegmentLength);
 		SERIALIZE_VALUE(_sunYawDegrees);
+		SERIALIZE_VALUE(_sunTiltDegrees);
 		SERIALIZE_VALUE(_dayAmbientLight);
 		SERIALIZE_VALUE(_nightAmbientLight);
 		SERIALIZE_VALUE(_sunLightBoost);
@@ -112,6 +124,18 @@ namespace HexEngine
 	void DayNightCycleComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
 		(void)mask;
+
+		// Game save: the clock only (older saves also carry the design fields -
+		// ignore them so the authored scene's tuning wins).
+		if (file != nullptr && file->IsGameStateSave())
+		{
+			DESERIALIZE_VALUE(_simulateCycle);
+			DESERIALIZE_VALUE(_currentTimeHours);
+			SetCurrentTimeHours(_currentTimeHours);
+			ApplySunRotation();
+			ApplyAmbientLight();
+			return;
+		}
 
 		DESERIALIZE_VALUE(_simulateCycle);
 		DESERIALIZE_VALUE(_dayLengthSeconds);
@@ -124,6 +148,7 @@ namespace HexEngine
 		DESERIALIZE_VALUE(_sunsetEndHour);
 		DESERIALIZE_VALUE(_minSegmentLength);
 		DESERIALIZE_VALUE(_sunYawDegrees);
+		DESERIALIZE_VALUE(_sunTiltDegrees);
 		DESERIALIZE_VALUE(_dayAmbientLight);
 		DESERIALIZE_VALUE(_nightAmbientLight);
 		DESERIALIZE_VALUE(_sunLightBoost);
@@ -216,6 +241,22 @@ namespace HexEngine
 		sunYaw->SetOnDrag([this](float value, float, float)
 		{
 			SetSunYawDegrees(value);
+			ApplySunRotation();
+		});
+
+		auto* sunTilt = new DragFloat(
+			widget,
+			widget->GetNextPos(),
+			Point(widget->GetSize().x - 140, 18),
+			L"Sun Path Tilt (deg)",
+			&_sunTiltDegrees,
+			-80.0f,
+			80.0f,
+			0.1f,
+			1);
+		sunTilt->SetPrefabOverrideBinding(GetComponentName(), "/_sunTiltDegrees");
+		sunTilt->SetOnDrag([this](float, float, float)
+		{
 			ApplySunRotation();
 		});
 
@@ -377,18 +418,31 @@ namespace HexEngine
 		if (transform == nullptr)
 			return;
 
-		// Midday is directly above.
+		// The arc passes through the zenith at midday, then is tilted by
+		// _sunTiltDegrees about its own sunrise-sunset axis: rise and set stay
+		// on the horizon, noon peaks at 90 - tilt degrees.
 		float pitch = (_currentTimeHours / _hoursPerDay) * 360.0f - 270.0f;
 		if (pitch > 180.0f)
 			pitch -= 360.0f;
 
-		if (fabs(_prevSunPitch - pitch) >= 0.01f || fabs(_sunYawDegrees - _prevSunYaw) >= 0.01f)
+		if (fabs(_prevSunPitch - pitch) >= 0.01f || fabs(_sunYawDegrees - _prevSunYaw) >= 0.01f ||
+			fabs(_sunTiltDegrees - _prevSunTilt) >= 0.01f)
 		{
-			const auto rotation = math::Quaternion::CreateFromYawPitchRoll(ToRadian(_sunYawDegrees), ToRadian(pitch), ToRadian(0.0f));
+			auto rotation = math::Quaternion::CreateFromYawPitchRoll(ToRadian(_sunYawDegrees), ToRadian(pitch), ToRadian(0.0f));
+			if (fabs(_sunTiltDegrees) > 0.001f)
+			{
+				// Pitch turns the sun about the yawed local X axis, so the arc lies
+				// in the yawed Y-Z plane and meets the horizon along the yawed Z
+				// axis. Tilt about that axis (applied after the arc rotation).
+				const auto yawOnly = math::Quaternion::CreateFromYawPitchRoll(ToRadian(_sunYawDegrees), 0.0f, 0.0f);
+				const math::Vector3 horizonAxis = math::Vector3::Transform(math::Vector3(0.0f, 0.0f, 1.0f), yawOnly);
+				rotation = rotation * math::Quaternion::CreateFromAxisAngle(horizonAxis, ToRadian(_sunTiltDegrees));
+			}
 			transform->SetRotation(rotation);
 
 			_prevSunPitch = pitch;
 			_prevSunYaw = _sunYawDegrees;
+			_prevSunTilt = _sunTiltDegrees;
 		}
 	}
 

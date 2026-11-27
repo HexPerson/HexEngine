@@ -28,6 +28,7 @@
 #include "../Tools/HexEngine.McpServer/BridgeClient.hpp"
 #include "../HexEngine.Core/Scene/OceanWaveModel.hpp"
 #include "../HexEngine.Core/Physics/RayMath.hpp"
+#include "../HexEngine.Core/Entity/Component/ComponentSignature.hpp"
 
 using namespace HexEngine;
 
@@ -1080,6 +1081,48 @@ static void TestTriangleBVH()
 	}
 }
 
+// Component signatures: one bit per type id. The old uint64_t wrapped for ids >= 64
+// ((uint64_t)1 << 67 == bit 3 on x64), so later components aliased early ones.
+static void TestComponentSignature()
+{
+	static_assert(MAX_COMPONENTS >= 128, "room for the engine + plugins + a game");
+
+	const ComponentSignature b3 = ComponentSignature::Bit(3);
+	const ComponentSignature b67 = ComponentSignature::Bit(67);
+	CHECK(b67.Has(67));
+	CHECK(!b67.Has(3));					// the old aliasing
+	CHECK(!b3.Has(67));
+	CHECK(!b3.Intersects(b67));
+	CHECK(b67.SingleBitIndex() == 67);
+	CHECK(b3.SingleBitIndex() == 3);
+	CHECK(ComponentSignature::Bit(127).SingleBitIndex() == 127);
+	CHECK(!ComponentSignature::Bit(MAX_COMPONENTS).Any());	// out of range: no bit
+
+	ComponentSignature s;
+	CHECK(!s.Any());
+	CHECK(s.SingleBitIndex() == -1);
+	s.Set(3);
+	s.Set(67);
+	s.Set(127);
+	CHECK(s.Has(3) && s.Has(67) && s.Has(127) && !s.Has(4) && !s.Has(66));
+	CHECK(s.SingleBitIndex() == -1);		// several bits
+	CHECK(s.Intersects(b67));
+	CHECK((s & b67) == b67);
+	CHECK((b3 | b67).Has(3) && (b3 | b67).Has(67));
+	CHECK(!(s & ~b67).Has(67) && (s & ~b67).Has(3));
+	s.Clear(67);
+	CHECK(!s.Has(67) && s.Has(3) && s.Has(127));
+	ComponentSignature t = b3;
+	t |= b67;
+	t &= b67;
+	CHECK(t == b67 && t != b3);
+
+	// Strict weak order for the scene's std::map<ComponentSignature, ...>.
+	CHECK(b3 < b67 && !(b67 < b3));
+	CHECK(!(b67 < b67));
+	CHECK(ComponentSignature() < b3);
+}
+
 int main()
 {
 	std::printf("HexEngine.Tests\n");
@@ -1101,6 +1144,7 @@ int main()
 	TestOceanWaveModel();
 	TestRayMath();
 	TestTriangleBVH();
+	TestComponentSignature();
 	std::printf("\n%d/%d checks passed.\n", g_total - g_fail, g_total);
 	std::printf(g_fail == 0 ? "RESULT: OK\n" : "RESULT: FAILED\n");
 	return g_fail == 0 ? 0 : 1;

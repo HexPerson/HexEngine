@@ -84,6 +84,10 @@ namespace HexEngine
 		float hopCooldown = 0.6f;       // seconds between hops
 		float crashSpeed = 4.0f;        // min speed (m/s) before an impact can throw the rider
 		float crashSpeedLoss = 0.6f;    // fraction of that speed lost within ~0.15 s = crash
+		// Kerb climbing: a low ledge in front of the chassis up to this high (m) is
+		// stepped up onto, the way a car's wheels roll over a kerb. 0 = off (the
+		// bikes: a kerb is something you hop or crash on).
+		float stepHeight = 0.0f;
 		float crashLandAngle = 40.0f;   // landing tilted more than this (deg) = crash
 		float crashRemountDelay = 2.5f; // seconds before a crashed bike can be remounted
 
@@ -173,6 +177,24 @@ namespace HexEngine
 		virtual bool CreateWidget(ComponentWidget* widget) override;
 
 		// Per-instance handling tuning (read every FixedUpdate; editable live).
+		// Runtime gameplay multipliers on top of the serialized tuning (upgrades,
+		// a heavy load, ...). Never saved; reset to 1 on play start by the game.
+		struct GameplayModifiers
+		{
+			float speed = 1.0f;       // x maxSpeed
+			float accel = 1.0f;       // x driveAccel
+			float brake = 1.0f;       // x brakeAccel
+			float grip = 1.0f;        // x grip
+			float wetPenalty = 1.0f;  // x the wet-road grip/brake loss (0 = weatherproof)
+		};
+		void SetGameplayModifiers(const GameplayModifiers& m) { _mods = m; }
+		const GameplayModifiers& GetGameplayModifiers() const { return _mods; }
+		// Current wet-road grip factor (1 = dry) - for HUD hints.
+		float GetWetGripFactor() const { return _wetGripFactor; }
+		// Kick the mounted camera (decays over ~0.4 s). 1 = a hard hit.
+		void AddCameraShake(float amount) { _camShake = std::min(1.5f, _camShake + std::max(0.0f, amount)); }
+		// Edge-triggered: true ONCE after the bike lands from a real drop (hop/kerb).
+		bool ConsumeLanding(float& impactSpeed) { const bool l = _landingEvent; _landingEvent = false; impactSpeed = _landingSpeed; return l; }
 		DriveTuning& GetTuning() { return _tuning; }
 		const DriveTuning& GetTuning() const { return _tuning; }
 
@@ -233,6 +255,7 @@ namespace HexEngine
 		bool _dismountRequested = false;
 		int32_t _dismountKeyBound = -1;          // key bound to BikeDismount while possessed
 		int64_t _lastPossessChangeFrame = -1;    // same-frame toggle debounce
+		bool _resumeRideAfterLoad = false;       // game save had the player riding: Possess() on next Update
 		// Where the player stood when they mounted - the dismount fallback when
 		// no spot around the vehicle is clear (it was a valid standing spot).
 		math::Vector3 _mountFromPos;
@@ -256,6 +279,12 @@ namespace HexEngine
 		float _speedWindow[kSpeedWindow] = {};       // recent horizontal speeds (impact detection)
 		int   _speedWindowIdx = 0;
 		float _airborneTime = 0.0f;      // wheel line clearly off the ground (landing detection)
+		float _prevGroundY = 0.0f;       // seam guard: ground height under the wheels last step
+		float _stepCooldown = 0.0f;      // kerb climbing: time until the next step-up is allowed
+		bool  _chassisSized = false;     // kerb climbing: half length/width from the mesh parts
+		float _chassisHalfLength = 1.0f;
+		float _chassisHalfWidth = 0.4f;
+		bool  _hasPrevGroundY = false;
 		bool  _crashed = false;
 		float _crashTimer = 0.0f;        // remount lockout remaining
 		float _remountGrace = 0.0f;      // crash checks suppressed after righting on mount
@@ -301,6 +330,16 @@ namespace HexEngine
 		math::Vector3 _camEyeSmoothed;               // smoothed world eye position
 		math::Vector3 _camLookSmoothed;              // smoothed world look direction
 		math::Vector3 _camSavedViewOffset;           // player's eye-height view offset, restored on dismount
+		float _camBaseFov = 0.0f;                    // main camera FOV at mount, restored on dismount
+		float _camFovBoost = 0.0f;                   // smoothed speed-reactive FOV widening (deg)
+		float _camShake = 0.0f;                      // camera shake energy (decays)
+		float _camShakeTime = 0.0f;                  // shake noise phase
+		GameplayModifiers _mods;                     // runtime (not serialized)
+		float _wetGripFactor = 1.0f;                 // 1 dry .. v_bikeWetGrip at full wetness
+		float _wetBrakeFactor = 1.0f;
+		bool  _landingEvent = false;
+		float _landingSpeed = 0.0f;
+		float _lastVerticalSpeed = 0.0f;
 
 		// --- audio playback state (runtime; not serialized) ---
 		std::shared_ptr<SoundEffect> _engineMaster, _engineInst;

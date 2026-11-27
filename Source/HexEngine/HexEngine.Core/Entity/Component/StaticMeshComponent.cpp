@@ -4,6 +4,7 @@
 #include "SkeletalAnimationComponent.hpp"
 #include "../Entity.hpp"
 #include "../../Scene/Scene.hpp"
+#include "../../Scene/PVS.hpp"
 #include "../../HexEngine.hpp"
 #include "../../Terrain/TerrainGenerator.hpp"
 #include "../../Graphics/MaterialLoader.hpp"
@@ -37,6 +38,8 @@ namespace HexEngine
 
 	StaticMeshComponent::~StaticMeshComponent()
 	{
+		PVS::ForgetHlodComponent(this);
+
 		if(_mesh)
 			LOG_DEBUG("Mesh '%s' now has a ref count of %d (will be %d after this)", _mesh->GetName().c_str(), _mesh.use_count(), _mesh.use_count()-1);
 	}
@@ -575,7 +578,21 @@ namespace HexEngine
 
 	bool StaticMeshComponent::GetExcludeFromGI() const
 	{
-		return _excludeFromGI;
+		return _excludeFromGI || _excludeFromVoxelGI;
+	}
+
+	void StaticMeshComponent::SetExcludeFromVoxelGI(bool value)
+	{
+		if (_excludeFromVoxelGI == value)
+			return;
+
+		_excludeFromVoxelGI = value;
+		// Same notification as SetExcludeFromGI: the voxel GI must add or
+		// remove this mesh's contribution.
+		if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		{
+			scene->NotifyStaticMeshChanged(this, true, false);
+		}
 	}
 
 	const math::Vector3& StaticMeshComponent::GetOffsetPosition() const
@@ -593,9 +610,12 @@ namespace HexEngine
 		auto entity = GetEntity();
 		const auto transformVersion = entity->GetTransformVersion();
 		const auto colour = material ? material->_properties.diffuseColour : math::Vector4(1.0f);
+		const uint64_t frame = (g_pEnv && g_pEnv->_timeManager) ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0;
 
 		if (_cachedRenderTransformVersion != transformVersion || _cachedRenderColour != colour || _cachedRenderUvScale != _uvScale)
 		{
+			// GetWorldTMPrev is frame-correct (end of last frame), whenever in
+			// this frame we are asked.
 			_cachedInstanceData.worldMatrix = entity->GetWorldTMTranspose();
 			_cachedInstanceData.worldMatrixPrev = entity->GetWorldTMPrevTranspose();
 			_cachedInstanceData.worldMatrixInverseTranspose = entity->GetWorldTMInvert();
@@ -605,20 +625,19 @@ namespace HexEngine
 			_cachedRenderTransformVersion = transformVersion;
 			_cachedRenderColour = colour;
 			_cachedRenderUvScale = _uvScale;
+			_cachedRenderFrame = frame;
 		}
-		else
+		else if (frame != _cachedRenderFrame)
 		{
-			// Cache hit: transform did not change this frame, so by definition there is no
-			// motion between previous and current frame for this entity. Refresh
-			// worldMatrixPrev to match the cached worldMatrix so velocity reads as zero.
-			// Without this refresh the cached "prev" stays at whatever value was captured
-			// the last time the entity moved (typically during scene load), so every
-			// subsequent static frame emits the SAME one-frame motion delta forever - which
-			// shows up as a persistent screen-space velocity gradient on every entity that
-			// ever moved, even though the entity is now sitting still. The cache-miss path
-			// above is unaffected: it correctly captures the real motion vector for whichever
-			// frame the entity actually moves.
+			// First pull of a new frame and the transform has not changed since
+			// the last pull: no motion, so the velocity reads zero. Without this
+			// the cached "prev" kept the last movement delta forever (a stopped
+			// car kept smearing). This must NOT run on a second pull within the
+			// SAME frame: the shadow-cascade lists pull before the main list, and
+			// zeroing there made every moving vehicle report no motion in the
+			// GBuffer - camera-motion blur then smeared a bus you ride in.
 			_cachedInstanceData.worldMatrixPrev = _cachedInstanceData.worldMatrix;
+			_cachedRenderFrame = frame;
 		}
 
 		return _cachedInstanceData;

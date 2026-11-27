@@ -125,5 +125,8 @@ public:
 		void SyncSettleBlocker(bool forceRelease = false);
 		bool _pendingPvsRefresh = false;
 		bool _sculptingActive = false;
+		// TerrainCutout sync (polled a few times a second from Tick).
+		void SyncCutouts(float deltaTime);
+		float _cutoutPollTimer = 0.0f;
 	};
 }

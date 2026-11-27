@@ -8,6 +8,11 @@
 #include "RecastInterface.hpp"
 #include <algorithm>
 #include <cstring>
+#include <chrono>
+
+// A* node pool per query. 2048 ran out on cross-town walks that end inside a furnished
+// building (many tiny polygons), returning a partial path: residents re-requested it forever.
+static constexpr int kQueryMaxNodes = 16384;
 
 HexEngine::HVar r_navSmoothPath("nav_smoothPath", "Navmesh paths: step-sampled surface walk (1) instead of the string-pulled straight path (0)", false, false, true);
 
@@ -644,7 +649,7 @@ bool RecastInterface::CreateRoutingData(HexEngine::Scene* scene, HexEngine::Chun
 
 	stored.navMeshQuery = dtAllocNavMeshQuery();
 
-	status = stored.navMeshQuery->init(stored.navMesh, 2048);
+	status = stored.navMeshQuery->init(stored.navMesh, kQueryMaxNodes);
 	if (dtStatusFailed(status))
 	{
 		FreeNavMesh(stored);
@@ -706,7 +711,7 @@ bool RecastInterface::LoadNavMeshFromBytes(HexEngine::Scene* scene, const std::v
 	}
 
 	stored.navMeshQuery = dtAllocNavMeshQuery();
-	if (!stored.navMeshQuery || dtStatusFailed(stored.navMeshQuery->init(stored.navMesh, 2048)))
+	if (!stored.navMeshQuery || dtStatusFailed(stored.navMeshQuery->init(stored.navMesh, kQueryMaxNodes)))
 	{
 		FreeNavMesh(stored);
 		LOG_CRIT("Could not init Detour navmesh query from bytes.");
@@ -965,10 +970,23 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 	// point on endRef glued a straight segment through walls onto the path, so
 	// agents walked through them and callers believed the target was reachable.
 	const dtPolyRef lastRef = pathRefs[pathCount - 1];
+	result.partial = (lastRef != endRef);
 	if (lastRef != endRef)
 	{
 		navMesh.navMeshQuery->closestPointOnPoly(lastRef, &params.to.x, &end.x, nullptr);
-		LOG_DEBUG("FindPath: target unreachable from start - partial path to the nearest reachable point.");
+		// Common and harmless (strolling agents probe random spots): count, and
+		// summarise at most every 10 s instead of logging every call.
+		static uint32_t s_partialPaths = 0;
+		static auto s_lastPartialLog = std::chrono::steady_clock::now();
+		++s_partialPaths;
+		const auto nowPartial = std::chrono::steady_clock::now();
+		if (nowPartial - s_lastPartialLog > std::chrono::seconds(10))
+		{
+			LOG_DEBUG("FindPath: %u partial path(s) in the last %llds (target not connected to the start).", s_partialPaths,
+				(long long)std::chrono::duration_cast<std::chrono::seconds>(nowPartial - s_lastPartialLog).count());
+			s_partialPaths = 0;
+			s_lastPartialLog = nowPartial;
+		}
 	}
 	else
 	{

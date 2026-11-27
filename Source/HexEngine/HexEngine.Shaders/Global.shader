@@ -330,7 +330,30 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// Caustics (underwater S3): x = strength (0 = off / atlas unbound),
 		// y = metres per caustic tile, z = animation fps, w = fade-out depth (m).
 		float4 g_oceanConfig4;
+		// Terrain cutouts: x = count. Box i = g_terrainCutouts[2i] (centre.xyz,
+		// axisX.x) and [2i+1] (halfExtents.xyz, axisX.z). See
+		// RenderStructs.hpp::_terrainCutouts / TerrainCutout.hpp.
+		float4 g_terrainCutoutInfo;
+		float4 g_terrainCutouts[32];
 	};
+
+	// True when a world position is inside any TerrainCutout box - the terrain
+	// surface and the sea-level water plane clip() there.
+	bool IsInsideTerrainCutout(float3 p)
+	{
+		const int n = (int)g_terrainCutoutInfo.x;
+		[loop] for (int i = 0; i < n; ++i)
+		{
+			const float4 a = g_terrainCutouts[i * 2 + 0];
+			const float4 b = g_terrainCutouts[i * 2 + 1];
+			const float3 d = p - a.xyz;
+			const float lx = d.x * a.w + d.z * b.w;
+			const float lz = -d.x * b.w + d.z * a.w;
+			if (abs(lx) < b.x && abs(d.y) < b.y && abs(lz) < b.z)
+				return true;
+		}
+		return false;
+	}
 
 	#define g_timePrev  (g_timeParams2.x)
 	#define g_deltaTime (g_timeParams2.y)

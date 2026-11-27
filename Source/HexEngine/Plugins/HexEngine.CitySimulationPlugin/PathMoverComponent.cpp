@@ -138,7 +138,7 @@ void PathMoverComponent::Update(float frameTime)
 		{
 			auto* e = stack.back(); stack.pop_back();
 			if (auto* mesh = e->GetComponent<HexEngine::StaticMeshComponent>(); mesh != nullptr)
-				mesh->SetExcludeFromGI(true);
+				mesh->SetExcludeFromVoxelGI(true);
 			for (auto* child : e->GetChildren())
 				if (child != nullptr) stack.push_back(child);
 		}

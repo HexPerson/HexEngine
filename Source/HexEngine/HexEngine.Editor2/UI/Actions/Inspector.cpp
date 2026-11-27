@@ -494,6 +494,7 @@ namespace HexEditor
 				addFlagCheckbox(L"Don't save",          &_flagDoNotSave,         HexEngine::EntityFlags::DoNotSave);
 				addFlagCheckbox(L"Exclude from HLOD",   &_flagExcludeFromHLOD,   HexEngine::EntityFlags::ExcludeFromHLOD);
 				addFlagCheckbox(L"Don't pick in editor",&_flagDoNotPickInEditor, HexEngine::EntityFlags::DoNotPickInEditor);
+				addFlagCheckbox(L"Don't cast shadows",  &_flagDoNotCastShadows,  HexEngine::EntityFlags::DoNotCastShadows);
 
 				flagsWidget->CalculateLargestLabelWidth();
 				_componentWidgets.push_back(flagsWidget);

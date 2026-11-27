@@ -1375,6 +1375,75 @@
 		return SampleRainShelter(p, samp);
 	}
 
+	// Rain WETNESS shelter: a wide, ONE-SIDED fade (2026-11-26, user: "the
+	// weather occlusion map has very hard edges, I'd prefer a soft transition").
+	// SampleRainShelter's ~38 cm penumbra is centred on the cover edge and, on
+	// a ~9 cm-texel map, still reads as a hard (and aliased, stair-stepped)
+	// line in wet-street reflections. Widening it symmetrically would bleed
+	// wetness INTO sheltered space - the interior-near-exterior-wall problem
+	// the narrow band was chosen to avoid. So the fade lives entirely on the
+	// EXPOSED side:
+	//   - centre tap sheltered          -> 0 (stays dry; interiors unaffected)
+	//   - exposed, cover within radius  -> ramps 0 at the cover edge -> 1 at
+	//                                      kWetFadeM out (disk coverage 0.5 -> 1)
+	// Taps are a 16-point Vogel disk with bilinear depth fetches + the same
+	// soft depth compare, so the ramp is smooth rather than texel-stepped.
+	// Snow / dust keep SampleRainShelter (the snow shell's geometry has its
+	// own matching ~1.2 m taper in SnowShell.shader's SnowShelterDS).
+	float SampleRainWetShelter(float3 worldPos, SamplerState samp)
+	{
+		if (g_rainOcclusionParams.x < 0.5f)
+			return 1.0f;
+
+		const float4 clip = mul(float4(worldPos, 1.0f), g_rainOcclusionVP);
+		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
+		if (any(uv < 0.0f) || any(uv > 1.0f) || clip.z < 0.0f || clip.z > 1.0f)
+			return 1.0f;
+
+		const float bias = g_rainOcclusionParams.y;
+		const float kSoftBand = 0.3f / 160.0f;
+
+		// Fade width in METRES -> map UV. The map is a top-down ortho, so the
+		// world X axis of its view-projection gives clip units per metre
+		// (uv = clip * 0.5); r_rainOcclusionExtent can change at runtime.
+		const float kWetFadeM = 0.6f;
+		const float uvPerMetre = 0.5f * length(float3(g_rainOcclusionVP._11, g_rainOcclusionVP._21, g_rainOcclusionVP._31));
+		const float radiusUv = kWetFadeM * uvPerMetre;
+
+		const float centre = 1.0f - smoothstep(bias, bias + kSoftBand,
+			clip.z - g_rainOcclusionMap.SampleLevel(samp, uv, 0));
+		if (centre <= 0.001f)
+			return 0.0f;
+
+		// Vogel (golden-angle) disk: even coverage at any tap count.
+		float exposed = 0.0f;
+		[unroll]
+		for (int i = 0; i < 16; ++i)
+		{
+			const float r = sqrt((i + 0.5f) / 16.0f);
+			const float a = i * 2.39996323f;
+			const float2 o = float2(cos(a), sin(a)) * (r * radiusUv);
+			const float d = g_rainOcclusionMap.SampleLevel(samp, uv + o, 0);
+			exposed += 1.0f - smoothstep(bias, bias + kSoftBand, clip.z - d);
+		}
+		exposed *= (1.0f / 16.0f);
+
+		// Disk coverage is ~0.5 right at a straight cover edge and 1 at a full
+		// radius out: remap that half to 0..1 and ease it.
+		return centre * smoothstep(0.5f, 1.0f, exposed);
+	}
+
+	// Normal-aware variant, same front-of-face offset as SampleRainShelterN.
+	float SampleRainWetShelterN(float3 worldPos, float3 worldNormal, SamplerState samp)
+	{
+		const float2 nxz = worldNormal.xz;
+		const float horiz = length(nxz);
+		float3 p = worldPos;
+		if (horiz > 1e-3f)
+			p.xz += (nxz / horiz) * (0.5f * horiz);
+		return SampleRainWetShelter(p, samp);
+	}
+
 	// =====================================================================
 	// Rain-impact ripples (Phase 3 slice 3). Expanding rings on wet
 	// up-facing surfaces while precipitation is actually falling - the

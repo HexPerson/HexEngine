@@ -5,6 +5,7 @@
 
 #include "MarchingCubes.hpp"
 #include "SdfTerrainGenerator.hpp"
+#include <HexEngine.Core/Entity/Component/TerrainCutout.hpp>
 
 namespace HexEngine::VolumetricTerrain
 {
@@ -139,6 +140,12 @@ namespace HexEngine::VolumetricTerrain
 
 		const ChunkCoord& GetCoord() const { return _coord; }
 		const dx::BoundingBox& GetBounds() const { return _bounds; }
+
+		// TerrainCutout boxes overlapping this chunk. Collision triangles are cut
+		// at the box walls (the surface itself is clipped per pixel in the
+		// shader). Returns true when the set changed - the chunk then drops its
+		// cached cooked collision and needs a re-cook.
+		bool SetCutouts(std::vector<TerrainCutoutBox>&& boxes, uint64_t hash);
 		bool HasEdits() const { return _hasEdits; }
 		bool HasMaterialEdits() const { return _hasMaterialEdits; }
 		bool IsGenerated() const { return _generated; }
@@ -214,6 +221,8 @@ namespace HexEngine::VolumetricTerrain
 		math::Vector3 _origin = math::Vector3::Zero;
 		float _voxelSize = 1.0f;
 		dx::BoundingBox _bounds{};
+		std::vector<TerrainCutoutBox> _cutouts;
+		uint64_t _cutoutHash = 0;
 
 		std::vector<float> _densities;
 		std::vector<uint8_t> _materials;

@@ -69,6 +69,8 @@ namespace HexEngine
 
 		// True when kInstalledMarkerFileName sits beside the running executable.
 		static bool IsInstalledBuild();
+		// Folder holding the running executable (falls back to the working directory).
+		static fs::path GetExecutableDirectory();
 
 		static constexpr const wchar_t* kInstalledMarkerFileName = L"HexEngine.installed";
 

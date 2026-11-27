@@ -11,6 +11,7 @@
 #include <HexEngine.Core/Scene/Scene.hpp>
 #include <HexEngine.Core/Entity/Component/Camera.hpp>
 #include <algorithm>
+#include <atomic>
 #include <format>
 #include <sstream>
 
@@ -59,6 +60,24 @@ TrafficLaneComponent::TrafficLaneComponent(HexEngine::Entity* entity, TrafficLan
 		_sequentialNextLaneCursor = 0;
 		_branchOffset = copy->_branchOffset;
 	}
+}
+
+namespace
+{
+	std::atomic<uint32_t> g_laneTopologyRevision{ 1 };
+}
+
+void TrafficLaneComponent::SetClosed(bool closed)
+{
+	if (_closed == closed)
+		return;
+	_closed = closed;
+	g_laneTopologyRevision.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint32_t TrafficLaneComponent::GetTopologyRevision()
+{
+	return g_laneTopologyRevision.load(std::memory_order_relaxed);
 }
 
 void TrafficLaneComponent::Serialize(json& data, HexEngine::JsonFile* file)

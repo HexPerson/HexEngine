@@ -101,7 +101,7 @@ void TrafficSignalComponent::ApplyVisual(int32_t visualState)
 	// voxel GI so the material swaps don't invalidate it.
 	if (!_giExcluded)
 	{
-		meshComponent->SetExcludeFromGI(true);
+		meshComponent->SetExcludeFromVoxelGI(true);
 		_giExcluded = true;
 	}
 

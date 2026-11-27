@@ -1,5 +1,7 @@
 #include "RoutineAgentComponent.hpp"
 #include "PlaceOfWorkComponent.hpp"
+#include <HexEngine.Core/Utility/CRC32.hpp>
+#include <cmath>
 #include <HexEngine.Core/Entity/Component/NavigationComponent.hpp>
 #include <HexEngine.Core/Entity/Component/Transform.hpp>
 #include <HexEngine.Core/Entity/Entity.hpp>
@@ -324,6 +326,46 @@ void RoutineAgentComponent::RebuildSchedule()
 
 	_plannedBlockKey = ~0ull;
 	_plannedTargetName.clear();
+}
+
+bool RoutineAgentComponent::IsScheduledAtPost(float hour) const
+{
+	auto* self = GetEntity();
+	auto* scene = self != nullptr ? self->GetScene() : nullptr;
+	if (scene == nullptr)
+		return false;
+	PlaceOfWorkComponent* workplace = nullptr;
+	if (!_assignedWorkplaceEntityName.empty())
+		if (auto* work = scene->GetEntityByName(_assignedWorkplaceEntityName); work != nullptr)
+			workplace = work->GetComponent<PlaceOfWorkComponent>();
+
+	// Mirrors CityRoutineSystemComponent's activity choice for an hour.
+	std::string activity = "Home";
+	if (_schedule.empty())
+	{
+		if (workplace != nullptr && workplace->IsHourInAnyShift(hour))
+			activity = "Work";
+	}
+	else
+	{
+		const uint32_t h = HexEngine::CRC32::HashString((self->GetName() + "#0").c_str());
+		const float offset = ((float)(h & 0xFFFFFF) / (float)0x1000000 - 0.5f) * _scheduleJitterHours;
+		const float t = std::fmod(hour - offset + 48.0f, 24.0f);
+		for (const auto& block : _schedule)
+		{
+			const bool in = block.start <= block.end ? (t >= block.start && t < block.end) : (t >= block.start || t < block.end);
+			if (in)
+			{
+				activity = block.activity;
+				break;
+			}
+		}
+	}
+	if (_stricmp(activity.c_str(), "Work") == 0 && workplace == nullptr)
+		activity = "Home";
+
+	// The post is the workplace, or home for agents without one.
+	return workplace != nullptr ? _stricmp(activity.c_str(), "Work") == 0 : _stricmp(activity.c_str(), "Home") == 0;
 }
 
 bool RoutineAgentComponent::WorkplaceOffersService(const std::string& tag) const

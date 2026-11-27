@@ -10,12 +10,67 @@ CharacterController::CharacterController(physx::PxController* controller, physx:
 {
 }
 
+void CharacterController::Destroy()
+{
+	if (_controller != nullptr)
+	{
+		// Releases the controller's actor + shape too (PhysX owns them).
+		_controller->release();
+		_controller = nullptr;
+		ForgetActor();
+	}
+	RigidBodyPhysX::Destroy();
+}
+
+namespace
+{
+	// Overlap filter: only KINEMATIC actors (moving platforms), never our own capsule.
+	struct KinematicOnlyFilter : public physx::PxQueryFilterCallback
+	{
+		const physx::PxRigidActor* ignore = nullptr;
+		virtual physx::PxQueryHitType::Enum preFilter(const physx::PxFilterData&, const physx::PxShape*, const physx::PxRigidActor* actor, physx::PxHitFlags&) override
+		{
+			if (actor == nullptr || actor == ignore)
+				return physx::PxQueryHitType::eNONE;
+			const auto* dynamic = actor->is<physx::PxRigidDynamic>();
+			if (dynamic == nullptr || !(dynamic->getRigidBodyFlags() & physx::PxRigidBodyFlag::eKINEMATIC))
+				return physx::PxQueryHitType::eNONE;
+			return physx::PxQueryHitType::eTOUCH;
+		}
+		virtual physx::PxQueryHitType::Enum postFilter(const physx::PxFilterData&, const physx::PxQueryHit&, const physx::PxShape*, const physx::PxRigidActor*) override
+		{
+			return physx::PxQueryHitType::eTOUCH;
+		}
+	};
+}
+
 void CharacterController::Move(const math::Vector3& dir, float minLength, float frameTime)
 {
 	if (!_controller)
 		return;
 
 	physx::PxControllerFilters filters = {};
+
+	// The controller caches the geometry around it and refreshes that cache only
+	// when STATIC shapes change (or, with PhysX's own riding, for the object it
+	// stands on - which we replace with eCCT_USER_DEFINED_RIDE). A kinematic
+	// vehicle that drove up is therefore still where it was cached, metres
+	// away: the player walked straight through a bus at a stop. Flush the cache
+	// whenever a kinematic body is near.
+	{
+		const physx::PxExtendedVec3 c = _controller->getPosition();
+		KinematicOnlyFilter filter;
+		filter.ignore = _controller->getActor();
+		physx::PxOverlapHit touches[1];
+		physx::PxOverlapBuffer hit(touches, 1);
+		physx::PxQueryFilterData filterData(physx::PxQueryFlag::eDYNAMIC | physx::PxQueryFlag::ePREFILTER);
+		auto* scene = g_pPhysx->GetScene();
+		scene->lockRead();
+		scene->overlap(physx::PxSphereGeometry(4.0f), physx::PxTransform(physx::PxVec3((float)c.x, (float)c.y, (float)c.z)), hit, filterData, &filter);
+		scene->unlockRead();
+		if (hit.getNbAnyHits() > 0)
+			_controller->invalidateCache();
+	}
 
 	g_pPhysx->GetScene()->lockRead();
 
@@ -41,6 +96,49 @@ bool CharacterController::IsOnGround() const
 	physx::PxControllerState cctState;
 	_controller->getState(cctState);
 	return (cctState.collisionFlags & physx::PxControllerCollisionFlag::eCOLLISION_DOWN) != 0;
+}
+
+namespace
+{
+	// Scene-query filter that skips one actor (the controller's own capsule).
+	struct IgnoreActorFilter : public physx::PxQueryFilterCallback
+	{
+		const physx::PxRigidActor* ignore = nullptr;
+		virtual physx::PxQueryHitType::Enum preFilter(const physx::PxFilterData&, const physx::PxShape* shape, const physx::PxRigidActor* actor, physx::PxHitFlags&) override
+		{
+			(void)shape;
+			return actor == ignore ? physx::PxQueryHitType::eNONE : physx::PxQueryHitType::eBLOCK;
+		}
+		virtual physx::PxQueryHitType::Enum postFilter(const physx::PxFilterData&, const physx::PxQueryHit&, const physx::PxShape*, const physx::PxRigidActor*) override
+		{
+			return physx::PxQueryHitType::eBLOCK;
+		}
+	};
+}
+
+HexEngine::IRigidBody* CharacterController::GetGroundBody() const
+{
+	if (_controller == nullptr)
+		return nullptr;
+
+	// PhysX only tracks a "touched object" for its own riding, which is turned
+	// off (eCCT_USER_DEFINED_RIDE), so look for it ourselves: a short ray down
+	// from the foot against MOVABLE (dynamic / kinematic) actors - statics
+	// never carry anyone.
+	const physx::PxExtendedVec3 foot = _controller->getFootPosition();
+	const physx::PxVec3 origin((float)foot.x, (float)foot.y + 0.3f, (float)foot.z);
+	IgnoreActorFilter filter;
+	filter.ignore = _controller->getActor();
+	physx::PxRaycastBuffer hit;
+	physx::PxQueryFilterData filterData(physx::PxQueryFlag::eDYNAMIC | physx::PxQueryFlag::ePREFILTER);
+
+	auto* scene = g_pPhysx->GetScene();
+	scene->lockRead();
+	const bool found = scene->raycast(origin, physx::PxVec3(0.0f, -1.0f, 0.0f), 0.6f, hit, physx::PxHitFlag::eDEFAULT, filterData, &filter);
+	scene->unlockRead();
+	if (!found || !hit.hasBlock || hit.block.actor == nullptr)
+		return nullptr;
+	return static_cast<RigidBodyPhysX*>(hit.block.actor->userData);
 }
 
 void CharacterController::UpdatePosePosition(const math::Vector3& position)

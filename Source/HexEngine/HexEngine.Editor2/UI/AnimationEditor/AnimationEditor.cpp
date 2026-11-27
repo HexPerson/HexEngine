@@ -1057,6 +1057,133 @@ namespace HexEditor
 		new Button(this, Point(px, 368), Point(third, 24), L"Undo", [this](Button*) { Undo(); return true; });
 		new Button(this, Point(px + third + 4, 368), Point(third, 24), L"Redo", [this](Button*) { Redo(); return true; });
 		new Button(this, Point(px + (third + 4) * 2, 368), Point(third, 24), L"Save", [this](Button*) { Save(); return true; });
+
+		// Clip events. The name field names new events and renames the selected one.
+		_eventName = new LineEdit(this, Point(px, 410), Point(pw, 20), L"Event");
+		_eventName->SetValue(s2ws(_newEventName));
+		_eventName->SetDoesCallbackWaitForReturn(true);
+		_eventName->SetOnInputFn([this](LineEdit*, const std::wstring& value)
+		{
+			if (value.empty())
+				return;
+			_newEventName = ws2s(value);
+			if (GetSelectedEvent() >= 0)
+				RenameSelectedEvent(_newEventName);
+		});
+		new Button(this, Point(px, 436), Point(third, 22), L"Add at Playhead", [this](Button*) { AddEvent(_time); return true; });
+		new Button(this, Point(px + third + 4, 436), Point(third, 22), L"Delete Event", [this](Button*) { DeleteSelectedEvent(); return true; });
+		new Button(this, Point(px + (third + 4) * 2, 436), Point(third, 22), L"Detect Steps", [this](Button*) { DetectFootsteps(); return true; });
+	}
+
+	// ---- clip events ---------------------------------------------------------------------
+
+	int32_t AnimationEditor::GetSelectedEvent() const
+	{
+		const Animation* clip = _doc->GetClip();
+		if (clip == nullptr || _selectedEventClip != _doc->GetClipIndex() ||
+			_selectedEvent < 0 || _selectedEvent >= (int32_t)clip->events.size())
+			return -1;
+		return _selectedEvent;
+	}
+
+	void AnimationEditor::SelectEvent(int32_t index)
+	{
+		_selectedEvent = index;
+		_selectedEventClip = _doc->GetClipIndex();
+		const Animation* clip = _doc->GetClip();
+		if (clip != nullptr && index >= 0 && index < (int32_t)clip->events.size() && _eventName != nullptr)
+		{
+			_newEventName = clip->events[index].name;
+			_eventName->SetValue(s2ws(_newEventName));
+		}
+	}
+
+	namespace
+	{
+		// Keep events time-ordered; returns where `moved` (by identity) ended up.
+		int32_t SortEvents(std::vector<AnimationEvent>& events, const AnimationEvent& moved)
+		{
+			std::stable_sort(events.begin(), events.end(), [](const AnimationEvent& a, const AnimationEvent& b) { return a.time < b.time; });
+			for (int32_t i = 0; i < (int32_t)events.size(); ++i)
+				if (events[i].time == moved.time && events[i].name == moved.name)
+					return i;
+			return -1;
+		}
+	}
+
+	void AnimationEditor::AddEvent(float ticks)
+	{
+		Animation* clip = _doc->GetClip();
+		if (clip == nullptr || _newEventName.empty())
+			return;
+		_doc->BeginEdit(L"Add event");
+		AnimationEvent ev;
+		ev.time = std::clamp(ticks, 0.0f, std::max(0.0f, clip->duration));
+		ev.name = _newEventName;
+		clip->events.push_back(ev);
+		const int32_t at = SortEvents(clip->events, ev);
+		_doc->EndEdit();
+		SelectEvent(at);
+		SetStatus(std::format(L"Added event '{}' at frame {:.1f}.", s2ws(ev.name), ev.time));
+	}
+
+	void AnimationEditor::DeleteSelectedEvent()
+	{
+		Animation* clip = _doc->GetClip();
+		const int32_t i = GetSelectedEvent();
+		if (clip == nullptr || i < 0)
+		{
+			SetStatus(L"Select an event on the timeline first.", true);
+			return;
+		}
+		_doc->BeginEdit(L"Delete event");
+		clip->events.erase(clip->events.begin() + i);
+		_doc->EndEdit();
+		_selectedEvent = -1;
+		SetStatus(L"Event deleted.");
+	}
+
+	void AnimationEditor::MoveEvent(int32_t index, float ticks)
+	{
+		Animation* clip = _doc->GetClip();
+		if (clip == nullptr || index < 0 || index >= (int32_t)clip->events.size())
+			return;
+		_doc->BeginEdit(L"Move event");
+		AnimationEvent& ev = clip->events[index];
+		ev.time = std::clamp(ticks, 0.0f, std::max(0.0f, clip->duration));
+		const AnimationEvent moved = ev;
+		const int32_t at = SortEvents(clip->events, moved);
+		_doc->EndEdit();
+		SelectEvent(at);
+	}
+
+	void AnimationEditor::RenameSelectedEvent(const std::string& name)
+	{
+		Animation* clip = _doc->GetClip();
+		const int32_t i = GetSelectedEvent();
+		if (clip == nullptr || i < 0 || name.empty())
+			return;
+		_doc->BeginEdit(L"Rename event");
+		clip->events[i].name = name;
+		_doc->EndEdit();
+		SetStatus(L"Event renamed.");
+	}
+
+	void AnimationEditor::DetectFootsteps()
+	{
+		Animation* clip = _doc->GetClip();
+		auto mesh = _doc->GetMesh();
+		if (clip == nullptr || mesh == nullptr)
+			return;
+		const auto hasBone = [&](const char* n) { return mesh->GetBoneMap().count(n) != 0; };
+		const std::string left = hasBone("foot.L") ? "foot.L" : "mixamorig:LeftFoot";
+		const std::string right = hasBone("foot.R") ? "foot.R" : "mixamorig:RightFoot";
+		_doc->BeginEdit(L"Detect footsteps");
+		const int32_t n = AnimationUtils::DetectFootEvents(*clip, _doc->GetData()->_globalInverseTransform, left, right, "FootL", "FootR");
+		_doc->EndEdit();
+		_selectedEvent = -1;
+		SetStatus(n > 0 ? std::format(L"Detected {} foot plant(s) (FootL / FootR) - drag them to adjust.", n)
+			: std::wstring(L"No foot plants found (the feet barely move in this clip)."), n == 0);
 	}
 
 	void AnimationEditor::OpenClipMenu()
@@ -1218,7 +1345,7 @@ namespace HexEditor
 		{
 		case VK_SPACE: SetPlaying(!_playing); return true;
 		case 'K': KeySelectedNode(); return true;
-		case VK_DELETE: DeleteSelectedKeys(); return true;
+		case VK_DELETE: if (GetSelectedEvent() >= 0) DeleteSelectedEvent(); else DeleteSelectedKeys(); return true;
 		case VK_LEFT: StepFrames(-1); return true;
 		case VK_RIGHT: StepFrames(1); return true;
 		case VK_HOME: SetPlaying(false); SetTime(0.0f); return true;

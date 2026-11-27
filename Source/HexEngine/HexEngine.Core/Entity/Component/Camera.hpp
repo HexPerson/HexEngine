@@ -196,6 +196,11 @@ namespace HexEngine
 
 		virtual void OnDebugRender() override;
 
+		// Rebuild rotation + view from the current transform/angles now - for code
+		// that moves the camera's entity after Camera::Update ran this frame
+		// (a player riding a bus follows it in a post-update pass).
+		void RefreshViewMatrix() { UpdateRotation(); ConstructViewMatrix(); }
+
 	private:
 		void ConstructProjectionMatrix();
 		void ConstructViewMatrix();

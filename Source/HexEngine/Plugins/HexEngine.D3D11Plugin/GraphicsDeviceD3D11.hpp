@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include <HexEngine.Core/Graphics/IGraphicsDevice.hpp>
 #include "Texture2D.hpp"
 #include "Texture3D.hpp"
@@ -224,6 +226,8 @@ public:
 	virtual void BeginFrame(HexEngine::Window* window, HexEngine::ITexture2D* depthBuffer) override;
 
 	virtual void EndFrame(HexEngine::Window* window) override;
+	virtual bool RequestBackBufferCapture(const std::wstring& absolutePath) override;
+	virtual int32_t GetBackBufferCaptureState() const override { return _bbCaptureState.load(); }
 
 	virtual void SetViewports(const std::vector<HexEngine::Viewport>& viewports) override;
 	virtual void SetViewport(const HexEngine::Viewport& viewport) override;
@@ -341,6 +345,12 @@ private:
 	//ID3D11Texture2D* _depthStencilBuffer = nullptr;
 
 	std::unordered_map<HexEngine::Window*, DeviceData> _deviceData;
+
+	// Back-buffer capture (RequestBackBufferCapture): serviced in EndFrame before Present.
+	void ServiceBackBufferCapture(IDXGISwapChain* swapchain);
+	std::mutex _bbCaptureLock;
+	std::wstring _bbCapturePath;
+	std::atomic<int32_t> _bbCaptureState{ 0 };
 
 
 	//ShadowMap* _shadowMap[4];

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Required.hpp"
+#include <mutex>
 #include "../Entity/Entity.hpp"
 #include "../Entity/Component/Camera.hpp"
 #include "../Entity/Component/Light.hpp"
@@ -132,6 +133,10 @@ namespace HexEngine
 		bool TryLock();
 
 		void FlushPVS(Entity* entity, bool remove=false);
+		// FlushPVS(entity) (add/refresh) is queued and applied here once per frame,
+		// batched: Scene::Update calls it after PostUpdate and SceneRenderer before
+		// drawing. Removals stay immediate - the entity is about to be freed.
+		void FlushPendingPVS();
 		void ForceRebuildPVS();
 
 		void RenderEntities(PVS* pvs, LayerMask layerMask, MeshRenderFlags renderFlags);
@@ -176,6 +181,9 @@ namespace HexEngine
 		void CalculateBounds(math::Vector3& min, math::Vector3& max);
 		bool GatherStaticMeshesInBounds(const dx::BoundingBox& bounds, std::vector<StaticMeshComponent*>& outComponents, bool includeDynamic = true);
 		uint64_t GetGiGeometryRevision() const;
+		// Bumped when any Light component is added or removed (not when lights move):
+		// SceneRenderer keeps its distance-sorted light lists while this is unchanged.
+		uint64_t GetLightSetRevision() const { return _lightSetRevision; }
 		// Shadow-atlas invalidation journal. Every shadow-casting meshed entity's
 		// transform change and every geometry add/change records a world-space
 		// region (the union of where it was and where it is) - no GI exclusions,
@@ -219,6 +227,10 @@ namespace HexEngine
 		// Gather the world-space footprints of all NavMeshBlockingVolume components,
 		// for the navmesh bake to carve roads / restore crossings.
 		void GatherNavMeshBlockingVolumes(std::vector<NavMeshBlockingBox>& out);
+
+		// Gather the world-space boxes of all enabled TerrainCutout components
+		// (holes in the terrain surface / collision / water plane).
+		void GatherTerrainCutouts(std::vector<struct TerrainCutoutBox>& out);
 
 		// Gather the world-space off-mesh links from all NavMeshLinkComponent
 		// components, fed to Detour at bake time as off-mesh connections.
@@ -312,6 +324,12 @@ namespace HexEngine
 		float GetWaterHeight(float x, float z) const;
 		/** @brief Depth of a point below the wave surface in metres (> 0 = submerged, < 0 = above). */
 		float GetDepthBelowWater(const math::Vector3& position) const;
+		// For a camera / listener: like GetDepthBelowWater, but a point below sea
+		// level with something solid between it and the surface (a subway
+		// station, a tunnel, a basement - the ocean is infinite, so anything
+		// inland below sea level would otherwise count as underwater) is dry.
+		// Costs one upward raycast, only while below the water height.
+		float GetViewDepthBelowWater(const math::Vector3& eye) const;
 		bool IsUnderwater(const math::Vector3& position) const { return HasOcean() && GetDepthBelowWater(position) > 0.0f; }
 		/** @brief Upper bound on wave height above sea level for the current sea state. */
 		float GetWaveAmplitudeBound() const;
@@ -482,6 +500,10 @@ namespace HexEngine
 
 		Camera* _mainCamera = nullptr;
 		std::vector<Camera*> _cameras;
+		// FlushPVS add-queue (see FlushPendingPVS): entity + id, so a pointer whose
+		// entity was freed (id generation changed) is dropped instead of flushed.
+		std::mutex _pvsFlushMutex;
+		std::vector<std::pair<Entity*, EntityId>> _pvsFlushQueue;
 
 		uint32_t _navMeshId = 0;        // NavMeshId of this scene's navmesh (when _hasNavMesh)
 		bool _hasNavMesh = false;
@@ -520,6 +542,7 @@ namespace HexEngine
 		bool _didAnyDrawnItemReflect = false;
 		bool _wasPvsReset = true;
 		uint64_t _giGeometryRevision = 1ull;
+		uint64_t _lightSetRevision = 1ull;
 		struct ShadowDirtyRegion
 		{
 			uint64_t seq = 0ull;
@@ -544,6 +567,14 @@ namespace HexEngine
 			uint64_t lastBakeFrame = 0ull;
 		};
 		std::unordered_map<StaticMeshComponent*, GiMovingMeshState> _giMovingMeshes;
+		// Mesh components added / changed this frame, resolved once per frame by
+		// ProcessPendingGiMeshes: the GI geometry revision is bumped only when a
+		// mesh's GI contribution actually changes. Bumping on every add/remove made
+		// spawning and despawning traffic rebuild every clipmap's voxel triangle
+		// list (~20 ms each in Debug) almost every frame. Value: geometry changed.
+		std::unordered_map<StaticMeshComponent*, bool> _giPendingMeshes;
+		void ProcessPendingGiMeshes();
+		bool IsGiContributor(StaticMeshComponent* smc) const;
 		std::vector<GiSpatialEntry> _giSpatialEntries;
 		std::unordered_map<GiSpatialCellKey, std::vector<uint32_t>, GiSpatialCellKeyHash> _giSpatialCells;
 		std::vector<uint32_t> _giSpatialOverflowEntries;

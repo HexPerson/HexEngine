@@ -529,6 +529,12 @@ namespace HexEngine
 		// z = animation frames per second, w = depth (m) over which the
 		// pattern fades out. Aliased g_oceanConfig4.
 		math::Vector4 _oceanConfig4;
+		// Terrain cutouts (TerrainCutout components): x = count (<= 16).
+		// Two vectors per box: [2i] = (centre.xyz, axisX.x), [2i+1] =
+		// (halfExtents.xyz, axisX.z). The terrain surface and water clip
+		// inside. Aliased g_terrainCutoutInfo / g_terrainCutouts.
+		math::Vector4 _terrainCutoutInfo;
+		math::Vector4 _terrainCutouts[32];
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

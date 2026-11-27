@@ -39,6 +39,11 @@ namespace HexEngine
 
 		virtual void Update(float frameTime) override;
 		virtual void FixedUpdate(float frameTime) override;
+		virtual bool WantsPostUpdate() const override { return !_carrierName.empty(); }
+		virtual void PostUpdate(float frameTime) override;
+
+		// The moving platform (kinematic bus / train floor) the player is riding, or null.
+		Entity* GetCarrier() const;
 
 		void AddInputFlag(MoveFlag flag);
 		void RemoveInputFlag(MoveFlag flag);
@@ -66,6 +71,17 @@ namespace HexEngine
 		// Samples a material's surface-ID map (red channel) at a UV and returns the
 		// surface id, or -1 if the map can't be loaded. Decoded pixels are cached.
 		int32_t SampleFootstepSurfaceId(const std::string& mapPath, float u, float v);
+
+		// Moving platforms. Standing on a KINEMATIC body (a bus or train floor
+		// moved by game code) makes it the carrier: the player keeps their spot in
+		// the carrier's local frame and turns with it. Applied every frame in
+		// PostUpdate (after the vehicle moved, before rendering - no lag/jitter)
+		// and again at the start of each physics tick. Survives short hops.
+		static Entity* FindCarrierFor(class IRigidBody* groundBody);
+		static float CarrierYaw(const math::Matrix& worldTM);
+		void UpdateCarrierAfterMove(class IRigidBody* body, bool onGround, float frameTime);
+		void FollowCarrier(class IRigidBody* body);
+		void ClearCarrier(const char* reason);
 
 	private:
 		float _movementSpeed = 4.0f;
@@ -108,5 +124,17 @@ namespace HexEngine
 			std::vector<uint8_t> pixels;
 		};
 		std::map<std::string, FootstepSurfaceMap> _footstepSurfaceMapCache;
+
+		std::string   _carrierName;              // entity name (entities can be despawned - never hold the pointer)
+		math::Vector3 _carrierLocalFoot;         // foot position in the carrier's local frame
+		float         _carrierYaw = 0.0f;        // carrier yaw (rad) when the camera yaw was last synced
+		float         _carrierAirTime = 0.0f;    // seconds off its floor (a hop inside the bus)
+		bool          _interpolationBeforeCarry = true;
+		// Low cabins (the kit bus has ~1.6 m of headroom): the eye is lowered to
+		// fit under the ceiling while riding and restored on getting off.
+		bool          _eyeLowered = false;
+		float         _defaultEyeHeight = 0.0f;
+		void FitEyeUnderCeiling();
+		void RestoreEyeHeight();
 	};
 }

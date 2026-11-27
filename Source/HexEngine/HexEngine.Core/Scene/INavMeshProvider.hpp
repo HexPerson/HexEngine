@@ -10,7 +10,9 @@ namespace HexEngine
 	class Scene;
 	class Chunk;
 
-	const int32_t MaxPaths = 256;
+	// Longest polygon corridor a path may have. 256 cut cross-town walks short once the
+	// carved city navmesh (kerbs, crossings, furnished interiors) got finely tessellated.
+	const int32_t MaxPaths = 1024;
 	using NavMeshId = uint32_t;
 
 	// A navmesh area-modifier footprint, gathered from NavMeshBlockingVolume
@@ -144,6 +146,9 @@ namespace HexEngine
 		struct PathResult
 		{
 			std::vector<math::Vector3> path;
+			// True when the target is not connected to the start and the path stops
+			// at the nearest reachable point instead.
+			bool partial = false;
 		};
 
 		enum class MoveResult

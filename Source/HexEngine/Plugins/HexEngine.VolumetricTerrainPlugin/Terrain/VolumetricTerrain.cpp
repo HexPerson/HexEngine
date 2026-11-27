@@ -904,6 +904,59 @@ namespace HexEngine::VolumetricTerrain
 		_stats.lastMeshRebuildMs = std::chrono::duration<float, std::milli>(end - begin).count();
 	}
 
+	void VolumetricTerrain::SyncCutouts(float deltaTime)
+	{
+		_cutoutPollTimer -= deltaTime;
+		if (_cutoutPollTimer > 0.0f)
+			return;
+		_cutoutPollTimer = 0.25f;
+
+		Scene* scene = _owner != nullptr ? _owner->GetScene() : nullptr;
+		if (scene == nullptr)
+			return;
+		std::vector<TerrainCutoutBox> boxes;
+		scene->GatherTerrainCutouts(boxes);
+
+		auto hashBox = [](uint64_t h, const TerrainCutoutBox& b)
+		{
+			const float v[8] = { b.centre.x, b.centre.y, b.centre.z, b.halfExtents.x, b.halfExtents.y, b.halfExtents.z, b.axisX.x, b.axisX.y };
+			for (float f : v)
+			{
+				uint32_t bits; memcpy(&bits, &f, 4);
+				h = (h ^ bits) * 1099511628211ull;
+			}
+			return h;
+		};
+
+		int32_t changed = 0;
+		for (auto& [coord, chunk] : _chunks)
+		{
+			(void)coord;
+			if (chunk == nullptr)
+				continue;
+			const auto& bounds = chunk->GetBounds();
+			std::vector<TerrainCutoutBox> mine;
+			uint64_t h = 0;
+			for (const auto& b : boxes)
+			{
+				const float reach = std::sqrt(b.halfExtents.x * b.halfExtents.x + b.halfExtents.z * b.halfExtents.z) + 1.0f;
+				if (std::fabs(b.centre.x - bounds.Center.x) > bounds.Extents.x + reach ||
+					std::fabs(b.centre.z - bounds.Center.z) > bounds.Extents.z + reach ||
+					std::fabs(b.centre.y - bounds.Center.y) > bounds.Extents.y + b.halfExtents.y + 1.0f)
+					continue;
+				mine.push_back(b);
+				h = hashBox(h == 0 ? 1469598103934665603ull : h, b);
+			}
+			if (chunk->SetCutouts(std::move(mine), h))
+				++changed;
+		}
+		if (changed > 0)
+		{
+			LOG_INFO("VolumetricTerrain: %zu terrain cutout(s); re-cooking collision for %d chunk(s)", boxes.size(), changed);
+			QueueCollisionRefresh();
+		}
+	}
+
 	void VolumetricTerrain::Tick(float deltaTime)
 	{
 		struct SettleSync { VolumetricTerrain* t; ~SettleSync() { t->SyncSettleBlocker(); } } settleSync{ this };
@@ -931,6 +984,7 @@ namespace HexEngine::VolumetricTerrain
 		}
 
 		RegenerateDirtyChunks();
+		SyncCutouts(deltaTime);
 
 		if (_pendingCollisionRefresh)
 		{

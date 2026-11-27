@@ -13,6 +13,8 @@
 
 std::vector<TrafficSignalControllerComponent*> TrafficSignalControllerComponent::s_controllers;
 
+HexEngine::HVar cs_signalLog("cs_signalLog", "Log each traffic-signal stage change with how long its traffic / pedestrians waited", false, false, true);
+
 namespace
 {
 	std::string TrimCopy(const std::string& text)
@@ -165,16 +167,15 @@ float TrafficSignalControllerComponent::GetCycleTime() const
 TrafficSignalControllerComponent::SignalState TrafficSignalControllerComponent::GetArmState(char arm) const
 {
 	arm = (char)std::toupper((unsigned char)arm);
-	const float perArm = std::max(_greenSeconds, 0.0f) + std::max(_amberSeconds, 0.0f) + std::max(_allRedSeconds, 0.0f);
-	const float t = GetCycleTime();
 	for (size_t i = 0; i < _arms.size(); ++i)
 	{
 		if (_arms[i] != arm)
 			continue;
-		const float local = t - perArm * (float)i;
-		if (local >= 0.0f && local < _greenSeconds)
+		if (i != _stageIndex)
+			return SignalState::Red;
+		if (_phase == Phase::Green)
 			return SignalState::Green;
-		if (local >= _greenSeconds && local < _greenSeconds + _amberSeconds)
+		if (_phase == Phase::Amber)
 			return SignalState::Amber;
 		return SignalState::Red;
 	}
@@ -183,25 +184,142 @@ TrafficSignalControllerComponent::SignalState TrafficSignalControllerComponent::
 
 bool TrafficSignalControllerComponent::IsPedestrianWalk() const
 {
-	const float perArm = std::max(_greenSeconds, 0.0f) + std::max(_amberSeconds, 0.0f) + std::max(_allRedSeconds, 0.0f);
-	const float walkStart = perArm * (float)_arms.size();
-	const float t = GetCycleTime();
-	return t >= walkStart && t < walkStart + std::max(_pedestrianWalkSeconds, 0.0f);
+	return _stageIndex == _arms.size() && _phase == Phase::Walk;
+}
+
+namespace
+{
+	// A vehicle reports demand every frame it approaches; this bridges frame gaps.
+	constexpr float kVehicleDemandHold = 1.0f;
+	// A held pedestrian reports every frame too; a little longer so a crowd
+	// shuffling at the kerb keeps the request alive.
+	constexpr float kPedestrianDemandHold = 2.0f;
+	// Shortest green once given: a car that just got it can get going.
+	constexpr float kMinGreenSeconds = 4.0f;
+}
+
+bool TrafficSignalControllerComponent::HasArmDemand(size_t armIndex) const
+{
+	return armIndex < _armDemandTime.size() && _clock - _armDemandTime[armIndex] <= kVehicleDemandHold;
+}
+
+bool TrafficSignalControllerComponent::HasPedestrianDemand() const
+{
+	return !_crossings.empty() && _clock - _pedDemandTime <= kPedestrianDemandHold;
+}
+
+void TrafficSignalControllerComponent::StartNextStage()
+{
+	// Round-robin from the stage after the current one, skipping stages nobody
+	// is waiting for. Nobody at all: rest at all-red until someone turns up
+	// (the first to arrive gets their stage straight away).
+	const size_t stages = _arms.size() + 1;
+	for (size_t k = 1; k <= stages; ++k)
+	{
+		const size_t s = (_stageIndex + k) % stages;
+		const bool demand = s == _arms.size() ? HasPedestrianDemand() : HasArmDemand(s);
+		if (!demand)
+			continue;
+		_stageIndex = s;
+		_phase = s == _arms.size() ? Phase::Walk : Phase::Green;
+		_phaseTimer = 0.0f;
+
+		float& waitSince = s == _arms.size() ? _pedWaitSince : _armWaitSince[s];
+		if (cs_signalLog._val.b)
+		{
+			LOG_INFO("Signal '%s': %s%c (waited %.1f s)", GetEntity() != nullptr ? GetEntity()->GetName().c_str() : "?",
+				s == _arms.size() ? "WALK" : "green ", s == _arms.size() ? ' ' : _arms[s],
+				waitSince >= 0.0f ? _clock - waitSince : 0.0f);
+		}
+		waitSince = -1.0f;
+		return;
+	}
+	_phase = Phase::Idle;
+	_phaseTimer = 0.0f;
 }
 
 void TrafficSignalControllerComponent::Update(float frameTime)
 {
 	UpdateComponent::Update(frameTime);
 
-	// The cycle only runs in play; in the editor the junction holds its first
-	// phase so heads show a stable, previewable state.
-	if (HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->IsGameRunning() && frameTime > 0.0f)
-		_clock += frameTime;
-	else
-		_clock = 0.0f;
-
 	if (!_crossingsResolved && !_crossingNames.empty())
 		ResolveCrossings();
+	if (_armDemandTime.size() != _arms.size())
+		_armDemandTime.assign(_arms.size(), -1e9f);
+	if (_armWaitSince.size() != _arms.size())
+		_armWaitSince.assign(_arms.size(), -1.0f);
+
+	// The signals only run in play; in the editor the junction holds its first
+	// arm at green so heads show a stable, previewable state.
+	if (HexEngine::g_pEnv == nullptr || !HexEngine::g_pEnv->IsGameRunning() || frameTime <= 0.0f || _arms.empty())
+	{
+		if (HexEngine::g_pEnv == nullptr || !HexEngine::g_pEnv->IsGameRunning())
+		{
+			_clock = 0.0f;
+			_stageIndex = 0;
+			_phase = Phase::Green;
+			_phaseTimer = 0.0f;
+			_pedDemandTime = -1e9f;
+			_pedWaitSince = -1.0f;
+			std::fill(_armDemandTime.begin(), _armDemandTime.end(), -1e9f);
+			std::fill(_armWaitSince.begin(), _armWaitSince.end(), -1.0f);
+		}
+		return;
+	}
+
+	_clock += frameTime;
+	_phaseTimer += frameTime;
+
+	bool anyVehicleDemand = false;
+	for (size_t i = 0; i < _arms.size(); ++i)
+		anyVehicleDemand = anyVehicleDemand || HasArmDemand(i);
+
+	switch (_phase)
+	{
+	case Phase::Green:
+	{
+		// Someone else waiting? Otherwise rest on green - no reason to stop the
+		// only traffic there is.
+		bool othersWaiting = HasPedestrianDemand();
+		for (size_t i = 0; i < _arms.size() && !othersWaiting; ++i)
+			othersWaiting = i != _stageIndex && HasArmDemand(i);
+		const bool maxedOut = _phaseTimer >= std::max(_greenSeconds, kMinGreenSeconds);
+		// Gap-out: this approach has emptied - hand over early.
+		const bool gappedOut = _phaseTimer >= kMinGreenSeconds && !HasArmDemand(_stageIndex);
+		if (othersWaiting && (maxedOut || gappedOut))
+		{
+			_phase = _amberSeconds > 0.0f ? Phase::Amber : Phase::AllRed;
+			_phaseTimer = 0.0f;
+		}
+		break;
+	}
+	case Phase::Amber:
+		if (_phaseTimer >= _amberSeconds)
+		{
+			_phase = Phase::AllRed;
+			_phaseTimer = 0.0f;
+		}
+		break;
+	case Phase::AllRed:
+		if (_phaseTimer >= _allRedSeconds)
+			StartNextStage();
+		break;
+	case Phase::Walk:
+		// Keep walking while no car wants the junction.
+		if (_phaseTimer >= _pedestrianWalkSeconds && anyVehicleDemand)
+		{
+			_phase = Phase::Clear;
+			_phaseTimer = 0.0f;
+		}
+		break;
+	case Phase::Clear:
+		if (_phaseTimer >= _pedestrianClearSeconds)
+			StartNextStage();
+		break;
+	case Phase::Idle:
+		StartNextStage();
+		break;
+	}
 }
 
 float TrafficSignalControllerComponent::ComputeVehicleSpeedCap(const math::Vector3& position, const math::Vector3& heading,
@@ -240,8 +358,9 @@ float TrafficSignalControllerComponent::ComputeVehicleSpeedCap(const math::Vecto
 		math::Vector3 rel = position - centre;
 		rel.y = 0.0f;
 
-		for (char arm : controller->_arms)
+		for (size_t armIndex = 0; armIndex < controller->_arms.size(); ++armIndex)
 		{
+			const char arm = controller->_arms[armIndex];
 			math::Vector3 outward;
 			if (!controller->GetArmOutward(arm, outward))
 				continue;
@@ -260,7 +379,15 @@ float TrafficSignalControllerComponent::ComputeVehicleSpeedCap(const math::Vecto
 			if (distanceToLine < -kStopMargin || distanceToLine > kLookAhead)
 				continue;
 
+			// This vehicle wants this arm: report demand (actuated signals).
+			if (armIndex < controller->_armDemandTime.size())
+				controller->_armDemandTime[armIndex] = controller->_clock;
+
 			const SignalState state = controller->GetArmState(arm);
+			// Held at red (stopping, not just passing through on amber): the wait starts.
+			if (state == SignalState::Red && armIndex < controller->_armWaitSince.size() && controller->_armWaitSince[armIndex] < 0.0f &&
+				distanceToLine < 15.0f && speed < 2.0f)
+				controller->_armWaitSince[armIndex] = controller->_clock;
 			if (state == SignalState::Green)
 				continue;
 
@@ -310,7 +437,14 @@ bool TrafficSignalControllerComponent::IsPedestrianStepAllowed(const math::Vecto
 			const bool startsAtA = HorizontalDistanceSq(from, crossing.a) <= kAtEndSq && HorizontalDistanceSq(to, crossing.b) <= kNextEndSq;
 			const bool startsAtB = HorizontalDistanceSq(from, crossing.b) <= kAtEndSq && HorizontalDistanceSq(to, crossing.a) <= kNextEndSq;
 			if (startsAtA || startsAtB)
-				return controller->IsPedestrianWalk();
+			{
+				if (controller->IsPedestrianWalk())
+					return true;
+				controller->_pedDemandTime = controller->_clock;	// press the button
+				if (controller->_pedWaitSince < 0.0f)
+					controller->_pedWaitSince = controller->_clock;
+				return false;
+			}
 		}
 	}
 	return true;

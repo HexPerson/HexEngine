@@ -117,6 +117,7 @@
     <ClCompile Include="Environment\IEnvironment.cpp" />
     <ClCompile Include="Environment\Profiler.cpp" />
     <ClCompile Include="FileSystem\SceneSaveFile.cpp" />
+    <ClCompile Include="FileSystem\GameStateSave.cpp" />
     <ClCompile Include="Graphics\BlurEffect.cpp" />
     <ClCompile Include="Graphics\GBuffer.cpp" />
     <ClCompile Include="Graphics\Material.cpp" />
@@ -133,6 +134,7 @@
     <ClCompile Include="Input\InputSystem.cpp" />
     <ClCompile Include="Environment\LogFile.cpp" />
     <ClCompile Include="Environment\TimeManager.cpp" />
+    <ClCompile Include="Environment\TransitPlayerState.cpp" />
     <ClCompile Include="FileSystem\FileSystem.cpp" />
     <ClCompile Include="FileSystem\DiskFile.cpp" />
     <ClCompile Include="FileSystem\KeyValues.cpp" />
@@ -146,6 +148,9 @@
     <ClCompile Include="Math\FloatMath.cpp" />
     <ClCompile Include="Graphics\IInputLayout.cpp" />
     <ClCompile Include="Scene\DiffuseGI.cpp" />
+    <ClCompile Include="Scene\DDGI.cpp" />
+    <ClCompile Include="Scene\RtScene.cpp" />
+    <ClCompile Include="Graphics\GpuProfiler.cpp" />
     <ClCompile Include="Scene\GpuVisibilityCulling.cpp" />
     <ClCompile Include="Graphics\GpuSkinning.cpp" />
     <ClCompile Include="Graphics\OffscreenRenderHooks.cpp" />
@@ -164,6 +169,7 @@
     <ClCompile Include="Utility\MemoryManager.cpp" />
     <ClCompile Include="Entity\Component\DecalComponent.cpp" />
     <ClCompile Include="Entity\Component\NavMeshBlockingVolume.cpp" />
+    <ClCompile Include="Entity\Component\TerrainCutout.cpp" />
     <ClCompile Include="Entity\Component\PlayerStartComponent.cpp" />
     <ClCompile Include="FileSystem\MemoryFile.cpp" />
     <ClCompile Include="Graphics\DiffuseGIAOProvider.cpp" />
@@ -277,6 +283,7 @@
     <ClInclude Include="Entity\Component\Camera.hpp" />
     <ClInclude Include="Entity\Component\Collider.hpp" />
     <ClInclude Include="Entity\Component\ComponentTypes.hpp" />
+    <ClInclude Include="Entity\Component\ComponentSignature.hpp" />
     <ClInclude Include="Graphics\BlurEffect.hpp" />
     <ClInclude Include="Graphics\MaterialLoader.hpp" />
     <ClInclude Include="HexEngine.hpp" />
@@ -310,6 +317,7 @@
     <ClInclude Include="Environment\IGameExtension.hpp" />
     <ClInclude Include="Environment\Profiler.hpp" />
     <ClInclude Include="FileSystem\SceneSaveFile.hpp" />
+    <ClInclude Include="FileSystem\GameStateSave.hpp" />
     <ClInclude Include="Graphics\GBuffer.hpp" />
     <ClInclude Include="Graphics\IFontResource.hpp" />
     <ClInclude Include="Graphics\IFontImporter.hpp" />
@@ -328,6 +336,7 @@
     <ClInclude Include="Input\InputSystem.hpp" />
     <ClInclude Include="Environment\LogFile.hpp" />
     <ClInclude Include="Environment\TimeManager.hpp" />
+    <ClInclude Include="Environment\TransitPlayerState.hpp" />
     <ClInclude Include="FileSystem\FileSystem.hpp" />
     <ClInclude Include="FileSystem\DiskFile.hpp" />
     <ClInclude Include="FileSystem\IFile.hpp" />
@@ -358,6 +367,9 @@
     <ClInclude Include="Reflection\IObject.hpp" />
     <ClInclude Include="Required.hpp" />
     <ClInclude Include="Scene\DiffuseGI.hpp" />
+    <ClInclude Include="Scene\DDGI.hpp" />
+    <ClInclude Include="Scene\RtScene.hpp" />
+    <ClInclude Include="Graphics\GpuProfiler.hpp" />
     <ClInclude Include="Scene\GpuVisibilityCulling.hpp" />
     <ClInclude Include="Graphics\GpuSkinning.hpp" />
     <ClInclude Include="Graphics\OffscreenRenderHooks.hpp" />
@@ -382,6 +394,7 @@
     <ClInclude Include="Utility\MemoryManager.hpp" />
     <ClInclude Include="Entity\Component\DecalComponent.hpp" />
     <ClInclude Include="Entity\Component\NavMeshBlockingVolume.hpp" />
+    <ClInclude Include="Entity\Component\TerrainCutout.hpp" />
     <ClInclude Include="Entity\Component\PlayerStartComponent.hpp" />
     <ClInclude Include="FileSystem\MemoryFile.hpp" />
     <ClInclude Include="Graphics\DiffuseGIAOProvider.hpp" />

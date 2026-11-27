@@ -109,6 +109,18 @@ namespace HexEngine
 		CompiledClip&		GetCompiledClip(uint32_t clipIndex);
 		void				CompileClip(CompiledClip& clip, const Animation* anim);
 		int32_t				ResolveRootMotionNode(CompiledClip& clip);
+		// Sends an AnimationEventMessage to the entity for each of the clip's events
+		// passed since the last call (handles the loop wrap; a clip change/restart
+		// re-anchors without firing).
+		void				FireClipEvents(uint32_t clipIndex, float ticks);
+		uint32_t			_eventClip = (uint32_t)-1;
+		std::unordered_map<std::string, math::Matrix> _physicsPose;
+		float				_physicsWeight = 0.0f;
+		float				_physicsFreezeSeconds = 0.0f;
+		int32_t				_lastEvalClip = -1;
+		math::Matrix		_lastEvalRoot;
+		float				_eventPrevTicks = 0.0f;
+		float				_eventStartTime = -1.0f;
 
 
 
@@ -120,6 +132,16 @@ namespace HexEngine
 		// The clip the component is settling on: the crossfade target while a
 		// blend is in flight, else the current clip.
 		uint32_t			GetTargetAnimationIndex() const { return _nextAnimIndex != (uint32_t)-1 ? _nextAnimIndex : _animIndex; }
+
+		// One-shot clips (sit down, stand up, ...). Every clip normally loops on the
+		// component's shared clock, so a transition would start at an arbitrary frame.
+		// PlayOneShot crossfades to `idx` from ITS first frame and then holds its last
+		// frame until another clip is requested. Elapsed is seconds since the call.
+		void				PlayOneShot(uint32_t idx);
+		bool				IsPlayingOneShot(uint32_t idx) const { return _oneShotClip == idx && GetTargetAnimationIndex() == idx; }
+		float				GetOneShotElapsed() const;
+		// Clip length in seconds (0 for an unknown index).
+		float				GetClipLengthSeconds(uint32_t idx) const;
 
 		// Root motion: when enabled, ReadNodeHierarchy strips the root bone's
 		// translation from the skeleton each frame and accumulates the per-
@@ -141,6 +163,19 @@ namespace HexEngine
 		// frame in Update(); equals the current pose before the first advance, and whenever
 		// the animation didn't move, which correctly yields zero deformation velocity.
 		const std::array<math::Matrix, MAX_BONES>& GetBoneTransformArrayPrev() const;
+
+		// ---- Ragdoll / physics-driven pose ------------------------------------------
+		// A node's frame in the ENTITY's local space (SimpleMath row convention) as
+		// of the last evaluated pose. False if the node isn't in the clip.
+		bool				GetNodeEntityFrame(const std::string& nodeName, math::Matrix& out) const;
+		// Drive named nodes from outside (a ragdoll): each frame is the node's
+		// entity-local frame (row convention, scale included). Their children keep
+		// their animated local pose on top. `weight` blends animation (0) to the
+		// given frames (1). The clip clock freezes while a physics pose is set, so
+		// the unsimulated bones don't keep walking. An empty map turns it off.
+		void				SetPhysicsPose(const std::unordered_map<std::string, math::Matrix>& frames, float weight);
+		void				ClearPhysicsPose();
+		bool				HasPhysicsPose() const { return !_physicsPose.empty(); }
 
 		// anim_stats telemetry: AnimatedMesh reports its per-draw bone uploads here so
 		// pose cost and upload cost are logged side by side.
@@ -207,5 +242,9 @@ namespace HexEngine
 		bool			_hasLastRootBonePosition = false;
 		math::Vector3	_rootMotionDelta = math::Vector3::Zero;
 		std::string		_rootBoneName;
+
+		// PlayOneShot (runtime, appended last so earlier member offsets don't move).
+		uint32_t		_oneShotClip = (uint32_t)-1;
+		float			_oneShotStart = 0.0f;
 	};
 }

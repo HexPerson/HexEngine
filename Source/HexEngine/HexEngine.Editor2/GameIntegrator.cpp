@@ -6,6 +6,7 @@
 #include <HexEngine.Core\Entity\Component\RigidBody.hpp>
 #include <HexEngine.Core\Environment\LogFile.hpp>
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
+#include <HexEngine.Core\FileSystem\GameStateSave.hpp>
 
 #include <array>
 #include <chrono>
@@ -609,6 +610,28 @@ namespace HexEditor
 		if (fs::exists(engineAssetsSrc))
 		{
 			ok &= copyFileWithLog(engineAssetsSrc, engineAssetsDst);
+
+			// The package's integrity sidecar has to travel with it. A package
+			// copied without it kept whatever .hashmanifest an EARLIER export
+			// left in the destination - a different hash - and the shipped game
+			// refused to load its engine assets (VerifyPackageIntegrity false).
+			fs::path manifestSrc = engineAssetsSrc;
+			manifestSrc += L".hashmanifest";
+			fs::path manifestDst = engineAssetsDst;
+			manifestDst += L".hashmanifest";
+			std::error_code ec;
+			if (fs::exists(manifestSrc, ec))
+			{
+				ok &= copyFileWithLog(manifestSrc, manifestDst);
+			}
+			else if (fs::exists(manifestDst, ec))
+			{
+				// Source is unsigned: a leftover sidecar would describe some
+				// other package, so drop it (an unsigned package still loads).
+				fs::remove(manifestDst, ec);
+				LOG_WARN("DeployEngineBinaries: EngineAssets.pkg has no .hashmanifest; removed the stale one at '%S'",
+					manifestDst.wstring().c_str());
+			}
 		}
 		else
 		{
@@ -743,6 +766,9 @@ namespace HexEditor
 
 		_gameExtension->OnStopGame();
 		HexEngine::g_pEnv->SetGameRunning(false);
+		// The game's save baseline and Esc claim belong to this play session.
+		HexEngine::GameStateSave::ClearBaseline();
+		HexEngine::g_pEnv->_inputSystem->SetGameOwnsEscape(false);
 
 		// Restore the whole scene to its authored state first (undoes door swings,
 		// physics displacement, the camera spawn move, any runtime field changes,
@@ -815,6 +841,23 @@ namespace HexEditor
 				{
 					if (auto* existing = s->GetEntityByName(name); existing != nullptr)
 					{
+						// Entity::Deserialize only ORs saved flags in, so a flag play SET
+						// (DoNotRender on an agent hidden at work / in a car) survived the
+						// stop - and a scene save afterwards baked hidden residents, cars
+						// and bone attachments into the level. Clear the authored bits the
+						// snapshot doesn't have; Deserialize ORs the rest back.
+						if (auto f = data.find("flags"); f != data.end() && f->is_number_integer())
+						{
+							using HexEngine::EntityFlags;
+							const EntityFlags kAuthored = EntityFlags::DoNotSave | EntityFlags::DoNotBlockNavMesh |
+								EntityFlags::DoNotRender | EntityFlags::ExcludeFromHLOD | EntityFlags::DoNotPickInEditor |
+								EntityFlags::DoNotCastShadows;
+							const EntityFlags snap = static_cast<EntityFlags>(f->get<int32_t>());
+							const EntityFlags drop = existing->GetFlags() & kAuthored & ~snap;
+							if (drop != EntityFlags::None)
+								existing->ClearFlags(drop);
+						}
+
 						const auto compareStart = std::chrono::steady_clock::now();
 						struct AddElapsed { double& ms; std::chrono::steady_clock::time_point t; ~AddElapsed() { ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); } } addElapsed{ compareMs, compareStart };
 						// Only re-deserialise components that play actually changed.

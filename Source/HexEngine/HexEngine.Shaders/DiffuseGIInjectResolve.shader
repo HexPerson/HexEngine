@@ -167,7 +167,15 @@
 			neighbourRadiance += g_prevVoxelRadiance[clamp(p + int3(0, 0, 1), int3(0, 0, 0), maxP)].rgb;
 			neighbourRadiance += g_prevVoxelRadiance[clamp(p + int3(0, 0, -1), int3(0, 0, 0), maxP)].rgb;
 			neighbourRadiance *= (1.0f / 6.0f);
-			injected += neighbourRadiance * injAlbedo * (g_giParams6.z * 1.5f);
+			// This is a FEEDBACK loop (each update re-injects last update's
+			// neighbours), so its gain - coefficient x albedo - must stay well
+			// below 1. At r_giSecondBounce 1.37 the coefficient was 2.06: bright
+			// walls amplified each other until the luminance clamp, light crawled
+			// voxel-by-voxel away from its source, and every camera move (shift,
+			// snap) restarted a ~5 s overshoot-and-settle. Cap the coefficient so
+			// even albedo 1 converges.
+			const float bounceCoeff = min(g_giParams6.z * 1.5f, 0.85f);
+			injected += neighbourRadiance * injAlbedo * bounceCoeff;
 		}
 
 		// Light temporal blend. The injection target is deterministic per

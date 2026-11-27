@@ -40,10 +40,16 @@ namespace HexEngine
 		// capacity, 4x the texels per light. Keep the shader-side constants
 		// in ClusterLightApply.shader and VolumetricScatterDensity.shader in
 		// sync with these.
+		// These are the SPOT atlas defaults. The point-light atlas is a second
+		// instance created with smaller tiles (kPointAtlasSize / kPointTileSize):
+		// a point needs six faces, so at 2048 only two would fit.
 		static constexpr int32_t kAtlasSize = 8192;
 		static constexpr int32_t kTileSize = 2048;
 		static constexpr int32_t kTilesPerRow = kAtlasSize / kTileSize;
 		static constexpr int32_t kTileCount = kTilesPerRow * kTilesPerRow;
+		static constexpr int32_t kPointAtlasSize = 8192;
+		static constexpr int32_t kPointTileSize = 1024;
+		static constexpr int32_t kPointTileCount = (kPointAtlasSize / kPointTileSize) * (kPointAtlasSize / kPointTileSize);
 
 		struct FaceKey
 		{
@@ -85,8 +91,13 @@ namespace HexEngine
 			bool needsRender = false;   // false = cached content is still valid
 		};
 
-		bool Create();
+		bool Create(int32_t atlasSize = kAtlasSize, int32_t tileSize = kTileSize);
 		void Destroy();
+
+		int32_t GetAtlasSize() const { return _atlasSize; }
+		int32_t GetTileSize() const { return _tileSize; }
+		int32_t GetTilesPerRow() const { return _tilesPerRow; }
+		int32_t GetTileCount() const { return _tileCount; }
 
 		/**
 		 * Assign atlas tiles for this frame's shadow-casting lights.
@@ -134,11 +145,14 @@ namespace HexEngine
 
 		ID3D11Texture2D* _atlas = nullptr;
 		ID3D11ShaderResourceView* _atlasSrv = nullptr;
-		// One DSV per tile so a face renders with a plain viewport+DSV bind and
-		// no scissor bookkeeping in the mesh path.
-		ID3D11DepthStencilView* _tileDsvs[kTileCount] = {};
+		// ONE DSV over the whole atlas; tiles are carved with viewports.
+		ID3D11DepthStencilView* _dsv = nullptr;
 
-		Tile _tiles[kTileCount];
+		int32_t _atlasSize = kAtlasSize;
+		int32_t _tileSize = kTileSize;
+		int32_t _tilesPerRow = kTilesPerRow;
+		int32_t _tileCount = kTileCount;
+		std::vector<Tile> _tiles;
 		std::vector<FaceAssignment> _assignments;
 		uint64_t _frame = 0;
 	};

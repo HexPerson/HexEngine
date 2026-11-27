@@ -26,21 +26,28 @@ namespace HexEngine
 
 	void SpotLight::SetDoesCastShadows(bool enabled)
 	{
-		if (enabled)
-		{
-			// Directional light only requires one shadow map
-			//
-
-			_shadowMaps[0] = new ShadowMap(SpotLightShadowMapResolution, SpotLightShadowMapResolution);
-
-			_shadowMaps[0]->Create();
-		}
-		else
-		{
+		// The dedicated map (4 MB) is only needed when this spot renders on the
+		// legacy path (atlas off, or no atlas tile content yet) - allocated on
+		// demand by EnsureShadowMaps. Allocating here leaked the previous map on
+		// every re-enable and cost ~480 MB for a street of 120 lamps.
+		if (!enabled)
 			SAFE_DELETE(_shadowMaps[0]);
-		}
 
 		Light::SetDoesCastShadows(enabled);
+	}
+
+	void SpotLight::EnsureShadowMaps()
+	{
+		if (_doesCastShadows && _shadowMaps[0] == nullptr)
+		{
+			_shadowMaps[0] = new ShadowMap(SpotLightShadowMapResolution, SpotLightShadowMapResolution);
+			_shadowMaps[0]->Create();
+		}
+	}
+
+	void SpotLight::ReleaseDedicatedShadowMaps()
+	{
+		SAFE_DELETE(_shadowMaps[0]);
 	}
 
 	float SpotLight::GetConeSize() const

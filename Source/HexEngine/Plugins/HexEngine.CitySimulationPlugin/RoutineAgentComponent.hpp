@@ -22,12 +22,17 @@ enum class RoutineExecutionState
 	ExecuteTask,
 	ReturnHome,
 	Failed,
+	// Public transport legs (RoutineTravelMode::Transit).
+	WalkToTransitStop,
+	WaitForTransit,
+	RideTransit,
 };
 
 enum class RoutineTravelMode
 {
 	DriveFirst,
 	WalkOnly,
+	Transit,	// walk to a stop, ride a TransitLine, walk the rest
 };
 
 // How an agent picks between walking and driving for a trip.
@@ -65,6 +70,10 @@ struct RoutineTaskSpec
 	bool preemptive = false;
 	bool autoResolveOnArrival = true;
 	uint32_t incidentId = 0;
+	// Transit trips: the line entity and the stop entities to board / alight at.
+	std::string transitLine;
+	std::string transitBoardStop;
+	std::string transitAlightStop;
 };
 
 class RoutineAgentComponent : public HexEngine::UpdateComponent, public HexEngine::IRoutineAgentState
@@ -149,6 +158,30 @@ public:
 	virtual void SetConversationPaused(bool paused) override;
 	virtual bool IsConversationPaused() const override { return _conversationPaused; }
 	virtual bool WorkplaceOffersService(const std::string& tag) const override;
+	virtual bool IsScheduledAtPost(float hour) const override;
+
+	// Public transport (runtime). The routine system walks the agent to the stop
+	// (ToStop) and queues it there (Waiting); an arriving vehicle calls it to the
+	// door (Boarding), takes it aboard (Riding) and lets it off (Alighted).
+	enum class TransitPhase : int32_t
+	{
+		None = 0,
+		ToStop,
+		Waiting,
+		Boarding,
+		Riding,
+		Alighted,
+	};
+	TransitPhase GetTransitPhase() const { return _transitPhase; }
+	void SetTransitPhase(TransitPhase phase) { _transitPhase = phase; _transitPhaseTime = 0.0f; _transitWalkIssued = false; }
+	float& TransitPhaseTimeRef() { return _transitPhaseTime; }
+	bool IsTransitWalkIssued() const { return _transitWalkIssued; }
+	void SetTransitWalkIssued(bool issued) { _transitWalkIssued = issued; }
+	const std::string& GetTransitVehicleName() const { return _transitVehicleName; }
+	void SetTransitVehicleName(const std::string& name) { _transitVehicleName = name; }
+	void SetTransitBoardTarget(const math::Vector3& door, const std::string& alightStop) { _transitDoor = door; _transitAlightStop = alightStop; }
+	const math::Vector3& GetTransitDoor() const { return _transitDoor; }
+	const std::string& GetTransitAlightStop() const { return _transitAlightStop; }
 
 private:
 	void RebuildRoleTags();
@@ -185,4 +218,10 @@ private:
 	std::string _settledVenueName;	// runtime
 	bool _heldAtVenue = false;		// runtime
 	bool _conversationPaused = false;	// runtime
+	TransitPhase _transitPhase = TransitPhase::None;	// runtime
+	float _transitPhaseTime = 0.0f;
+	bool _transitWalkIssued = false;
+	std::string _transitVehicleName;
+	std::string _transitAlightStop;
+	math::Vector3 _transitDoor = math::Vector3::Zero;
 };

@@ -1,7 +1,9 @@
 
 
 #include "Scene.hpp"
+#include "../Physics/PhysUtils.hpp"
 #include "../HexEngine.hpp"
+#include "../Entity/Component/SkeletalAnimationComponent.hpp"
 #include "NetworkReplicationSystem.hpp"
 #include <algorithm>
 #include <chrono>
@@ -11,11 +13,13 @@
 
 #include "../Entity/Component/Transform.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
+#include "../Entity/Component/InteractionComponent.hpp"
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/FirstPersonCameraController.hpp"
 #include "../Entity/Component/InstancedStaticMeshComponent.hpp"
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
+#include "../Entity/Component/TerrainCutout.hpp"
 #include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "PVS.hpp"
 #include "../Physics/RayMath.hpp"
@@ -354,7 +358,9 @@ namespace HexEngine
 
 		if (geometryChanged)
 		{
-			++_giGeometryRevision;
+			// Resolved at the end of the frame (ProcessPendingGiMeshes): only bumps
+			// the GI geometry revision if this mesh is / was part of the GI world.
+			_giPendingMeshes[component] = true;
 			_giSpatialCacheDirty = true;
 			if (auto* entity = component->GetEntity())
 				RecordShadowDirty(entity);
@@ -370,9 +376,10 @@ namespace HexEngine
 		if (r_giLogInvalidations._val.b && (geometryChanged || materialChanged))
 		{
 			auto* entity = component->GetEntity();
-			LOG_INFO("GI %s%sRev bump (mesh '%s')",
+			LOG_INFO("GI %s%sRev %s (mesh '%s')",
 				geometryChanged ? "geom" : "",
 				materialChanged ? (geometryChanged ? "+mat" : "mat") : "",
+				geometryChanged ? "check queued" : "bump",
 				entity != nullptr ? entity->GetName().c_str() : "<null>");
 		}
 	}
@@ -475,7 +482,7 @@ namespace HexEngine
 		// cheap enough to run at a THROTTLED cadence while the mesh moves -
 		// its GI pose lags a few frames, but its light never disappears.
 		if (auto* staticMesh = entity->GetComponent<StaticMeshComponent>();
-			staticMesh != nullptr && staticMesh->GetMesh() != nullptr && !staticMesh->GetExcludeFromGI())
+			staticMesh != nullptr && staticMesh->GetMesh() != nullptr && !staticMesh->GetExcludeFromGI() && staticMesh->GetGiCounted())
 		{
 			constexpr uint64_t kMovingRebakeFrames = 4ull;
 			auto it = _giMovingMeshes.find(staticMesh);
@@ -518,6 +525,49 @@ namespace HexEngine
 				LOG_INFO("GI lightRev bump -> %llu (light entity moved '%s')",
 					(unsigned long long)_giLightRevision, entity->GetName().c_str());
 		}
+	}
+
+	bool Scene::IsGiContributor(StaticMeshComponent* smc) const
+	{
+		if (smc == nullptr || smc->GetMesh() == nullptr || smc->GetExcludeFromGI() || smc->IsGiMotionExcluded())
+			return false;
+		Entity* entity = smc->GetEntity();
+		if (entity == nullptr || entity->IsPendingDeletion() || entity->GetLayer() == Layer::Sky)
+			return false;
+		if (smc->IsBoundToBone() || entity->HasA<SkeletalAnimationComponent>())
+			return false;   // characters: see DiffuseGI IsGiCharacterMesh
+		if (entity->HasFlag(EntityFlags::DoNotRender) && !smc->GetIncludeInGIWhenHidden())
+			return false;
+		return true;
+	}
+
+	void Scene::ProcessPendingGiMeshes()
+	{
+		// Caller (Scene::Update) holds _lock.
+		if (_giPendingMeshes.empty())
+			return;
+		uint32_t changed = 0;
+		const char* firstName = nullptr;
+		for (const auto& [smc, geometryChanged] : _giPendingMeshes)
+		{
+			const bool contributes = IsGiContributor(smc);
+			if (contributes != smc->GetGiCounted() || (geometryChanged && contributes))
+			{
+				++changed;
+				if (firstName == nullptr && smc->GetEntity() != nullptr)
+					firstName = smc->GetEntity()->GetName().c_str();
+			}
+			smc->SetGiCounted(contributes);
+		}
+		_giPendingMeshes.clear();
+		if (changed == 0)
+			return;
+		++_giGeometryRevision;
+		++_giMaterialRevision;
+		_giSpatialCacheDirty = true;
+		if (r_giLogInvalidations._val.b)
+			LOG_INFO("GI geomRev bump -> %llu (%u mesh(es) added/changed, e.g. '%s')",
+				(unsigned long long)_giGeometryRevision, changed, firstName != nullptr ? firstName : "?");
 	}
 
 	void Scene::UpdateGiMotionDebounce()
@@ -1056,7 +1106,7 @@ namespace HexEngine
 		// DoNotSave, ...) onto the clone - CloneEntity previously copied only the layer,
 		// so these were lost on prefab spawn / duplicate. Strip the editor-only
 		// selection flag so clones aren't born selected (matches Entity::Deserialize).
-		clone->SetFlag(entity->GetFlags() & ~(EntityFlags::SelectedInEditor | EntityFlags::IsPendingRemoval));
+		clone->SetFlag(entity->GetFlags() & ~(EntityFlags::SelectedInEditor | EntityFlags::IsPendingRemoval | EntityFlags::RepresentedByHLOD));
 		if (entity->IsPrefabInstance())
 		{
 			clone->SetPrefabSource(entity->GetPrefabSourcePath(), entity->GetPrefabRootEntityName(), entity->IsPrefabInstanceRoot());
@@ -1229,6 +1279,19 @@ namespace HexEngine
 
 	void Scene::FlushPVS(Entity* entity, bool remove)
 	{
+		if (entity == nullptr)
+			return;
+		if (!remove)
+		{
+			std::lock_guard<std::mutex> guard(_pvsFlushMutex);
+			_pvsFlushQueue.emplace_back(entity, entity->GetId());
+			return;
+		}
+		{
+			std::lock_guard<std::mutex> guard(_pvsFlushMutex);
+			std::erase_if(_pvsFlushQueue, [entity](const auto& e) { return e.first == entity; });
+		}
+
 		if (remove && g_pEnv->_sceneRenderer != nullptr)
 			g_pEnv->_sceneRenderer->FlushRainOcclusionEntity(entity);
 
@@ -1280,17 +1343,83 @@ namespace HexEngine
 		flushLights(PointLight::_GetComponentId());
 	}
 
+	void Scene::FlushPendingPVS()
+	{
+		std::vector<std::pair<Entity*, EntityId>> queued;
+		{
+			std::lock_guard<std::mutex> guard(_pvsFlushMutex);
+			queued.swap(_pvsFlushQueue);
+		}
+		if (queued.empty())
+			return;
+
+		std::vector<Entity*> entities;
+		entities.reserve(queued.size());
+		for (const auto& [entity, id] : queued)
+		{
+			if (TryGetEntity(id) != entity || entity->IsPendingDeletion())
+				continue;
+			if (std::find(entities.begin(), entities.end(), entity) == entities.end())
+				entities.push_back(entity);
+		}
+		if (entities.empty())
+			return;
+
+		for (auto& camera : _cameras)
+			camera->GetPVS()->AddEntities(entities);
+
+		// Every shadow-casting light keeps its own PVS (see the remove path in
+		// FlushPVS); a light never flushes itself.
+		auto flushLights = [&](ComponentId componentId)
+		{
+			const auto* pool = TryGetComponentPool(componentId);
+			if (pool == nullptr)
+				return;
+			for (uint32_t i = 0; i < pool->components.size(); ++i)
+			{
+				auto* light = pool->components[i] != nullptr ? pool->components[i]->CastAs<Light>() : nullptr;
+				if (light == nullptr || !light->GetDoesCastShadows())
+					continue;
+				std::vector<Entity*> forLight;
+				forLight.reserve(entities.size());
+				for (auto* e : entities)
+					if (e != light->GetEntity())
+						forLight.push_back(e);
+				for (auto c = 0; c < light->GetMaxSupportedShadowCascades(); ++c)
+					if (auto* pvs = light->GetPVS(c); pvs != nullptr)
+						pvs->AddEntities(forLight);
+			}
+		};
+		flushLights(DirectionalLight::_GetComponentId());
+		flushLights(SpotLight::_GetComponentId());
+		flushLights(PointLight::_GetComponentId());
+	}
+
 	void Scene::OnGUI()
 	{
 		if (_mainCamera)
 		{
 			std::unique_lock lock(_lock);
 
+			// The interactable being looked at draws its name/prompt from OnGUI. A
+			// multi-part object (a vehicle prefab = an empty root holding the
+			// interaction, mesh parts as children) has no renderable on the root,
+			// so the PVS loop below never reaches it - call it directly instead.
+			Entity* focused = nullptr;
+			if (auto* ic = InteractionComponent::GetFocused(); ic != nullptr && ic->GetEntity() != nullptr &&
+				ic->GetEntity()->GetScene() == this && ic->GetEntity()->GetComponent<StaticMeshComponent>() == nullptr)
+			{
+				focused = ic->GetEntity();
+				focused->OnGUI();
+			}
+
 			for (auto& renderable : _mainCamera->GetPVS()->GetRenderables())
 			{
 				for (auto& tuple : renderable.second)
 				{
 					auto ent = std::get<1>(tuple);
+					if (ent == focused)
+						continue;
 
 					ent->OnGUI();
 				}
@@ -1556,8 +1685,9 @@ namespace HexEngine
 
 		if (component->GetComponentId() == StaticMeshComponent::_GetComponentId())
 		{
-			++_giGeometryRevision;
-			++_giMaterialRevision;
+			// GI revision: resolved at the end of the frame (ProcessPendingGiMeshes),
+			// so a spawner can flag its transient meshes ExcludeFromGI first.
+			_giPendingMeshes[component->CastAs<StaticMeshComponent>()] = true;
 			_giSpatialCacheDirty = true;
 			// Incremental, NOT a dirty flag: transient per-frame helper entities
 			// add/remove mesh components constantly, and a dirty flag here meant
@@ -1567,6 +1697,7 @@ namespace HexEngine
 		else if (component->CastAs<Light>() != nullptr)
 		{
 			++_giLightRevision;
+			++_lightSetRevision;
 		}
 
 		for (auto&& listener : _entityListeners)
@@ -1642,8 +1773,15 @@ namespace HexEngine
 			// Drop from the GI motion-debounce set so the sweep never touches a
 			// destroyed component (pointers here are erased before the mesh dies).
 			_giMovingMeshes.erase(component->CastAs<StaticMeshComponent>());
-			++_giGeometryRevision;
-			++_giMaterialRevision;
+			_giPendingMeshes.erase(component->CastAs<StaticMeshComponent>());
+			if (component->CastAs<StaticMeshComponent>()->GetGiCounted())
+			{
+				++_giGeometryRevision;
+				++_giMaterialRevision;
+				if (r_giLogInvalidations._val.b)
+					LOG_INFO("GI geomRev bump -> %llu (mesh removed '%s')", (unsigned long long)_giGeometryRevision,
+						component->GetEntity() != nullptr ? component->GetEntity()->GetName().c_str() : "?");
+			}
 			_giSpatialCacheDirty = true;
 			// Incremental tombstone (see the add-side comment).
 			RemovePvsSpatialEntry_NoLock(component->CastAs<StaticMeshComponent>());
@@ -1660,6 +1798,7 @@ namespace HexEngine
 		else if (component->CastAs<Light>() != nullptr)
 		{
 			++_giLightRevision;
+			++_lightSetRevision;
 		}
 		MarkEntityViewDirty();
 
@@ -1782,6 +1921,7 @@ namespace HexEngine
 
 		// Re-bake GI meshes that have stopped moving (see NotifyEntityTransformChanged).
 		UpdateGiMotionDebounce();
+		ProcessPendingGiMeshes();
 
 		_insideEntityIteration = true;
 		
@@ -1798,11 +1938,33 @@ namespace HexEngine
 
 				if (updateComponent->CanUpdate())
 				{
-					float timeOffset = updateComponent->GetTickRate() > 1 ? g_pEnv->_timeManager->_currentTime - updateComponent->GetLastUpdateTime() : 0.0f;
-					updateComponent->Update(frameTime + timeOffset);
+					// A component ticking every N frames gets the GAME time since its
+					// last update (scaled, and zero across a pause). It used to get
+					// frameTime + the REAL time since then: through any pause (day-end
+					// tally, home computer, menus) the city routine saw time pass while
+					// its walkers stood frozen, declared them stuck and abandoned their
+					// trips. (That sum also counted the current frame twice.)
+					float elapsed = frameTime;
+					if (updateComponent->GetTickRate() > 1)
+					{
+						const float last = updateComponent->GetLastUpdateTime();
+						const float since = (float)(g_pEnv->_timeManager->_gameTime - (double)last);
+						if (last > 0.0f && since >= 0.0f)
+							elapsed = since;	// else the first update: just this frame
+					}
+					updateComponent->Update(elapsed);
 				}
 			}
+
+			for (auto&& component : updateSet)
+			{
+				auto updateComponent = component->CastAs<UpdateComponent>();
+				if (updateComponent != nullptr && updateComponent->WantsPostUpdate())
+					updateComponent->PostUpdate(frameTime);
+			}
 		}
+
+		FlushPendingPVS();
 
 		std::vector<Transform*> transformSet;
 
@@ -2038,7 +2200,7 @@ namespace HexEngine
 			return material->GetBlendState() != BlendState::Opaque;
 		}
 
-		bool PrepareMeshRender(Entity* entity, Mesh* mesh, Material* material, MeshRenderFlags flags, int32_t instanceId, CullingMode shadowCullMode)
+		bool PrepareMeshRender(Entity* entity, Mesh* mesh, Material* material, MeshRenderFlags flags, int32_t instanceId, CullingMode shadowCullMode, bool mirrored = false)
 		{
 			if (!mesh || !material)
 				return false;
@@ -2102,7 +2264,15 @@ namespace HexEngine
 			// the air-side or the Snell's-window shading from the camera depth
 			// (g_oceanConfig3.z), not from the triangle facing.
 			const CullingMode materialCullMode = isWaterMaterial ? CullingMode::NoCulling : material->GetCullMode();
-			graphicsDevice->SetCullingMode(isShadowMap ? shadowCullMode : materialCullMode);
+			// A mirrored instance (negative-determinant world matrix) winds its
+			// triangles the other way round: flip which side gets culled, or its
+			// outside faces are dropped and the inside ones drawn (the see-through
+			// x-scale -1 city bus).
+			CullingMode cullMode = isShadowMap ? shadowCullMode : materialCullMode;
+			if (mirrored)
+				cullMode = cullMode == CullingMode::BackFace ? CullingMode::FrontFace
+					: cullMode == CullingMode::FrontFace ? CullingMode::BackFace : cullMode;
+			graphicsDevice->SetCullingMode(cullMode);
 
 			mesh->UpdateConstantBuffer(entity, math::Matrix::Identity, material, instanceId, isTransparency);
 
@@ -2123,16 +2293,20 @@ namespace HexEngine
 
 			uint32_t slotIdx = graphicsDevice->GetBoundResourceIndex();
 
-			std::vector<ITexture2D*> textures = {
-				material->GetTexture(MaterialTexture::Albedo).get(),
-				disableNormalMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Normal).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Roughness).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Metallic).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Height).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Emission).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Opacity).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::AmbientOcclusion).get()
-			};
+			auto& textures = material->GetCachedTextureArray();
+
+			if (textures.size() == 0)
+			{
+				textures = {
+					material->GetTexture(MaterialTexture::Albedo).get(),
+					disableNormalMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Normal).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Roughness).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Metallic).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Height).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Emission).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Opacity).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::AmbientOcclusion).get()};
+			}
 
 			graphicsDevice->SetTexture2DArray(slotIdx, textures);
 
@@ -2363,6 +2537,11 @@ namespace HexEngine
 		uint32_t skippedGpuCulling = 0;
 		uint32_t skippedFrustumFine = 0;
 		uint32_t drawnInstancesTotal = 0;
+		// World position (GetPosition() is parent-local) for the per-frame HLOD
+		// proxy/source pick - the same camera for the main view and its shadows.
+		const math::Vector3 hlodCameraPos = (GetMainCamera() != nullptr && GetMainCamera()->GetEntity() != nullptr)
+			? GetMainCamera()->GetEntity()->GetWorldTM().Translation()
+			: math::Vector3::Zero;
 
 		if(pvs->DidRebuild())
 		{
@@ -2425,6 +2604,8 @@ namespace HexEngine
 					entry.entity = entity;
 					entry.component = meshComponent;
 					entry.transformVersion = entity->GetTransformVersion();
+					entry.mirrored = entity->GetWorldTM().Determinant() < 0.0f;
+					entry.hlodRole = pvs->ResolveHlodRole(entity, entry.hlodCentre);
 
 					if (entry.isBoundToBone)
 					{
@@ -2635,6 +2816,12 @@ namespace HexEngine
 						}
 					}
 
+					if (renderable.hlodRole != 0 && !HlodEntryDrawsAt(renderable, hlodCameraPos))
+					{
+						skippedLod++;
+						continue;
+					}
+
 					const math::Vector3 objectPosition = renderable.instanceData.worldMatrix.Translation();
 					TransparentRenderItem item;
 					item.material = material;
@@ -2666,7 +2853,7 @@ namespace HexEngine
 					continue;
 
 				instance->Start();
-				if (!PrepareMeshRender(renderable->entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable->shadowCullMode))
+				if (!PrepareMeshRender(renderable->entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable->shadowCullMode, renderable->mirrored))
 				{
 					instance->Finish();
 					skippedPrepareRender++;
@@ -2676,11 +2863,16 @@ namespace HexEngine
 				if (!renderable->isBoundToBone && renderable->component != nullptr && renderable->entity != nullptr)
 				{
 					const uint64_t transformVersion = renderable->entity->GetTransformVersion();
-					if (transformVersion != renderable->transformVersion)
+					const uint64_t frameNow = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0;
+					// Also re-pull on a new frame: the component zeroes the
+					// velocity of an entity that stopped moving, which a
+					// version-only check never saw (stopped vehicles smeared).
+					if (transformVersion != renderable->transformVersion || frameNow != renderable->instanceFrame)
 					{
 						renderable->instanceData = renderable->component->GetCachedInstanceData(material.get());
 						renderable->shadowInstanceData = renderable->component->GetCachedShadowInstanceData();
 						renderable->transformVersion = transformVersion;
+						renderable->instanceFrame = frameNow;
 					}
 				}
 
@@ -2736,6 +2928,7 @@ namespace HexEngine
 				int drawnInstances = 0;
 				MeshInstance* currentInstance = nullptr;
 				MeshInstance* lastInstance = nullptr;
+				bool lastMirrored = false;
 
 				for (auto&& renderable : it->second)
 				{
@@ -2779,7 +2972,7 @@ namespace HexEngine
 						continue;
 					}
 
-					if (currentInstance != lastInstance && lastInstance != nullptr || renderable.hasAnimations)
+					if ((currentInstance != lastInstance || renderable.mirrored != lastMirrored) && lastInstance != nullptr || renderable.hasAnimations)
 					{
 						if (isNormalRender)
 							++_drawCalls;
@@ -2831,6 +3024,13 @@ namespace HexEngine
 					}
 #endif
 
+					// HLOD: the proxy beyond the switch distance, its sources inside it.
+					if (renderable.hlodRole != 0 && !HlodEntryDrawsAt(renderable, hlodCameraPos))
+					{
+						skippedLod++;
+						continue;
+					}
+
 					if (!rendered)
 					{
 						if (isShadowMap)
@@ -2838,7 +3038,7 @@ namespace HexEngine
 						else
 							instance->Start();
 
-						if (PrepareMeshRender(renderable.entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode) == false)
+						if (PrepareMeshRender(renderable.entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode, renderable.mirrored) == false)
 						{
 							LOG_WARN("Failed to prepare mesh render state, ignoring this entity");
 							skippedPrepareRender++;
@@ -2850,6 +3050,7 @@ namespace HexEngine
 					drawnInstances++;
 					drawnInstancesTotal++;
 					lastInstance = currentInstance;
+					lastMirrored = renderable.mirrored;
 
 					// Lazy instance-data refresh: only entries that are actually
 					// drawn AND whose entity moved since they were snapshotted
@@ -2857,11 +3058,14 @@ namespace HexEngine
 					if (!renderable.isBoundToBone && renderable.component != nullptr && renderable.entity != nullptr)
 					{
 						const uint64_t transformVersion = renderable.entity->GetTransformVersion();
-						if (transformVersion != renderable.transformVersion)
+						const uint64_t frameNow = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0;
+						// Re-pull on a new frame too (see the PVS path above).
+						if (transformVersion != renderable.transformVersion || frameNow != renderable.instanceFrame)
 						{
 							renderable.instanceData = renderable.component->GetCachedInstanceData(material.get());
 							renderable.shadowInstanceData = renderable.component->GetCachedShadowInstanceData();
 							renderable.transformVersion = transformVersion;
+							renderable.instanceFrame = frameNow;
 						}
 					}
 
@@ -3107,18 +3311,12 @@ namespace HexEngine
 	bool Scene::GetEntities(const ComponentSignature signature, std::vector<Entity*>& entities)
 	{
 		std::unique_lock lock(_lock);
-		if (signature == 0)
+		if (!signature.Any())
 			return false;
 
-		if ((signature & (signature - 1)) == 0)
+		if (const int32_t single = signature.SingleBitIndex(); single >= 0)
 		{
-			ComponentId componentId = 0;
-			ComponentSignature mask = signature;
-			while ((mask >>= 1) != 0)
-			{
-				++componentId;
-			}
-
+			const ComponentId componentId = (ComponentId)single;
 			if (const auto* pool = TryGetComponentPool(componentId); pool != nullptr)
 			{
 				entities.reserve(entities.size() + pool->owners.size());
@@ -3144,7 +3342,7 @@ namespace HexEngine
 			if (entity == nullptr)
 				continue;
 
-			if ((entity->GetComponentSignature() & signature) != 0)
+			if (entity->GetComponentSignature().Intersects(signature))
 			{
 				entities.push_back(entity);
 			}
@@ -3363,6 +3561,18 @@ namespace HexEngine
 		return GetWaterHeight(position.x, position.z) - position.y;
 	}
 
+	float Scene::GetViewDepthBelowWater(const math::Vector3& eye) const
+	{
+		const float depth = GetDepthBelowWater(eye);
+		if (depth <= 0.0f)
+			return depth;
+		RayHit hit;
+		const math::Ray ray(eye, math::Vector3(0.0f, 1.0f, 0.0f));
+		if (PhysUtils::RayCast(ray, depth + 0.5f, LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit))
+			return -depth;
+		return depth;
+	}
+
 	float Scene::GetWaveAmplitudeBound() const
 	{
 		return OceanWaves::AmplitudeBound(_oceanWaveInputs);
@@ -3412,19 +3622,20 @@ namespace HexEngine
 		{
 			fs::path sidecar = file->GetAbsolutePath();
 			sidecar.replace_extension(L".navmesh");
-			std::ifstream in(sidecar, std::ios::binary | std::ios::ate);
-			if (in.is_open())
+
+			// ReadFileData, not std::ifstream: a packaged scene (GameData.pkg) has a
+			// package path, so a disk read found nothing - and with no navmesh no
+			// routine agent can plan a trip (every NPC stood still in a shipped build).
+			std::vector<uint8_t> bytes;
+			if (!g_pEnv->GetResourceSystem().ReadFileData(sidecar, bytes))
 			{
-				const std::streamsize sz = in.tellg();
-				if (sz > 0)
-				{
-					in.seekg(0);
-					std::vector<uint8_t> bytes((size_t)sz);
-					in.read(reinterpret_cast<char*>(bytes.data()), sz);
-					NavMeshId id = 0;
-					if (g_pEnv->_navMeshProvider->LoadNavMeshFromBytes(this, bytes, &id))
-						SetNavMeshId(id);
-				}
+				LOG_WARN("Scene: navmesh sidecar '%S' not found on disk or in a package - NPCs cannot path.", sidecar.wstring().c_str());
+			}
+			else
+			{
+				NavMeshId id = 0;
+				if (g_pEnv->_navMeshProvider->LoadNavMeshFromBytes(this, bytes, &id))
+					SetNavMeshId(id);
 			}
 		}
 	}
@@ -4093,6 +4304,25 @@ namespace HexEngine
 			NavMeshBlockingBox box;
 			volume->GetWorldFootprint(box);
 			out.push_back(box);
+		}
+	}
+
+	void Scene::GatherTerrainCutouts(std::vector<TerrainCutoutBox>& out)
+	{
+		std::unique_lock lock(_lock);
+
+		const auto* pool = TryGetComponentPool(TerrainCutout::_GetComponentId());
+		if (pool == nullptr)
+			return;
+
+		for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
+		{
+			auto* cutout = static_cast<TerrainCutout*>(pool->components[denseIndex]);
+			if (cutout == nullptr || TryGetEntity(pool->owners[denseIndex]) == nullptr)
+				continue;
+			TerrainCutoutBox box;
+			if (cutout->GetWorldBox(box))
+				out.push_back(box);
 		}
 	}
 

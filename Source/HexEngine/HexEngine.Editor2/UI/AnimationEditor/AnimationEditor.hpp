@@ -120,6 +120,15 @@ namespace HexEditor
 		void CopyPose();
 		void PastePose();
 
+		// ---- clip events (e.g. FootL / FootR for footsteps) -------------------------
+		int32_t GetSelectedEvent() const;		// index into the current clip's events, -1 = none
+		void SelectEvent(int32_t index);
+		void AddEvent(float ticks);				// named from the event-name field
+		void DeleteSelectedEvent();
+		void MoveEvent(int32_t index, float ticks);
+		void RenameSelectedEvent(const std::string& name);
+		void DetectFootsteps();					// foot plants -> FootL / FootR on this clip
+
 		void Undo();
 		void Redo();
 		bool Save();
@@ -196,6 +205,10 @@ namespace HexEditor
 
 		// Right-hand panel
 		HexEngine::LineEdit* _clipName = nullptr;
+		HexEngine::LineEdit* _eventName = nullptr;
+		std::string _newEventName = "FootL";
+		int32_t _selectedEvent = -1;
+		int32_t _selectedEventClip = -1;
 		HexEngine::DragFloat* _clipLength = nullptr;
 		HexEngine::DragFloat* _clipFps = nullptr;
 		HexEngine::Checkbox* _autoKeyBox = nullptr;

@@ -3,6 +3,8 @@
 
 #include "../Required.hpp"
 #include "../Entity/Entity.hpp"
+#include <unordered_set>
+#include <unordered_map>
 
 namespace HexEngine
 {
@@ -61,6 +63,12 @@ namespace HexEngine
 		// slice sphere here so shadow draws stay tight).
 		dx::BoundingSphere fineSphere;
 		bool hasFineSphere;
+
+		// Runtime HLOD substitution for this PVS. Off for local-light shadow maps
+		// and other small camera-local volumes: an HLOD proxy is a whole cluster
+		// of merged geometry, so drawing it into a lamp's shadow map costs far
+		// more than the handful of real meshes inside the light's radius.
+		bool allowHlod = true;
 	};
 
 	struct RenderableSnapshot
@@ -73,6 +81,10 @@ namespace HexEngine
 		bool hasAnimations = false;
 		bool isBoundToBone = false;
 		CullingMode shadowCullMode = CullingMode::FrontFace;
+		// World transform has a negative determinant (a mirrored instance, e.g. a
+		// -1 scale): its triangles wind the other way, so it is drawn with the
+		// cull mode flipped and never shares an instanced draw with unmirrored ones.
+		bool mirrored = false;
 		MeshInstanceData instanceData = {};
 		SimpleMeshInstanceData shadowInstanceData = {};
 		Entity* entity = nullptr;
@@ -83,13 +95,25 @@ namespace HexEngine
 		// entity per PVS per frame (O(movers x snapshot x PVSes)).
 		StaticMeshComponent* component = nullptr;
 		uint64_t transformVersion = 0;
+		// Frame the instance data was last pulled in (UINT64_MAX = never).
+		uint64_t instanceFrame = UINT64_MAX;
 		uint32_t stableIndex = 0;
 		bool cullEligible = false;
 		bool forceVisible = true;
 		bool gpuVisible = true;
 		bool culledByFrustum = false;
 		bool culledByOcclusion = false;
+		// Runtime HLOD: 0 = not involved, 1 = generated proxy, 2 = baked source.
+		// The draw loops pick proxy vs sources PER FRAME from the main camera's
+		// distance to hlodCentre (the PVS keeps both, like LOD bands), so the
+		// swap can't go stale between PVS rebuilds.
+		uint8_t hlodRole = 0;
+		math::Vector3 hlodCentre = math::Vector3::Zero;
 	};
+
+	// Per-frame HLOD gate for a snapshot entry: true when this entry should draw
+	// with the camera at cameraPos. Defined in PVS.cpp.
+	HEX_API bool HlodEntryDrawsAt(const RenderableSnapshot& entry, const math::Vector3& cameraPos);
 
 	using RenderBatchSnapshot = std::vector<std::pair<std::shared_ptr<Material>, std::vector<RenderableSnapshot>>>;
 
@@ -118,6 +142,8 @@ namespace HexEngine
 
 		void AddEntity(Entity* entity);
 		void FlushEntity(Entity* entity, bool recache = false);
+		// Batched AddEntity: one removal pass and one sort per touched batch for the lot.
+		void AddEntities(const std::vector<Entity*>& entities);
 		void RemoveEntity(Entity* entity);
 
 		const PVSParams& GetOptimisedParams() const;
@@ -142,7 +168,33 @@ namespace HexEngine
 		// old shadow through an atlas tile refresh).
 		void RefreshAllInstanceCaches();
 
+		// Drop a StaticMeshComponent from the HLOD streaming bookkeeping (cached
+		// mesh path, pending async load). Called from its destructor: an async
+		// proxy load completing after the component died used to dereference it.
+		static void ForgetHlodComponent(StaticMeshComponent* component);
+
+		// HLOD role (see RenderableSnapshot::hlodRole) of an entity in this PVS,
+		// from the cluster table of the last rebuild; fills outCentre.
+		uint8_t ResolveHlodRole(Entity* entity, math::Vector3& outCentre) const;
+
 	private:
+		struct HlodClusterInfo
+		{
+			math::Vector3 centre = math::Vector3::Zero;
+			// Every proxy of the cluster had its mesh resident at the last rebuild.
+			// When not, its sources keep drawing at all distances (no holes while a
+			// proxy streams in).
+			bool allLoaded = true;
+		};
+		std::unordered_map<int64_t, HlodClusterInfo> _hlodClusters;
+		// HLOD substitution applies to this PVS (feature on, has a camera,
+		// allowHlod). Off: proxies are kept out, sources draw normally.
+		bool _hlodLive = false;
+
+		void RemoveEntitiesLocked(const std::unordered_set<Entity*>& entities);
+		void RecacheEntityLocked(Entity* entity, std::vector<MeshEntityVector*>& touched);
+		void SortTouchedLocked(std::vector<MeshEntityVector*>& touched);
+
 		MeshInstanceMap _pvs;
 		PVSParams _optimisedParams;
 		PVSParams _currentParams;

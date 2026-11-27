@@ -296,6 +296,10 @@ namespace HexEngine
 				: Entity::LoadFromFile(ent.value(), ent.key(), loadIntoExistingScene.get(), this);
 			loadIntoExistingScene->Unlock();
 
+			// A prefab instance is a fresh copy that no HLOD bake has seen.
+			if (isPrefab && entity != nullptr)
+				entity->ClearFlags(EntityFlags::RepresentedByHLOD);
+
 			createdEnts.push_back({
 				ent.value(),
 				entity

@@ -2056,6 +2056,7 @@ namespace HexEngine
 			{ "DoNotBlockNavMesh", EntityFlags::DoNotBlockNavMesh },
 			{ "ExcludeFromHLOD",   EntityFlags::ExcludeFromHLOD },
 			{ "DoNotPickInEditor", EntityFlags::DoNotPickInEditor },
+			{ "DoNotCastShadows",  EntityFlags::DoNotCastShadows },
 		};
 
 		json EditableFlagsOf(Entity* e)
@@ -3414,7 +3415,7 @@ namespace HexEngine
 					{
 						EntityFlags f;
 						if (!n.is_string() || !lookup(n.get<std::string>(), f))
-							return MakeError(id, ErrorCode::InvalidParams, "unknown flag " + n.dump() + " (editable: DoNotSave, DoNotRender, DoNotBlockNavMesh, ExcludeFromHLOD, DoNotPickInEditor)");
+							return MakeError(id, ErrorCode::InvalidParams, "unknown flag " + n.dump() + " (editable: DoNotSave, DoNotRender, DoNotBlockNavMesh, ExcludeFromHLOD, DoNotPickInEditor, DoNotCastShadows)");
 						changes.push_back({ f, std::string(key) == "set" });
 					}
 				}
@@ -3533,6 +3534,15 @@ namespace HexEngine
 				if (ReadVec3(p, "position", v))
 				{
 					e->SetPosition(v);
+					// A character controller (the play-mode player) ignores
+					// transform writes - its capsule is authoritative and the
+					// next physics read-back snaps it back. Teleport the capsule.
+					if (auto* rb = e->GetComponent<RigidBody>(); rb != nullptr && rb->GetIRigidBody() != nullptr && rb->GetIRigidBody()->IsCharacterController())
+					{
+						const math::Vector3 world = e->GetParent() != nullptr ? math::Vector3::Transform(v, e->GetParent()->GetWorldTM()) : v;
+						rb->GetIRigidBody()->UpdatePosePosition(world);
+						applied["teleportedController"] = true;
+					}
 					applied["position"] = p["position"];
 				}
 
@@ -5628,6 +5638,29 @@ namespace HexEngine
 			Reg("capture_frame", W, Pipe, Solo, [this](int64_t id, const json& p) -> json {
 				const std::string path = RequireString(p, "path");
 				int waitFrames = p.value("waitFrames", 2);
+				if (p.value("includeUi", false))
+				{
+					// The final presented frame (scene + game HUD + editor chrome) from
+					// the back buffer, written by the graphics device before Present.
+					json req = OnMain(id, [this, id, path]() -> json {
+						auto* gd = g_pEnv != nullptr ? g_pEnv->_graphicsDevice : nullptr;
+						if (gd == nullptr || !gd->RequestBackBufferCapture(Utf8ToWide(path)))
+							return MakeError(id, ErrorCode::NotAvailable, "this graphics backend can't capture the back buffer");
+						return MakeResult(id, json{ {"requested", true} });
+					});
+					if (req.contains("error"))
+						return req;
+					const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kPendingTimeoutMs);
+					while (g_pEnv->_graphicsDevice->GetBackBufferCaptureState() == 0)
+					{
+						if (std::chrono::steady_clock::now() >= deadline)
+							return MakeError(id, ErrorCode::NotAvailable, "no frame was presented in time; nothing was captured");
+						std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					}
+					if (g_pEnv->_graphicsDevice->GetBackBufferCaptureState() < 0)
+						return MakeError(id, ErrorCode::Internal, "back-buffer capture failed (see engine log)");
+					return MakeResult(id, json{ {"path", path}, {"frame", _frameCount.load()}, {"includeUi", true} });
+				}
 				waitFrames = std::clamp(waitFrames, 0, 600);
 				const uint64_t target = _frameCount.load() + (uint64_t)waitFrames;
 				const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kPendingTimeoutMs);

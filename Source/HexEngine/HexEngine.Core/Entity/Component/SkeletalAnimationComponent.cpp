@@ -2,6 +2,7 @@
 #include "SkeletalAnimationComponent.hpp"
 #include "StaticMeshComponent.hpp"
 #include "../Entity.hpp"
+#include "../Messaging/Message.hpp"
 #include "../../Environment/TimeManager.hpp"
 #include "../../Math/FloatMath.hpp"
 #include "../../Scene/AnimatedMesh.hpp"
@@ -217,15 +218,31 @@ namespace HexEngine
 			}
 
 			const uint32_t lastClip = (uint32_t)_animData->_animations.size() - 1;
-			const float clipSeconds = g_pEnv->_timeManager->_currentTime - _animationStartTime;
+			// A ragdoll holds the clip still (see SetPhysicsPose).
+			const float clipSeconds = !_physicsPose.empty() ? _physicsFreezeSeconds
+				: g_pEnv->_timeManager->_currentTime - _animationStartTime;
 			const auto clipTicks = [&](uint32_t clip)
 			{
 				const Animation& anim = _animData->_animations[clip];
+				if (clip == _oneShotClip && _physicsPose.empty())
+				{
+					// One-shot: its own clock from 0, held on the last frame.
+					const float t = std::max(0.0f, g_pEnv->_timeManager->_currentTime - _oneShotStart) * AnimationUtils::GetTicksPerSecond(anim);
+					return anim.duration > 0.0f ? std::min(t, anim.duration * 0.999f) : 0.0f;
+				}
 				return anim.duration > 0.0f ? fmod(clipSeconds * AnimationUtils::GetTicksPerSecond(anim), anim.duration) : 0.0f;
 			};
 
 			const uint32_t clip = std::min(lastClip, _animIndex);
 			EvaluateClip(clip, clipTicks(clip), _transforms, false);
+
+			// Clip events fire from the clip that dominates the pose (the incoming one
+			// past the crossfade's midpoint), so a blend never doubles them up.
+			{
+				const uint32_t dominant = (_nextAnimIndex != -1 && _blendFactor >= 0.5f)
+					? std::min(lastClip, _nextAnimIndex) : clip;
+				FireClipEvents(dominant, clipTicks(dominant));
+			}
 
 			if (_nextAnimIndex != -1)
 			{
@@ -257,6 +274,39 @@ namespace HexEngine
 
 			if (telemetry)
 				RecordPose(std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - poseStart).count());
+		}
+	}
+
+	void SkeletalAnimationComponent::FireClipEvents(uint32_t clipIndex, float ticks)
+	{
+		const Animation& anim = _animData->_animations[clipIndex];
+
+		// A different clip, or the same clip restarted: start tracking from here
+		// without firing (the time jumped, nothing was "passed").
+		if (clipIndex != _eventClip || _animationStartTime != _eventStartTime)
+		{
+			_eventClip = clipIndex;
+			_eventStartTime = _animationStartTime;
+			_eventPrevTicks = ticks;
+			return;
+		}
+
+		const float prev = _eventPrevTicks;
+		_eventPrevTicks = ticks;
+		if (anim.events.empty() || ticks == prev || GetEntity() == nullptr)
+			return;
+
+		// (prev, ticks], or across the loop: (prev, duration] then [0, ticks].
+		const bool wrapped = ticks < prev;
+		for (const AnimationEvent& ev : anim.events)
+		{
+			const bool passed = wrapped
+				? (ev.time > prev || ev.time <= ticks)
+				: (ev.time > prev && ev.time <= ticks);
+			if (!passed)
+				continue;
+			AnimationEventMessage msg(ev.name, clipIndex, ev.time);
+			GetEntity()->OnMessage(&msg, this);
 		}
 	}
 
@@ -452,6 +502,10 @@ namespace HexEngine
 		const int32_t rootMotionNode = (_rootMotion && !editorPose) ? ResolveRootMotionNode(clip) : -1;
 
 		_nodeGlobals.resize(clip.nodes.size());
+		_lastEvalClip = (int32_t)clipIndex;
+		_lastEvalRoot = git;
+		const bool physics = !_physicsPose.empty() && !editorPose;
+		const math::Matrix gitInverse = physics ? git.Invert() : math::Matrix::Identity;
 
 		for (int32_t i = 0; i < (int32_t)clip.nodes.size(); ++i)
 		{
@@ -501,6 +555,16 @@ namespace HexEngine
 			math::Matrix& global = _nodeGlobals[i];
 			global = node.parent >= 0 ? _nodeGlobals[node.parent] * local : local;
 
+			if (physics)
+			{
+				// Entity-local row frame -> this loop's convention: git * global = frame^T.
+				if (auto it = _physicsPose.find(channel->nodeName); it != _physicsPose.end())
+				{
+					const math::Matrix driven = gitInverse * it->second.Transpose();
+					global = _physicsWeight >= 0.999f ? driven : math::Matrix::Lerp(global, driven, _physicsWeight);
+				}
+			}
+
 			if (node.bone >= 0)
 			{
 				BoneInfo& bi = _boneInfo[node.bone];
@@ -525,6 +589,46 @@ namespace HexEngine
 			_evaluatedNodes = clip.nodes;
 			_evaluatedClipRoot = git;
 		}
+	}
+
+	bool SkeletalAnimationComponent::GetNodeEntityFrame(const std::string& nodeName, math::Matrix& out) const
+	{
+		if (_lastEvalClip < 0 || _lastEvalClip >= (int32_t)_compiledClips.size())
+			return false;
+		const CompiledClip& clip = _compiledClips[_lastEvalClip];
+		for (size_t i = 0; i < clip.nodes.size() && i < _nodeGlobals.size(); ++i)
+		{
+			if (clip.nodes[i].channel != nullptr && clip.nodes[i].channel->nodeName == nodeName)
+			{
+				out = (_lastEvalRoot * _nodeGlobals[i]).Transpose();
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void SkeletalAnimationComponent::SetPhysicsPose(const std::unordered_map<std::string, math::Matrix>& frames, float weight)
+	{
+		if (frames.empty())
+		{
+			ClearPhysicsPose();
+			return;
+		}
+		if (_physicsPose.empty() && g_pEnv != nullptr && g_pEnv->_timeManager != nullptr)
+			_physicsFreezeSeconds = g_pEnv->_timeManager->_currentTime - _animationStartTime;
+		_physicsPose = frames;
+		_physicsWeight = std::clamp(weight, 0.0f, 1.0f);
+	}
+
+	void SkeletalAnimationComponent::ClearPhysicsPose()
+	{
+		if (!_physicsPose.empty() && g_pEnv != nullptr && g_pEnv->_timeManager != nullptr)
+		{
+			// Resume the clip where it was frozen, not with a jump.
+			_animationStartTime = g_pEnv->_timeManager->_currentTime - _physicsFreezeSeconds;
+		}
+		_physicsPose.clear();
+		_physicsWeight = 0.0f;
 	}
 
 	void SkeletalAnimationComponent::SnapshotPrevPose()
@@ -606,6 +710,34 @@ namespace HexEngine
 
 		// TODO move this to anim component
 		//_animData->_animations.at(idx).time = g_pEnv->_timeManager->_currentTime;
+	}
+
+	void SkeletalAnimationComponent::PlayOneShot(uint32_t idx)
+	{
+		if (!_animData || idx >= _animData->_animations.size())
+			return;
+		_oneShotClip = idx;
+		_oneShotStart = g_pEnv->_timeManager->_currentTime;
+		if (GetTargetAnimationIndex() != idx)
+			BlendToAnimationIndex(idx);
+		else
+			_eventStartTime = -1.0f;	// same clip restarting: re-anchor clip events
+	}
+
+	float SkeletalAnimationComponent::GetOneShotElapsed() const
+	{
+		if (_oneShotClip == (uint32_t)-1)
+			return 0.0f;
+		return std::max(0.0f, g_pEnv->_timeManager->_currentTime - _oneShotStart);
+	}
+
+	float SkeletalAnimationComponent::GetClipLengthSeconds(uint32_t idx) const
+	{
+		if (!_animData || idx >= _animData->_animations.size())
+			return 0.0f;
+		const Animation& anim = _animData->_animations[idx];
+		const float tps = AnimationUtils::GetTicksPerSecond(anim);
+		return tps > 0.0f ? anim.duration / tps : 0.0f;
 	}
 
 	void SkeletalAnimationComponent::BlendToAnimationIndex(uint32_t idx)

@@ -185,6 +185,14 @@
     <ClInclude Include="AmbientZoneComponent.hpp" />
     <ClInclude Include="AmbientEmitterComponent.hpp" />
     <ClInclude Include="PathMoverComponent.hpp" />
+    <ClInclude Include="SeatComponent.hpp" />
+    <ClInclude Include="ParkingLotComponent.hpp" />
+    <ClInclude Include="DistrictGateComponent.hpp" />
+    <ClInclude Include="TransitStopComponent.hpp" />
+    <ClInclude Include="TransitLineComponent.hpp" />
+    <ClInclude Include="TransitVehicleComponent.hpp" />
+    <ClInclude Include="TransitPortalComponent.hpp" />
+    <ClInclude Include="BuildingLightsComponent.hpp" />
     <ClInclude Include="VehicleComponent.hpp" />
   </ItemGroup>
   <ItemGroup>
@@ -208,6 +216,15 @@
     <ClCompile Include="AmbientZoneComponent.cpp" />
     <ClCompile Include="AmbientEmitterComponent.cpp" />
     <ClCompile Include="PathMoverComponent.cpp" />
+    <ClCompile Include="SeatComponent.cpp" />
+    <ClCompile Include="ParkingLotComponent.cpp" />
+    <ClCompile Include="DistrictGateComponent.cpp" />
+    <ClCompile Include="CityKerbTool.cpp" />
+    <ClCompile Include="TransitStopComponent.cpp" />
+    <ClCompile Include="TransitLineComponent.cpp" />
+    <ClCompile Include="TransitVehicleComponent.cpp" />
+    <ClCompile Include="TransitPortalComponent.cpp" />
+    <ClCompile Include="BuildingLightsComponent.cpp" />
     <ClCompile Include="VehicleComponent.cpp" />
   </ItemGroup>
 </Project>

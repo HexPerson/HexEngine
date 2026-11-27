@@ -65,6 +65,7 @@ namespace HexEngine
 		math::Vector3 ToEulerAngles();
 
 		void EnableInterpolation(bool enable);
+		bool IsInterpolationEnabled() const { return _enableInterpolation; }
 
 		// Collapse the interpolation history (previous/interpolated) onto the
 		// current state so GetPosition(Interpolated) - and therefore GetWorldTM -

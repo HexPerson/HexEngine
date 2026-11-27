@@ -164,6 +164,8 @@ namespace HexEngine
 
 		bool DoesHaveAnyReflectivity();
 
+		std::vector<ITexture2D*>& GetCachedTextureArray() {	return _cachedTextureArray;	}
+
 	public:
 		MaterialProperties _properties;
 		MaterialGraph _graph;
@@ -208,5 +210,7 @@ namespace HexEngine
 		// offsets plugin code compiled against an older header relies on.
 		mutable math::Vector4 _giGraphTintCache = math::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
 		mutable bool _giGraphTintCacheValid = false;
+
+		std::vector<ITexture2D*> _cachedTextureArray;
 	};
 }

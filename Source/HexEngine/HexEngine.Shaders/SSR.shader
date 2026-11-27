@@ -16,6 +16,9 @@
 		// finds nothing can return the environment itself rather than leaving a
 		// hole for the resolve to patch.
 		EnvMapCommon
+		// DDGI probe irradiance - the miss fallback while DDGI owns GI
+		// (SceneRenderer binds b8/t56-t64 only then; unbound reads zero).
+		DDGICommon
 }
 "VertexShader"
 {
@@ -185,6 +188,25 @@
 	// Tiny cone trace along rayDir using the voxel clipmaps for a fallback "indirect bounce"
 	// in directions where SSR didn't find a screen-space hit. Steps until the voxel field becomes
 	// opaque or we leave all clipmaps.
+	float3 ConeTraceVoxelGI(float3 originWs, float3 rayDir, out float traceDistance);
+
+	// Off-screen / missed-ray radiance. With DDGI active the voxel field is
+	// not updated (frozen), so use the probes' irradiance around the ray
+	// direction instead - a blurry but correct-energy stand-in for the
+	// radiance arriving along it.
+	// surfacePos / surfaceNormal: the reflecting pixel (DDGI biases and
+	// weights its probes with the real surface normal and view vector, and
+	// reads them along rayDir); originWs: the voxel cone's start point.
+	float3 GiFallbackRadiance(float3 originWs, float3 surfacePos, float3 surfaceNormal, float3 rayDir, out float traceDistance)
+	{
+		if (g_ddgiCascade[0].dims.w > 0)
+		{
+			traceDistance = 8.0f;
+			return DdgiSampleDirectional4(surfacePos, surfaceNormal, normalize(g_eyePos.xyz - surfacePos), rayDir).rgb;
+		}
+		return ConeTraceVoxelGI(originWs, rayDir, traceDistance);
+	}
+
 	float3 ConeTraceVoxelGI(float3 originWs, float3 rayDir, out float traceDistance)
 	{
 		traceDistance = 0.0f;
@@ -884,7 +906,7 @@
 				// already added to beauty. Subtract so we only contribute the screen-space
 				// delta. Clamp non-negative.
 				float voxelTraceDist;
-				const float3 voxelBaseline = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, diffuseDir, voxelTraceDist);
+				const float3 voxelBaseline = GiFallbackRadiance(worldPos + worldNormal * 0.25f, worldPos, worldNormal, diffuseDir, voxelTraceDist);
 				const float3 delta = max(0.0f.xxx, hit.colour  - voxelBaseline);
 
 				hitDistance = max(hit.hitDistance, 1.0f);
@@ -1117,7 +1139,7 @@
 		// The cone trace is a genuine directional radiance estimate from the same ray direction,
 		// which is the right answer for "no screen-space hit found".
 		float traceDistance = 0.0f;
-		const float3 giRadiance = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, rayDir, traceDistance);
+		const float3 giRadiance = GiFallbackRadiance(worldPos + worldNormal * 0.25f, worldPos, worldNormal, rayDir, traceDistance);
 
 		didReflect = true;
 		hitDistance = max(traceDistance, 8.0f);

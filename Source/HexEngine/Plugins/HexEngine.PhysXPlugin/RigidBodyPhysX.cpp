@@ -153,6 +153,10 @@ void RigidBodyPhysX::SetBodyType(BodyType type)
 					//auto localPose = _shape->getLocalPose();
 					//_shape->setLocalPose(physx::PxTransform());
 					_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 				}
 
 				actor->userData = this;// _transform->GetEntity();
@@ -216,6 +220,30 @@ void RigidBodyPhysX::UpdateTriangleMeshScale(const math::Vector3& scale)
 		}
 	}
 	g_pPhysx->GetScene()->unlockWrite();
+}
+
+void RigidBodyPhysX::SetLinearVelocity(const math::Vector3& velocity)
+{
+	if (_body == nullptr)
+		return;
+	if (auto* dyn = _body->is<physx::PxRigidDynamic>(); dyn != nullptr && !(dyn->getRigidBodyFlags() & physx::PxRigidBodyFlag::eKINEMATIC))
+	{
+		g_pPhysx->GetScene()->lockWrite();
+		dyn->setLinearVelocity(physx::PxVec3(velocity.x, velocity.y, velocity.z));
+		g_pPhysx->GetScene()->unlockWrite();
+	}
+}
+
+void RigidBodyPhysX::SetAngularVelocity(const math::Vector3& velocity)
+{
+	if (_body == nullptr)
+		return;
+	if (auto* dyn = _body->is<physx::PxRigidDynamic>(); dyn != nullptr && !(dyn->getRigidBodyFlags() & physx::PxRigidBodyFlag::eKINEMATIC))
+	{
+		g_pPhysx->GetScene()->lockWrite();
+		dyn->setAngularVelocity(physx::PxVec3(velocity.x, velocity.y, velocity.z));
+		g_pPhysx->GetScene()->unlockWrite();
+	}
 }
 
 void RigidBodyPhysX::UpdatePosePosition(const math::Vector3& position)
@@ -332,6 +360,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddSphereCollider(HexEngine::Transform* tr
 	_shape = g_pPhysx->GetPhysics()->createShape(*(physx::PxSphereGeometry*)_geometry, *g_pPhysx->GetDefaultMaterial());
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 
 	_shape->release();
 
@@ -371,6 +403,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddCapsuleCollider(HexEngine::Transform* t
 	_shape->setLocalPose(physx::PxTransform(physx::PxVec3(offset.x, offset.y, offset.z), rot));
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 
 	_shape->release();
 
@@ -600,6 +636,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 	}
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 	_shape->release();
 
 	/*_shape = physx::PxRigidActorExt::createExclusiveShape(
@@ -724,6 +764,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshColliderFromCookedBuffer(co
 	}
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 	_shape->release();
 
 	_collider = new ColliderPhysX(_shape, this);
@@ -796,6 +840,10 @@ bool RigidBodyPhysX::TryFinishAsyncCollider()
 	}
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 	_shape->release();
 
 	_collider = new ColliderPhysX(_shape, this);
@@ -872,6 +920,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddConvexMeshCollider(const std::vector<ma
 
 	_shape = g_pPhysx->GetPhysics()->createShape(*triGeom, *g_pPhysx->GetDefaultMaterial(), exclusive);
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 	_shape->release();
 
 	// we don't want to handle scene queries with physx
@@ -899,6 +951,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddBoxCollider(const dx::BoundingBox& box,
 	_shape->setLocalPose(physx::PxTransform(physx::PxVec3(box.Center.x, box.Center.y, box.Center.z)));
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 
 	_shape->release();
 

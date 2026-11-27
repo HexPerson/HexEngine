@@ -101,6 +101,7 @@ namespace HexEditor
 		bool _flagDoNotSave = false;
 		bool _flagExcludeFromHLOD = false;
 		bool _flagDoNotPickInEditor = false;
+		bool _flagDoNotCastShadows = false;
 		//DrawList _drawList;
 		//Canvas _canvas;
 	};

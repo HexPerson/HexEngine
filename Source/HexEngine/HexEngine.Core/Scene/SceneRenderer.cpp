@@ -1,5 +1,6 @@
 
 #include "SceneRenderer.hpp"
+#include "../Entity/Component/TerrainCutout.hpp"
 #include "../HexEngine.hpp"
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/PointLight.hpp"
@@ -10,6 +11,7 @@
 #include "../Graphics/IVertexBuffer.hpp"
 #include "../Graphics/IIndexBuffer.hpp"
 #include "../Graphics/ISSAOProvider.hpp"
+#include "../Graphics/GpuProfiler.hpp"
 #include "../Graphics/DiffuseGIAOProvider.hpp"
 #include "../Graphics/AtmosphereLUTs.hpp"
 #include "../Graphics/VolumetricScattering.hpp"
@@ -25,6 +27,26 @@
 #include <unordered_set>
 #include <algorithm>
 #include <vector>
+
+namespace
+{
+	// Sort lights nearest-first. The distance is computed ONCE per light: the old
+	// comparators called GetWorldTM() twice per comparison (n log n of them), and
+	// with a few hundred city lights in a Debug build that was ~10% of the frame.
+	template<typename It>
+	void SortByCameraDistance(It first, It last, const math::Vector3& cameraPos)
+	{
+		using Ptr = typename std::iterator_traits<It>::value_type;
+		std::vector<std::pair<float, Ptr>> keyed;
+		keyed.reserve(static_cast<size_t>(std::distance(first, last)));
+		for (It it = first; it != last; ++it)
+			keyed.emplace_back(((*it)->GetEntity()->GetWorldTM().Translation() - cameraPos).LengthSquared(), *it);
+		std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		It out = first;
+		for (const auto& k : keyed)
+			*out++ = k.second;
+	}
+}
 
 namespace HexEngine
 {
@@ -159,7 +181,10 @@ namespace HexEngine
 	// ~2 km cumulus towers in the taller slab while stratus decks stay low.
 	// NOTE: scenes may PIN the old AABB in their serialized cvars - set
 	// r_cloudAabbMin/Max live and re-save the scene to adopt the new slab.
-	HVar r_cloudAabbMax("r_cloudAabbMax", "Maximum world-space bounds of cloud AABB", math::Vector3(14000.0f, 2400.0f, 14000.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
+	// 2400 -> 8000 (2026-11-26): only STORM cells use height above the 2050 m
+	// design depth (CloudCommon metre profiles); VolumetricClouds clips the
+	// march back to ~2.4 km for every other sky, so the cost is storm-only.
+	HVar r_cloudAabbMax("r_cloudAabbMax", "Maximum world-space bounds of cloud AABB", math::Vector3(14000.0f, 8000.0f, 14000.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
 	HVar r_cloudDensity("r_cloudDensity", "Cloud density multiplier", 1.0f, 0.05f, 8.0f);
 	HVar r_cloudCoverage("r_cloudCoverage", "Cloud coverage amount", 0.56f, 0.01f, 1.0f);
 	HVar r_cloudErosion("r_cloudErosion", "Small-scale erosion amount", 0.34f, 0.0f, 1.0f);
@@ -182,8 +207,8 @@ namespace HexEngine
 	HVar r_cloudSkyTintInfluence("r_cloudSkyTintInfluence", "How much skylight chroma influences cloud tint", 0.42f, 0.0f, 1.0f);
 	HVar r_cloudDirectionalDiffuse("r_cloudDirectionalDiffuse", "Directional-derivative diffuse lighting strength", 0.78f, 0.0f, 2.0f);
 	HVar r_cloudAmbientOcclusion("r_cloudAmbientOcclusion", "Local ambient occlusion strength for cloud interiors", 0.45f, 0.0f, 1.0f);
-	HVar r_cloudShapeScale("r_cloudShapeScale", "Base cloud shape noise scale", 0.00017f, 0.00001f, 0.01f);
-	HVar r_cloudDetailScale("r_cloudDetailScale", "Cloud detail noise scale", 0.00125f, 0.00005f, 0.05f);
+	HVar r_cloudShapeScale("r_cloudShapeScale", "Base cloud shape noise scale (0.00024 = ~4.2 km tile, billows ~1 km; the mid octaves in CloudCommon run 4.7x/11.3x this)", 0.00024f, 0.00001f, 0.01f);
+	HVar r_cloudDetailScale("r_cloudDetailScale", "Cloud detail noise scale (0.0025 = ~400 m tile, ~30 m cells - finer goes sub-pixel at km range)", 0.0025f, 0.00005f, 0.05f);
 	HVar r_cloudWindDirection("r_cloudWindDirection", "Cloud wind direction", math::Vector3(1.0f, 0.0f, 0.15f), math::Vector3(-1.0f, -1.0f, -1.0f), math::Vector3(1.0f, 1.0f, 1.0f));
 	HVar r_cloudWindSpeed("r_cloudWindSpeed", "Cloud wind speed", 34.0f, 0.0f, 500.0f);
 	HVar r_cloudAnimationSpeed("r_cloudAnimationSpeed", "Cloud animation speed multiplier", 1.0f, 0.0f, 10.0f);
@@ -523,6 +548,7 @@ namespace HexEngine
 	// LUX, emissive is NITS. Off = legacy arbitrary units. DEFAULT ON since
 	// part 4 landed (calibration + EV comp curve, user-verified day+night
 	// 2026-07-31) together with r_exposureMode.
+	extern HVar r_ddgi; // DDGI.cpp
 	HVar r_physicalLightUnits("r_physicalLightUnits", "Interpret light strengths as physical units (lumens/lux/nits)", true, false, true);
 	// Units slice part 4: the calibration bridge between legacy content and
 	// physical units, measured live 2026-07-31 (day street meanLuma 0.298 ->
@@ -543,6 +569,23 @@ namespace HexEngine
 	// become honest.
 	HVar r_legacyLightScale("r_legacyLightScale", "Calibration factor: legacy light strength -> physical units (and 1/x = pre-exposure)", 15000.0f, 1.0f, 200000.0f);
 	HVar r_shadowAtlasBudget("r_shadowAtlasBudget", "Max atlas shadow faces re-rendered per frame", (int32_t)4, (int32_t)0, (int32_t)16);
+	// Shadowed POINT lights keep dedicated cube maps (6 faces re-rendered each
+	// frame), so they get their own nearest-first cap instead of competing with
+	// spots for the atlas-sized caster list.
+	HVar r_pointShadowCasters("r_pointShadowCasters", "Max shadowed point lights per frame (nearest first). Atlas mode: capped by the point atlas (64 faces = 10 lights)", (int32_t)10, (int32_t)0, (int32_t)16);
+	// Dynamic local-light shadows: a spot/point only competes for a shadow slot
+	// when its range overlaps the camera frustum and it is within this distance;
+	// its shadow strength fades out over the last r_localShadowFadeFraction.
+	HVar r_spotShadowDistance("r_spotShadowDistance", "Max camera distance (m, to the light's range) at which spot lights cast shadows", 60.0f, 0.0f, 1000.0f);
+	HVar r_pointShadowDistance("r_pointShadowDistance", "Max camera distance (m, to the light's range) at which point lights cast shadows", 45.0f, 0.0f, 1000.0f);
+	HVar r_localShadowFadeFraction("r_localShadowFadeFraction", "Fraction of the shadow distance over which local-light shadows fade out", 0.25f, 0.01f, 1.0f);
+	HVar r_localShadowFrustumCull("r_localShadowFrustumCull", "Only lights whose range overlaps the camera frustum compete for shadow slots", true, false, true);
+	HVar r_pointShadowAtlasBudget("r_pointShadowAtlasBudget", "Max point-light atlas faces re-rendered per frame (unchanged faces are cached for free)", (int32_t)6, (int32_t)0, (int32_t)64);
+	// A shadow-casting point light beyond r_pointShadowCasters has no cube map
+	// this frame and shades UNSHADOWED - an interior lamp then lights straight
+	// through its walls. This scales such lights (clustered path): 1 = old
+	// behaviour, 0 = drop them until they win a shadow slot.
+	HVar r_pointShadowFallback("r_pointShadowFallback", "Strength multiplier for shadow-casting point lights that got no shadow map this frame (1 = unshadowed as before, 0 = skip)", 1.0f, 0.0f, 1.0f);
 	HVar r_shadowAtlasDebug("r_shadowAtlasDebug", "Draw the shadow atlas as an overlay", false, false, true);
 	// Phase 3 slice 2: shelter/rain occlusion. A top-down ortho depth map
 	// (static geometry only) around the camera; wet response, snow and
@@ -1133,6 +1176,13 @@ namespace HexEngine
 	// film convention: the virtual shutter is open half the frame, so blur
 	// spans half the per-frame motion. Runs after TAA at render resolution.
 	HVar r_motionBlur("r_motionBlur", "Per-pixel camera + object motion blur", true, false, true);
+	// Blur the OPAQUE scene before the transparent pass instead of the final frame.
+	// A glass pixel shows two layers that move differently - the reflection (moves
+	// with the glass) and the world behind it - but carries one velocity, so the
+	// post-TAA blur smeared bus/car window reflections along with the street. Done
+	// first, the background seen through the glass is already blurred and the
+	// reflections composite sharp on top. Water and particles are no longer blurred.
+	HVar r_motionBlurBeforeTransparent("r_motionBlurBeforeTransparent", "Motion-blur the opaque scene before transparents (sharp glass reflections) instead of the final frame", true, false, true);
 	HVar r_motionBlurShutter("r_motionBlurShutter", "Shutter fraction (0.5 = 180-degree film shutter)", 0.5f, 0.0f, 1.0f);
 	HVar r_motionBlurMaxPx("r_motionBlurMaxPx", "Maximum blur radius in pixels", 32.0f, 4.0f, 128.0f);
 	HVar r_motionBlurSamples("r_motionBlurSamples", "Gather taps along the dominant velocity", (int32_t)15, (int32_t)5, (int32_t)32);
@@ -1156,6 +1206,7 @@ namespace HexEngine
 	HVar r_lensDirt("r_lensDirt", "Lens-dirt intensity (procedural smudges lit by the flare)", 0.0f, 0.0f, 4.0f);
 	HVar r_lensStreak("r_lensStreak", "Anamorphic horizontal streak intensity (0 = off)", 0.0f, 0.0f, 2.0f);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
+	HVar r_shadowCascadeStagger("r_shadowCascadeStagger", "Sun cascades 0-1 render every frame, cascade 2 every 2nd, cascade 3 every 4th (forced on a 3 m camera move, a sun turn or a camera change)", true, false, true);
 	// P4.8: default 1.0 -> 0.35 (user scope decision: ON but SUBTLE). The
 	// shader also squares the radial falloff now, so the centre of frame is
 	// clean and the fringe concentrates in the corners.
@@ -1281,8 +1332,11 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_diffuseGi.Destroy();
+		_ddgi.Destroy();
+		GpuProfiler::Get().Shutdown();
 		_clusteredLights.Destroy();
 		_shadowAtlas.Destroy();
+		_pointShadowAtlas.Destroy();
 		SAFE_DELETE(_shadowAtlasDebugTex);
 		if (_rainOcclusionMap != nullptr)
 		{
@@ -1386,6 +1440,8 @@ namespace HexEngine
 		_clusteredLights.Create();
 		if (!_shadowAtlas.Create())
 			LOG_CRIT("ShadowAtlas::Create failed - r_shadowAtlas will render no local shadows");
+		if (!_pointShadowAtlas.Create(ShadowAtlas::kPointAtlasSize, ShadowAtlas::kPointTileSize))
+			LOG_CRIT("ShadowAtlas::Create failed for the point-light atlas - point shadows fall back to the legacy maps");
 		_clusterApplyShader = IShader::Create("EngineData.Shaders/ClusterLightApply.hcs");
 		_iblSkyEnvShader			= IShader::Create("EngineData.Shaders/SkyEnvMap.hcs");
 		_probeEnvShader				= IShader::Create("EngineData.Shaders/ProbeEnvMap.hcs");
@@ -1914,12 +1970,58 @@ namespace HexEngine
 	/// </summary>
 	/// <param name="scene"></param>
 	/// <param name="camera"></param>
+	HVar r_lightSortInterval("r_lightSortInterval", "Frames between re-sorting the scene lights by camera distance (also re-sorts on a 2 m camera move or a light add/remove)", 4, 1, 60);
+
+	template<typename T>
+	const std::vector<T*>& SceneRenderer::GetSortedLights(SortedLightCache<T>& cache, const math::Vector3& cameraPos)
+	{
+		const uint64_t frame = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0ull;
+		const uint64_t revision = _currentScene->GetLightSetRevision();
+		const uint64_t interval = (uint64_t)std::max(1, r_lightSortInterval._val.i32);
+		const bool stale =
+			cache.scene != _currentScene || cache.camera != _currentCamera || cache.revision != revision ||
+			frame - cache.frame >= interval || (cameraPos - cache.cameraPos).LengthSquared() > 4.0f;
+		if (!stale)
+			return cache.lights;
+
+		cache.lights.clear();
+		_currentScene->GetComponents<T>(cache.lights);
+		cache.lights.erase(std::remove_if(cache.lights.begin(), cache.lights.end(),
+			[](T* l)
+			{
+				if (l == nullptr || l->GetEntity() == nullptr || l->GetEntity()->IsPendingDeletion())
+					return true;
+				return l->GetDiffuseColour().w <= 0.0f;
+			}), cache.lights.end());
+		SortByCameraDistance(cache.lights.begin(), cache.lights.end(), cameraPos);
+		cache.scene = _currentScene;
+		cache.camera = _currentCamera;
+		cache.revision = revision;
+		cache.frame = frame;
+		cache.cameraPos = cameraPos;
+		return cache.lights;
+	}
+
 	void SceneRenderer::RenderScene(Scene* scene, Camera* camera, SceneFlags flags)
 	{
 		std::unique_lock lock(_lock);
 
 		if (!camera)
 			return;
+
+		// A minimised window (or a collapsed panel) gives the camera a 0x0
+		// viewport. Every size-keyed target (SSR, NRD, bloom...) would then be
+		// recreated at zero size, which D3D refuses - the failed CreateTexture2D
+		// is a critical log that halted the editor. Nothing is visible: skip.
+		{
+			const auto& vp = camera->GetViewport();
+			if (!(vp.width >= 1.0f) || !(vp.height >= 1.0f))
+				return;
+		}
+
+		// Apply PVS refreshes queued since the update (batched - see Scene::FlushPendingPVS).
+		if (scene != nullptr)
+			scene->FlushPendingPVS();
 
 		_previewNoPost = !HEX_HASFLAG(flags, SceneFlags::PostProcessingEnabled) &&
 			HEX_HASFLAG(flags, SceneFlags::PreviewLighting);
@@ -2058,8 +2160,15 @@ namespace HexEngine
 		// point tiles, point casters always render their dedicated maps here,
 		// capped nearest-first (the caster list is already sorted) so a
 		// lamp-dense scene can't multiply the shadow pass count.
+		//
+		// Point atlas (2026-11-21): when the clustered apply owns lighting,
+		// point casters render their six faces into _pointShadowAtlas instead
+		// (cached per face like spots) and the apply / froxel fog sample it.
+		// The dedicated maps remain only for the legacy path.
 		{
+			const bool pointAtlasMode = IsPointAtlasMode();
 			std::vector<Light*> localCasters;
+			std::vector<Light*> pointCasters;
 			int32_t legacyPointCasters = 0;
 			for (auto& caster : _shadowCasters)
 			{
@@ -2069,17 +2178,36 @@ namespace HexEngine
 				{
 					localCasters.push_back(caster);
 				}
+				else if (isPoint && pointAtlasMode)
+				{
+					pointCasters.push_back(caster);
+				}
 				else if (isPoint && r_shadowAtlas._val.b)
 				{
-					if (legacyPointCasters < MaxShadowCasters)
+					if (legacyPointCasters < r_pointShadowCasters._val.i32)
 					{
+						static_cast<PointLight*>(caster)->EnsureShadowMaps();
 						RenderShadowMaps(caster);
 						++legacyPointCasters;
 					}
 				}
 				else
 				{
+					if (isPoint)
+						static_cast<PointLight*>(caster)->EnsureShadowMaps();
 					RenderShadowMaps(caster);
+				}
+			}
+
+			if (!pointCasters.empty())
+			{
+				const auto& pointAssignments = _pointShadowAtlas.AssignTiles(
+					pointCasters, _currentCamera, r_pointShadowAtlasBudget._val.i32,
+					_currentScene);
+				for (const auto& a : pointAssignments)
+				{
+					if (a.needsRender)
+						RenderShadowFaceToAtlas(_pointShadowAtlas, a);
 				}
 			}
 
@@ -2091,7 +2219,7 @@ namespace HexEngine
 				for (const auto& a : assignments)
 				{
 					if (a.needsRender)
-						RenderShadowFaceToAtlas(a);
+						RenderShadowFaceToAtlas(_shadowAtlas, a);
 				}
 
 				// RenderSpotLights draws (and shadows from the DEDICATED maps,
@@ -2106,7 +2234,11 @@ namespace HexEngine
 				for (Light* caster : localCasters)
 				{
 					if (applyOwnsAtlasSpots && _shadowAtlas.FindContentTile(caster, 0) >= 0)
+					{
+						// The atlas owns it now: give back the 4 MB fallback map.
+						caster->ReleaseDedicatedShadowMaps();
 						continue;
+					}
 					RenderShadowMaps(caster);
 				}
 			}
@@ -2254,7 +2386,16 @@ namespace HexEngine
 				const auto& wp = _currentScene->GetWeatherSurfaceParams();
 				const float precipIntensity = std::clamp(wp.precipitationIntensity, 0.0f, 1.0f);
 				const float wetness         = std::clamp(wp.wetness, 0.0f, 1.0f);
-				const float overcastAmount  = std::clamp(std::max(precipIntensity, wetness * 0.7f), 0.0f, 1.0f);
+				// The grey dome tint stands in for the cloud DECK the Hillaire
+				// sky can't model - so it must follow how closed that deck is.
+				// Keyed on precipitation alone, a broken storm (cumulonimbus
+				// with gaps, the stormy-sunset reference) showed flat grey
+				// sky - and no sun disc - in the gaps instead of the low warm
+				// sun breaking through. Closed decks (coverage >= ~0.95: rain,
+				// heavy rain) are unchanged.
+				const float coverage01 = std::clamp((r_cloudCoverage._val.f32 - 0.60f) / 0.35f, 0.0f, 1.0f);
+				const float deckClosure = 0.45f + 0.55f * (coverage01 * coverage01 * (3.0f - 2.0f * coverage01));
+				const float overcastAmount  = std::clamp(std::max(precipIntensity, wetness * 0.7f) * deckClosure, 0.0f, 1.0f);
 
 				const float sunDimming = std::clamp(0.10f + 0.90f * std::clamp(sunDir.y * 0.5f + 0.5f, 0.0f, 1.0f), 0.10f, 1.0f);
 				const math::Vector3 dismalGrey(0.55f, 0.57f, 0.62f);
@@ -2437,25 +2578,11 @@ namespace HexEngine
 			uint32_t numShadowedSpots = 0;
 			math::Vector2 spotShadowMapSize(0.0f, 0.0f);
 			{
-				std::vector<SpotLight*> spotLights;
-				if (_currentScene->GetComponents<SpotLight>(spotLights))
+				const math::Vector3 camPos = _currentCamera->GetEntity()->GetPosition();
+				// Cached + nearest-first (GetSortedLights): not re-gathered / re-sorted every pass.
+				std::vector<SpotLight*> spotLights = GetSortedLights(_sortedSpotLights, camPos);
+				if (!spotLights.empty())
 				{
-					// Same filter+sort as SetupForwardLights.
-					spotLights.erase(std::remove_if(spotLights.begin(), spotLights.end(),
-						[](SpotLight* l)
-						{
-							if (l == nullptr || l->GetEntity() == nullptr || l->GetEntity()->IsPendingDeletion())
-								return true;
-							return l->GetDiffuseColour().w <= 0.0f;
-						}), spotLights.end());
-					const math::Vector3 camPos = _currentCamera->GetEntity()->GetPosition();
-					std::sort(spotLights.begin(), spotLights.end(),
-						[&camPos](SpotLight* a, SpotLight* b)
-						{
-							const float da = (a->GetEntity()->GetWorldTM().Translation() - camPos).LengthSquared();
-							const float db = (b->GetEntity()->GetWorldTM().Translation() - camPos).LengthSquared();
-							return da < db;
-						});
 					const size_t spotCap = std::min<size_t>(
 						static_cast<size_t>(std::max(1, r_maxSpotLights._val.i32)),
 						static_cast<size_t>(VolumetricScattering::kMaxForwardSpots));
@@ -2499,24 +2626,11 @@ namespace HexEngine
 			for (auto& s : shadowSlotForFwdPoint) s = -1;
 			uint32_t numShadowedPoints = 0;
 			{
-				std::vector<PointLight*> pointLights;
-				if (_currentScene->GetComponents<PointLight>(pointLights))
+				const math::Vector3 camPos = _currentCamera->GetEntity()->GetPosition();
+				// Cached + nearest-first (GetSortedLights): not re-gathered / re-sorted every pass.
+				std::vector<PointLight*> pointLights = GetSortedLights(_sortedPointLights, camPos);
+				if (!pointLights.empty())
 				{
-					pointLights.erase(std::remove_if(pointLights.begin(), pointLights.end(),
-						[](PointLight* l)
-						{
-							if (l == nullptr || l->GetEntity() == nullptr || l->GetEntity()->IsPendingDeletion())
-								return true;
-							return l->GetDiffuseColour().w <= 0.0f;
-						}), pointLights.end());
-					const math::Vector3 camPos = _currentCamera->GetEntity()->GetPosition();
-					std::sort(pointLights.begin(), pointLights.end(),
-						[&camPos](PointLight* a, PointLight* b)
-						{
-							const float da = (a->GetEntity()->GetWorldTM().Translation() - camPos).LengthSquared();
-							const float db = (b->GetEntity()->GetWorldTM().Translation() - camPos).LengthSquared();
-							return da < db;
-						});
 					const size_t pointCap = std::min<size_t>(
 						static_cast<size_t>(std::max(1, r_maxPointLights._val.i32)),
 						static_cast<size_t>(VolumetricScattering::kMaxForwardPoints));
@@ -2581,7 +2695,8 @@ namespace HexEngine
 				r_clusterFog._val.b && r_clusterLights._val.b,
 				r_shadowAtlas._val.b ? _shadowAtlas.GetAtlasSrv() : nullptr,
 				r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr,
-				_clusteredLights.GetAreaTextureSrv());
+				_clusteredLights.GetAreaTextureSrv(),
+				IsPointAtlasMode() ? _pointShadowAtlas.GetAtlasSrv() : nullptr);
 			// Cloud shadows in the fog (S6). Both are last frame's data at
 			// this point in the frame (the shadow map renders during the
 			// light pass) - one frame of latency is invisible on clouds.
@@ -2685,11 +2800,14 @@ namespace HexEngine
 		//
 		std::vector<Light*> pvs;
 		std::unordered_set<Light*> uniqueLights;
+		_shadowFade.clear();
+		const math::Vector3 camWorld = _currentCamera->GetEntity()->GetWorldTM().Translation();
+		const dx::BoundingFrustum& camFrustum = _currentCamera->GetFrustum();
 
 		auto gatherFromEntities = [&](ComponentId componentId)
 		{
 			std::vector<Entity*> entitiesWithComponent;
-			_currentScene->GetEntities(((HexEngine::ComponentSignature)1 << componentId), entitiesWithComponent);
+			_currentScene->GetEntities(HexEngine::ComponentSignature::Bit(componentId), entitiesWithComponent);
 
 			for (auto* entity : entitiesWithComponent)
 			{
@@ -2721,6 +2839,24 @@ namespace HexEngine
 			if (light->GetDoesCastShadows() == false)
 				continue;
 
+			// Dynamic selection for local lights: in range of the camera and
+			// overlapping the view, with a distance fade on the shadow strength.
+			if (light->CastAs<DirectionalLight>() == nullptr)
+			{
+				const bool isPoint = light->CastAs<PointLight>() != nullptr;
+				const float maxDist = isPoint ? r_pointShadowDistance._val.f32 : r_spotShadowDistance._val.f32;
+				const math::Vector3 lp = owner->GetWorldTM().Translation();
+				const float radius = std::max(0.05f, light->GetRadius());
+				const float dist = std::max(0.0f, (lp - camWorld).Length() - radius);
+				if (maxDist <= 0.0f || dist >= maxDist)
+					continue;
+				if (r_localShadowFrustumCull._val.b &&
+					!camFrustum.Intersects(dx::BoundingSphere(dx::XMFLOAT3(lp.x, lp.y, lp.z), radius)))
+					continue;
+				const float fadeLen = std::max(0.01f, maxDist * r_localShadowFadeFraction._val.f32);
+				_shadowFade[light] = std::clamp((maxDist - dist) / fadeLen, 0.0f, 1.0f);
+			}
+
 			//if (light == _currentScene->GetSunLight())
 			//	continue;
 
@@ -2744,24 +2880,68 @@ namespace HexEngine
 			});
 
 		// Local lights: nearest first, since near lights dominate what the viewer sees.
-		const math::Vector3 cameraPos = _currentCamera->GetEntity()->GetPosition();
-		std::sort(firstLocal, pvs.end(), [&cameraPos](Light* left, Light* right) {
-
-			auto leftDist = (left->GetEntity()->GetPosition() - cameraPos).LengthSquared();
-			auto rightDist = (right->GetEntity()->GetPosition() - cameraPos).LengthSquared();
-
-			return leftDist < rightDist;
-			});
+		// WORLD positions: GetPosition() is parent-relative, so every lamp
+		// parented inside a building sorted as if it sat at the world origin.
+		const math::Vector3 cameraPos = _currentCamera->GetEntity()->GetWorldTM().Translation();
+		SortByCameraDistance(firstLocal, pvs.end(), cameraPos);
 
 		// MaxShadowCasters bounds the number of shadow maps rendered this frame, across all
 		// light types. With the atlas on, capacity is the atlas tile count
 		// instead - the per-frame render budget lives in AssignTiles, not
 		// here, so listing more casters costs nothing until they win tiles.
-		const size_t cap = r_shadowAtlas._val.b
-			? (size_t)ShadowAtlas::kTileCount
-			: (size_t)MaxShadowCasters;
-		const size_t casterCount = (pvs.size() < cap) ? pvs.size() : cap;
-		_shadowCasters.insert(_shadowCasters.end(), pvs.begin(), pvs.begin() + casterCount);
+		//
+		// With the atlas on, spots and points are capped SEPARATELY. One shared
+		// nearest-first cap let a street of shadowed lamps (spots) fill every
+		// place, so the interior point lights of the houses beside them were
+		// never collected and rendered UNSHADOWED - their light went straight
+		// through the walls onto the lawns. Points have their own budget
+		// (r_pointShadowCasters, dedicated cube maps), spots keep the atlas one.
+		if (r_shadowAtlas._val.b)
+		{
+			size_t spots = 0;
+			std::vector<std::pair<float, Light*>> pointCandidates;
+			for (Light* light : pvs)
+			{
+				if (light->CastAs<DirectionalLight>() != nullptr)
+				{
+					_shadowCasters.push_back(light);
+				}
+				else if (light->CastAs<PointLight>() != nullptr)
+				{
+					// Hysteresis: last frame's casters rank 20% closer.
+					float d2 = (light->GetEntity()->GetWorldTM().Translation() - cameraPos).LengthSquared();
+					if (std::find(_prevPointCasters.begin(), _prevPointCasters.end(), light) != _prevPointCasters.end())
+						d2 *= 0.64f;
+					pointCandidates.emplace_back(d2, light);
+				}
+				else if (spots < (size_t)ShadowAtlas::kTileCount)
+				{
+					_shadowCasters.push_back(light);
+					++spots;
+				}
+			}
+
+			// Atlas mode: only as many points as fit whole in the point atlas.
+			const int32_t pointCap = IsPointAtlasMode()
+				? std::min(r_pointShadowCasters._val.i32, _pointShadowAtlas.GetTileCount() / 6)
+				: r_pointShadowCasters._val.i32;
+			std::sort(pointCandidates.begin(), pointCandidates.end(),
+				[](const auto& a, const auto& b) { return a.first < b.first; });
+			_prevPointCasters.clear();
+			for (const auto& [d2, light] : pointCandidates)
+			{
+				if ((int32_t)_prevPointCasters.size() >= pointCap)
+					break;
+				_shadowCasters.push_back(light);
+				_prevPointCasters.push_back(light);
+			}
+		}
+		else
+		{
+			const size_t cap = (size_t)MaxShadowCasters;
+			const size_t casterCount = (pvs.size() < cap) ? pvs.size() : cap;
+			_shadowCasters.insert(_shadowCasters.end(), pvs.begin(), pvs.begin() + casterCount);
+		}
 	}
 
 	
@@ -3066,6 +3246,24 @@ namespace HexEngine
 				const float nightW  = std::min(0.85f, nightWeight  * env_sunsetCoolStrength._val.f32 * 0.65f);
 
 				math::Vector3 ambientRgb(staticAmbient.x, staticAmbient.y, staticAmbient.z);
+
+				// Night cap on the weather ambient. Cloudy / wet / snowy presets carry a
+				// bright ambient that stands in for the diffuse daylight under a cloud
+				// deck; the cool night tint below only scales by env_sunsetCoolStrength,
+				// which those presets set low (Rain 0.14), so a rainy night kept its
+				// DAYTIME ambient and lit the street like an overcast afternoon. After
+				// dark, bring anything brighter than a clear night's ambient (luma 0.10)
+				// down to it; clear / hot nights are untouched.
+				{
+					constexpr float kNightAmbientLumaCap = 0.10f;
+					const float luma = 0.2126f * ambientRgb.x + 0.7152f * ambientRgb.y + 0.0722f * ambientRgb.z;
+					if (luma > kNightAmbientLumaCap)
+					{
+						const float scale = 1.0f + (kNightAmbientLumaCap / luma - 1.0f) * nightWeight;
+						ambientRgb = ambientRgb * scale;
+					}
+				}
+
 				const math::Vector3 ambientWarm(ambientRgb.x * warmTint.x, ambientRgb.y * warmTint.y, ambientRgb.z * warmTint.z);
 				ambientRgb.x = ambientRgb.x + (ambientWarm.x - ambientRgb.x) * sunsetW;
 				ambientRgb.y = ambientRgb.y + (ambientWarm.y - ambientRgb.y) * sunsetW;
@@ -3230,7 +3428,7 @@ namespace HexEngine
 					{
 						const float frameDt = std::clamp(g_pEnv->_timeManager->GetFrameTime(), 0.0f, 0.1f);
 						const float mainDepth = (r_underwater._val.b && _currentScene->HasOcean())
-							? _currentScene->GetDepthBelowWater(mainEye) : -1.0e6f;
+							? _currentScene->GetViewDepthBelowWater(mainEye) : -1.0e6f;
 						const bool nowSubmerged = _uwSubmerged ? (mainDepth > -0.03f) : (mainDepth > 0.03f);
 						if (nowSubmerged != _uwSubmerged)
 						{
@@ -3292,6 +3490,21 @@ namespace HexEngine
 					std::max(0.25f, r_causticsScale._val.f32),
 					r_causticsSpeed._val.f32,
 					std::max(0.5f, r_causticsDepth._val.f32));
+			}
+
+			// Terrain cutouts: holes the terrain surface and the water plane
+			// are clipped out of (stairwells, railway cuttings).
+			{
+				std::vector<TerrainCutoutBox> cutouts;
+				_currentScene->GatherTerrainCutouts(cutouts);
+				const int32_t n = std::min<int32_t>((int32_t)cutouts.size(), kMaxTerrainCutouts);
+				bufferData._terrainCutoutInfo = math::Vector4((float)n, 0.0f, 0.0f, 0.0f);
+				for (int32_t i = 0; i < n; ++i)
+				{
+					const auto& c = cutouts[i];
+					bufferData._terrainCutouts[i * 2 + 0] = math::Vector4(c.centre.x, c.centre.y, c.centre.z, c.axisX.x);
+					bufferData._terrainCutouts[i * 2 + 1] = math::Vector4(c.halfExtents.x, c.halfExtents.y, c.halfExtents.z, c.axisX.y);
+				}
 			}
 
 			// P4.6 grading tail: white balance gains + CDL trio.
@@ -3373,14 +3586,20 @@ namespace HexEngine
 			// The blurred AO exists from the first GI frame onward; null means
 			// GI hasn't produced one yet (or is off) - both flags collapse to 0
 			// and the deferred pass behaves exactly as before this change.
+			// DDGI owns indirect diffuse (decided by last frame's successful
+			// update): the deferred pass hands off ALL flat ambient (x = 1) and
+			// reads no voxel AO; the sky SH fill is zeroed below - the probes
+			// carry the sky through their ray misses.
+			const bool ddgiOwnsGi = _ddgi.IsActive();
 			_giComposeActive =
+				!ddgiOwnsGi &&
 				r_giEnable._val.b &&
 				_currentScene != nullptr && _currentCamera != nullptr &&
 				_currentCamera == _currentScene->GetMainCamera() &&
 				!_currentCamera->IsEnvironmentCapture() &&
 				_diffuseGi.GetBlurredAOTexture() != nullptr;
 			bufferData._giComposeParams = math::Vector4(
-				_giComposeActive ? r_giAmbientHandoff._val.f32 : 0.0f,
+				ddgiOwnsGi ? 1.0f : (_giComposeActive ? r_giAmbientHandoff._val.f32 : 0.0f),
 				r_giSkyOcclusion._val.f32,
 				_giComposeActive ? 1.0f : 0.0f,
 				r_giSpecOcclusion._val.f32);
@@ -3410,7 +3629,7 @@ namespace HexEngine
 				(float)r_ssrDebugSkyHits._val.i32);
 
 			bufferData._iblParams = math::Vector4(
-				r_iblSkySpecular._val.f32, r_iblSkyDiffuse._val.f32,
+				r_iblSkySpecular._val.f32, _ddgi.IsActive() ? 0.0f : r_iblSkyDiffuse._val.f32,
 				r_iblProbeStrength._val.f32, r_iblProbeDiffuse._val.f32);
 
 			// P1-B toggles ride in the reflection params' spare lanes (x and y are
@@ -3951,18 +4170,18 @@ namespace HexEngine
 			_currentScene->RenderDebug(params);*/
 	}
 
-	void SceneRenderer::RenderShadowFaceToAtlas(const ShadowAtlas::FaceAssignment& assignment)
+	void SceneRenderer::RenderShadowFaceToAtlas(ShadowAtlas& atlas, const ShadowAtlas::FaceAssignment& assignment)
 	{
 		PROFILE();
 
 		Light* light = const_cast<Light*>(assignment.key.light);
-		auto* dsv = _shadowAtlas.GetTileDsv(assignment.tileIndex);
+		auto* dsv = atlas.GetTileDsv(assignment.tileIndex);
 		auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
 		if (light == nullptr || dsv == nullptr || ctx == nullptr)
 			return;
 
 		int32_t tx = 0, ty = 0, tw = 0, th = 0;
-		_shadowAtlas.GetTileViewport(assignment.tileIndex, tx, ty, tw, th);
+		atlas.GetTileViewport(assignment.tileIndex, tx, ty, tw, th);
 
 		// Clear ONLY this tile. A whole-DSV clear would wipe every cached
 		// neighbour, which is the entire point of the atlas - so the clear
@@ -4021,7 +4240,7 @@ namespace HexEngine
 		// consumers sample with the CAPTURED matrices, never the light's
 		// current ones (a later move that misses the re-render budget must
 		// not re-project cached depth).
-		_shadowAtlas.SetTileViewProj(assignment.tileIndex,
+		atlas.SetTileViewProj(assignment.tileIndex,
 			light->GetViewMatrix(face) * light->GetProjectionMatrix(face));
 
 		PVSParams params;
@@ -4030,6 +4249,7 @@ namespace HexEngine
 		params.shape.sphere = light->GetLightBoundingSphere(face);
 		params.isShadow = true;
 		params.camera = _currentCamera;
+		params.allowHlod = false; // real meshes in the light's radius, never a whole merged cluster
 		light->GetPVS(face)->CalculateVisibility(_currentScene, params);
 		// Local lights don't get the per-entity-move instance-cache refresh
 		// the camera and sun enjoy (Entity::ClearTransformCache), so a moved
@@ -4149,6 +4369,7 @@ namespace HexEngine
 			std::sqrt(2.0f * extent * extent + kUpRange * kUpRange));
 		params.isShadow = true;
 		params.camera = _currentCamera;
+		params.allowHlod = false; // camera-local volume
 		_rainOcclusionPVS->CalculateVisibility(_currentScene, params);
 		_rainOcclusionPVS->RefreshAllInstanceCaches();
 
@@ -4359,6 +4580,10 @@ namespace HexEngine
 	{
 		PROFILE();
 
+		// Dedicated maps are allocated on first legacy use (lights default to
+		// none - the atlas paths don't need them).
+		shadowCaster->EnsureShadowMaps();
+
 		// Enable front face culling for shadow maps
 		//
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::NoCulling);
@@ -4384,6 +4609,36 @@ namespace HexEngine
 				{
 					if ((g_pEnv->_timeManager->_frameCount + i) % 2 == 0)
 						continue;
+				}
+				else if (r_shadowCascadeStagger._val.b && shadowCaster->CastAs<DirectionalLight>() != nullptr && i < 6)
+				{
+					// Far cascades cover huge areas at low texel density: a frame or
+					// three of age is invisible, re-rendering them every frame is not.
+					auto& st = _cascadeStagger;
+					if (st.light != shadowCaster || st.camera != _currentCamera)
+					{
+						st = CascadeStaggerState{};
+						st.light = shadowCaster;
+						st.camera = _currentCamera;
+					}
+					const uint64_t frame = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0ull;
+					const math::Vector3 camPos = _currentCamera->GetEntity()->GetWorldTM().Translation();
+					const math::Vector3 lightDir = shadowCaster->GetEntity()->GetComponent<Transform>()->GetForward();
+					const uint64_t interval = (i <= 1) ? 1ull : (i == 2 ? 2ull : 4ull);
+					const uint64_t phase = (i == 3) ? 1ull : 0ull;   // cascades 2 and 3 never share a frame
+					const bool due =
+						!st.valid[i] ||
+						interval == 1ull ||
+						((frame + interval - phase) % interval == 0ull && frame != st.lastFrame[i]) ||
+						frame - st.lastFrame[i] >= interval * 2ull ||
+						(camPos - st.cameraPos[i]).LengthSquared() > 9.0f ||
+						lightDir.Dot(st.lightDir[i]) < 0.99998f;   // ~0.36 degrees of sun travel
+					if (!due)
+						continue;
+					st.valid[i] = true;
+					st.lastFrame[i] = frame;
+					st.cameraPos[i] = camPos;
+					st.lightDir[i] = lightDir;
 				}
 				// Set as the current render target
 				//
@@ -4531,6 +4786,12 @@ namespace HexEngine
 		matrixOrthoNormalInvert(ccWorldToCameraPrev, cameraToCcWorldPrev);
 		//matrixMul(outCameraToPrevCamera, cameraToCcWorld, ccWorldToCameraPrev);
 		outCameraToPrevCamera = cameraToCcWorld * ccWorldToCameraPrev;
+	}
+
+	bool SceneRenderer::IsPointAtlasMode() const
+	{
+		return r_shadowAtlas._val.b && r_clusterApply._val.b && r_clusterLights._val.b &&
+			_pointShadowAtlas.GetAtlasSrv() != nullptr;
 	}
 
 	bool SceneRenderer::IsFsrActive() const
@@ -4714,7 +4975,7 @@ namespace HexEngine
 			// the previous frame's result - acceptable given GI's own
 			// temporal accumulation; avoids a costly restructure of the
 			// render order just for one frame of latency).
-			if (r_useGIAO._val.b && g_pEnv->_giAOProvider != nullptr)
+			if (r_useGIAO._val.b && g_pEnv->_giAOProvider != nullptr && !_ddgi.IsActive())
 			{
 				g_pEnv->_giAOProvider->ApplyAmbientOcclusion(
 					_currentCamera,
@@ -4759,16 +5020,30 @@ namespace HexEngine
 				g_pEnv->_volumetricScattering != nullptr &&
 				g_pEnv->_volumetricScattering->GetIntegrationVolume() != nullptr &&
 				_volumetricScatterApplyShader != nullptr;
+			// Clouds are hundreds of metres out, behind everything the froxel
+			// volume (0.1-256 m) holds, so they go in FIRST and the froxel apply
+			// then adds the near-field in-scatter over them (sky pixels get
+			// beauty + inscatter). The other way round the cloud composite
+			// (alpha blend over the fogged frame) painted over a street light's
+			// glow wherever a cloud sat behind it - and left the glow only on
+			// geometry, so a far pylon seen through a lamp's beam looked lit
+			// while the sky beside it stayed dark.
+			bool cloudsDrawn = false;
 			if (viewSubmerged)
 			{
 				// (air-side volumetrics skipped - see viewSubmerged above)
 			}
 			else if (useFroxelVolumetrics)
+			{
+				RenderVolumetricClouds();
+				cloudsDrawn = true;
 				RenderVolumetricScattering();
+			}
 			else if (r_volumetric._val.b)
 				RenderVolumetricLighting();
 			// Clouds stay: they are what you see through the surface from below.
-			RenderVolumetricClouds();
+			if (!cloudsDrawn)
+				RenderVolumetricClouds();
 			// S7: screen-space sun shafts, right after clouds so the mask can
 			// read the full-res cloud result still sitting in _fogBuffer.
 			if (!viewSubmerged)
@@ -4816,6 +5091,8 @@ namespace HexEngine
 			// went un-hazed against hazed walls. Drawn here, each fragment samples
 			// the froxel and AP volumes at its OWN depth (TransparentAtmosphere)
 			// and blends over a background that already carries the haze behind it.
+			if (r_motionBlurBeforeTransparent._val.b && !(_currentCamera != nullptr && _currentCamera->IsEnvironmentCapture()))
+				RenderMotionBlur();
 			RenderTransparent();
 
 			// Underwater camera (S1): after the transparents (the water
@@ -4907,7 +5184,7 @@ namespace HexEngine
 			// energy but shouldn't flicker the histogram) and before glow/
 			// bloom (glows are lens effects - they don't motion blur).
 			// Env captures have no meaningful velocity - skip.
-			if (!isEnvCapture)
+			if (!isEnvCapture && !r_motionBlurBeforeTransparent._val.b)
 			{
 				RenderMotionBlur();
 			}
@@ -4982,7 +5259,7 @@ namespace HexEngine
 				nullptr/*_gbuffer.GetNormal()*/,
 				_beautyRT);
 			// Mirror the other call site's r_useGIAO sibling pass.
-			if (r_useGIAO._val.b && g_pEnv->_giAOProvider != nullptr)
+			if (r_useGIAO._val.b && g_pEnv->_giAOProvider != nullptr && !_ddgi.IsActive())
 			{
 				g_pEnv->_giAOProvider->ApplyAmbientOcclusion(
 					_currentCamera,
@@ -5457,7 +5734,9 @@ namespace HexEngine
 			_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera())
 		{
 			_clusteredLights.UpdateAndCull(_currentScene, _currentCamera, _shadowCasters,
-				r_shadowAtlas._val.b ? &_shadowAtlas : nullptr);
+				r_shadowAtlas._val.b ? &_shadowAtlas : nullptr,
+				IsPointAtlasMode() ? &_pointShadowAtlas : nullptr,
+				&_shadowFade);
 		}
 
 		if (r_debugBypassLighting._val.b)
@@ -5533,10 +5812,13 @@ namespace HexEngine
 				// Null when the atlas is off - the shader gates on params.w.
 				if (auto* rawCtx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
 				{
-					ID3D11ShaderResourceView* atlasSrvs[2] = {
+					// t26: point-light atlas (its tile matrices follow the spot
+					// tiles in the same t25 buffer).
+					ID3D11ShaderResourceView* atlasSrvs[3] = {
 						r_shadowAtlas._val.b ? _shadowAtlas.GetAtlasSrv() : nullptr,
-						r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr };
-					rawCtx->PSSetShaderResources(24, 2, atlasSrvs);
+						r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr,
+						IsPointAtlasMode() ? _pointShadowAtlas.GetAtlasSrv() : nullptr };
+					rawCtx->PSSetShaderResources(24, 3, atlasSrvs);
 				}
 
 				guiRenderer->FullScreenTexturedQuad(nullptr, _clusterApplyShader.get());
@@ -5544,8 +5826,8 @@ namespace HexEngine
 				_clusteredLights.UnbindApply();
 				if (auto* rawCtx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
 				{
-					ID3D11ShaderResourceView* atlasNulls[2] = { nullptr, nullptr };
-					rawCtx->PSSetShaderResources(24, 2, atlasNulls);
+					ID3D11ShaderResourceView* atlasNulls[3] = { nullptr, nullptr, nullptr };
+					rawCtx->PSSetShaderResources(24, 3, atlasNulls);
 				}
 				guiRenderer->EndFrame();
 				GFX_PERF_END();
@@ -5575,16 +5857,32 @@ namespace HexEngine
 		if (!_currentScene || !_currentCamera || !_beautyRT)
 			return;
 
-		_diffuseGi.Update(_currentScene, _currentCamera);
-		_diffuseGi.Render(_currentScene, _currentCamera, _gbuffer, _beautyRT);
-		// Lit-scene feedback AFTER the GI composite: the beauty target now
-		// holds direct lighting + GI, so next update's injection sees the
-		// full lit result (which is what makes the feedback multi-bounce).
-		// Main camera only - capture passes must not scatter their views
-		// into the shared voxel field.
-		if (_currentCamera != nullptr && !_currentCamera->IsEnvironmentCapture())
+		const bool mainView =
+			_currentCamera == _currentScene->GetMainCamera() && !_currentCamera->IsEnvironmentCapture();
+		if (mainView)
+			GpuProfiler::Get().NewFrame();
+
+		// DDGI replaces the voxel GI while r_ddgi is on (docs/rendering/
+		// ddgi-plan.md). Captures and secondary cameras get neither: the
+		// probes are main-view state, like the voxel field before them.
+		if (!r_ddgi._val.b)
 		{
-			_diffuseGi.DispatchScreenFeedback(_beautyRT, _gbuffer.GetPosition(), _gbuffer.GetNormal());
+			GPU_SCOPE("VoxelGI");
+			_diffuseGi.Update(_currentScene, _currentCamera);
+			_diffuseGi.Render(_currentScene, _currentCamera, _gbuffer, _beautyRT);
+			// Lit-scene feedback AFTER the GI composite: the beauty target now
+			// holds direct lighting + GI, so next update's injection sees the
+			// full lit result (which is what makes the feedback multi-bounce).
+			// Main camera only - capture passes must not scatter their views
+			// into the shared voxel field.
+			if (_currentCamera != nullptr && !_currentCamera->IsEnvironmentCapture())
+			{
+				_diffuseGi.DispatchScreenFeedback(_beautyRT, _gbuffer.GetPosition(), _gbuffer.GetNormal());
+			}
+		}
+		if (mainView && DDGI::WantsRayTracing())
+		{
+			_ddgi.Render(_currentScene, _currentCamera, _gbuffer, _beautyRT, _iblSkySH);
 		}
 	}
 
@@ -5702,6 +6000,9 @@ namespace HexEngine
 				// the sample, so null here is safe and means "compose inactive".
 				g_pEnv->_graphicsDevice->SetTexture2D(22,
 					_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
+				// DDGI probes (t56-64, b8, previous frame's probes): sky
+				// visibility for the env-spec occlusion; nulls b8 when inactive.
+				_ddgi.BindForReflectionPS();
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
@@ -5770,24 +6071,38 @@ namespace HexEngine
 
 	void SceneRenderer::RenderPointLights()
 	{
-		std::vector<PointLight*> pointLights;
-		if (_currentScene->GetComponents<PointLight>(pointLights) == false)
+		const math::Vector3 cameraPos = _currentCamera->GetEntity()->GetWorldTM().Translation(); // world: GetPosition() is parent-relative
+		// Cached, filtered and already nearest-first (GetSortedLights).
+		std::vector<PointLight*> pointLights = GetSortedLights(_sortedPointLights, cameraPos);
+		if (pointLights.empty())
 			return;
 
-		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
+		// With the clustered apply on, this pass only draws the SHADOWED points
+		// (the cluster skips them). Filter to those BEFORE the closest-N cap:
+		// capping first let nearer unshadowed room lamps fill all
+		// r_maxPointLights places, so a house's shadowed main light was culled
+		// here AND skipped by the cluster - it vanished (black interiors).
+		if (r_clusterApply._val.b && r_clusterLights._val.b)
+		{
+			// Point atlas: shadowed points shade in the clustered apply too, so
+			// this sphere pass has nothing left to draw.
+			if (IsPointAtlasMode())
+				return;
+			pointLights.erase(std::remove_if(pointLights.begin(), pointLights.end(),
+				[this](PointLight* light)
+				{
+					return std::find(_shadowCasters.begin(), _shadowCasters.end(),
+						static_cast<Light*>(light)) == _shadowCasters.end();
+				}), pointLights.end());
+			if (pointLights.empty())
+				return;
+		}
 
 		// Sort the light list by camera distance ascending and truncate to the
 		// configured cap. Distant lights are cheap-to-skip here (one
 		// LengthSquared per light) and expensive-to-keep further down (each
 		// rendered light pays for a full screen-space sphere pass + a per-pixel
 		// volumetric ray-march). Cull instead of clamping the GPU cost.
-		std::sort(pointLights.begin(), pointLights.end(),
-			[&cameraPos](PointLight* a, PointLight* b)
-			{
-				const float da = (a->GetEntity()->GetPosition() - cameraPos).LengthSquared();
-				const float db = (b->GetEntity()->GetPosition() - cameraPos).LengthSquared();
-				return da < db;
-			});
 		const size_t maxLights = static_cast<size_t>(std::max(1, r_maxPointLights._val.i32));
 		if (pointLights.size() > maxLights)
 			pointLights.resize(maxLights);
@@ -5924,23 +6239,16 @@ namespace HexEngine
 #if 1
 	void SceneRenderer::RenderSpotLights()
 	{
-		std::vector<SpotLight*> spotLights;
-		if (_currentScene->GetComponents<SpotLight>(spotLights) == false)
+		const math::Vector3 cameraPos = _currentCamera->GetEntity()->GetWorldTM().Translation(); // world: GetPosition() is parent-relative
+		// Cached, filtered and already nearest-first (GetSortedLights).
+		std::vector<SpotLight*> spotLights = GetSortedLights(_sortedSpotLights, cameraPos);
+		if (spotLights.empty())
 			return;
-
-		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
 
 		// Closest-N cap (same rationale as RenderPointLights): sort by camera
 		// distance ascending and truncate. Spot lights each pay the additional
 		// cost of a shadow-map render + per-pass constant upload, so capping
 		// here is even more valuable than for point lights.
-		std::sort(spotLights.begin(), spotLights.end(),
-			[&cameraPos](SpotLight* a, SpotLight* b)
-			{
-				const float da = (a->GetEntity()->GetWorldTM().Translation() - cameraPos).LengthSquared();
-				const float db = (b->GetEntity()->GetWorldTM().Translation() - cameraPos).LengthSquared();
-				return da < db;
-			});
 		const size_t maxLights = static_cast<size_t>(std::max(1, r_maxSpotLights._val.i32));
 		if (spotLights.size() > maxLights)
 			spotLights.resize(maxLights);
@@ -6141,28 +6449,11 @@ namespace HexEngine
 			? _currentCamera->GetEntity()->GetPosition()
 			: math::Vector3::Zero;
 
-		auto sortByCameraDist = [&cameraPos](auto* a, auto* b) -> bool
-		{
-			const float da = (a->GetEntity()->GetWorldTM().Translation() - cameraPos).LengthSquared();
-			const float db = (b->GetEntity()->GetWorldTM().Translation() - cameraPos).LengthSquared();
-			return da < db;
-		};
-
 		// Point lights: gather, filter, sort, cap at min(r_maxPointLights, 16).
-		std::vector<PointLight*> pointLights;
-		if (_currentScene->GetComponents<PointLight>(pointLights))
+		// Cached + nearest-first (GetSortedLights): not re-gathered / re-sorted every pass.
+		std::vector<PointLight*> pointLights = GetSortedLights(_sortedPointLights, cameraPos);
+		if (!pointLights.empty())
 		{
-			// Filter out invalid / zero-alpha lights first so we don't waste
-			// slots in the sorted closest-N on lights that wouldn't have
-			// rendered anyway.
-			pointLights.erase(std::remove_if(pointLights.begin(), pointLights.end(),
-				[](PointLight* l)
-				{
-					if (l == nullptr || l->GetEntity() == nullptr || l->GetEntity()->IsPendingDeletion())
-						return true;
-					return l->GetDiffuseColour().w <= 0.0f;
-				}), pointLights.end());
-			std::sort(pointLights.begin(), pointLights.end(), sortByCameraDist);
 			const size_t pointCap = std::min<size_t>(
 				static_cast<size_t>(std::max(1, r_maxPointLights._val.i32)),
 				static_cast<size_t>(kMaxForwardPointLights));
@@ -6186,17 +6477,10 @@ namespace HexEngine
 		}
 
 		// Spot lights: same pattern.
-		std::vector<SpotLight*> spotLights;
-		if (_currentScene->GetComponents<SpotLight>(spotLights))
+		// Cached + nearest-first (GetSortedLights): not re-gathered / re-sorted every pass.
+		std::vector<SpotLight*> spotLights = GetSortedLights(_sortedSpotLights, cameraPos);
+		if (!spotLights.empty())
 		{
-			spotLights.erase(std::remove_if(spotLights.begin(), spotLights.end(),
-				[](SpotLight* l)
-				{
-					if (l == nullptr || l->GetEntity() == nullptr || l->GetEntity()->IsPendingDeletion())
-						return true;
-					return l->GetDiffuseColour().w <= 0.0f;
-				}), spotLights.end());
-			std::sort(spotLights.begin(), spotLights.end(), sortByCameraDist);
 			const size_t spotCap = std::min<size_t>(
 				static_cast<size_t>(std::max(1, r_maxSpotLights._val.i32)),
 				static_cast<size_t>(kMaxForwardSpotLights));
@@ -6582,7 +6866,7 @@ namespace HexEngine
 		math::Vector3 eye = math::Vector3::Zero;
 		if (auto* entity = _currentCamera->GetEntity(); entity != nullptr)
 			eye = entity->GetPosition() + _currentCamera->GetViewOffset();
-		return _currentScene->GetDepthBelowWater(eye);
+		return _currentScene->GetViewDepthBelowWater(eye);
 	}
 
 	void SceneRenderer::RenderUnderwater()
@@ -7269,7 +7553,10 @@ namespace HexEngine
 			_gbuffer.BindAsShaderResource();
 			_volumetricLightingBuffer->BlendTo_Additive(_compositionRT);
 #else
-			_volumetricLightingBuffer->BlendTo_Additive(_beautyRT, nullptr);
+			// Linear passthrough: the default (nullptr) shader is the GUI basic
+			// shader, which saturates and, on an HDR back buffer, applies
+			// pow(x, 2.2) * 1.9 - clipping bright shafts and crushing faint haze.
+			_volumetricLightingBuffer->BlendTo_Additive(_beautyRT, _fullScreenQuadShader.get());
 #endif
 
 
@@ -7289,12 +7576,26 @@ namespace HexEngine
 			_outlineParamsBuffer == nullptr || _currentCamera == nullptr)
 			return;
 
-		Entity* ent = focused->GetEntity();
-		auto* smc = ent->GetComponent<StaticMeshComponent>();
-		if (smc == nullptr)
-			return;
-		auto mesh = smc->GetMesh();
-		if (mesh == nullptr || mesh->GetInstance() == nullptr)
+		// The silhouette is the focused entity's mesh PLUS its descendants' meshes:
+		// a multi-part object (a vehicle prefab = an empty root holding the
+		// interaction + child mesh parts) has nothing on the root itself, so it
+		// used to get no glow at all.
+		std::vector<Entity*> parts;
+		{
+			std::vector<Entity*> stack{ focused->GetEntity() };
+			while (!stack.empty() && parts.size() < 64)
+			{
+				Entity* e = stack.back();
+				stack.pop_back();
+				if (e == nullptr)
+					continue;
+				if (auto* s = e->GetComponent<StaticMeshComponent>(); s != nullptr && s->GetMesh() != nullptr && s->GetMesh()->GetInstance() != nullptr)
+					parts.push_back(e);
+				for (Entity* c : e->GetChildren())
+					stack.push_back(c);
+			}
+		}
+		if (parts.empty())
 			return;
 
 		auto* graphics = g_pEnv->_graphicsDevice;
@@ -7323,30 +7624,35 @@ namespace HexEngine
 		_outlineJfaA->ClearRenderTargetView(math::Color(-1.0f, -1.0f, 0.0f, 0.0f));
 		graphics->SetViewport(vp);
 
-		auto instance = mesh->GetInstance();
-		instance->Start();
-		instance->Render(
-			ent->GetWorldTM(), ent->GetWorldTMTranspose(), ent->GetWorldTMPrevTranspose(),
-			ent->GetWorldTMInvert(), math::Vector4(1, 1, 1, 1), math::Vector2(1, 1));
-		instance->Finish();
+		for (Entity* ent : parts)
+		{
+			auto* smc = ent->GetComponent<StaticMeshComponent>();
+			auto mesh = smc->GetMesh();
+			auto instance = mesh->GetInstance();
+			instance->Start();
+			instance->Render(
+				ent->GetWorldTM(), ent->GetWorldTMTranspose(), ent->GetWorldTMPrevTranspose(),
+				ent->GetWorldTMInvert(), math::Vector4(1, 1, 1, 1), math::Vector2(1, 1));
+			instance->Finish();
 
-		// RenderMesh binds the mesh VB/IB + per-object cbuffer (correct world);
-		// we then swap in the silhouette/seed shader and draw (same override
-		// pattern as RenderPointLights).
-		smc->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
-		// Skinned meshes must seed through the animated VS or the outline
-		// silhouette renders in the bind/T-pose (the static seed VS ignores the
-		// bone palette RenderMesh just bound at VS register 3).
-		IShader* seedShader = (mesh->HasAnimations() && _outlineSeedAnimatedShader != nullptr)
-			? _outlineSeedAnimatedShader.get()
-			: _outlineSeedShader.get();
-		graphics->SetVertexShader(seedShader->GetShaderStage(ShaderStage::VertexShader));
-		graphics->SetPixelShader(seedShader->GetShaderStage(ShaderStage::PixelShader));
-		graphics->SetInputLayout(seedShader->GetInputLayout());
-		graphics->SetBlendState(BlendState::Opaque);
-		graphics->SetDepthBufferState(DepthBufferState::DepthNone);
-		graphics->SetCullingMode(CullingMode::BackFace);
-		graphics->DrawIndexedInstanced(mesh->GetNumIndices(), 1);
+			// RenderMesh binds the mesh VB/IB + per-object cbuffer (correct world);
+			// we then swap in the silhouette/seed shader and draw (same override
+			// pattern as RenderPointLights).
+			smc->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
+			// Skinned meshes must seed through the animated VS or the outline
+			// silhouette renders in the bind/T-pose (the static seed VS ignores the
+			// bone palette RenderMesh just bound at VS register 3).
+			IShader* seedShader = (mesh->HasAnimations() && _outlineSeedAnimatedShader != nullptr)
+				? _outlineSeedAnimatedShader.get()
+				: _outlineSeedShader.get();
+			graphics->SetVertexShader(seedShader->GetShaderStage(ShaderStage::VertexShader));
+			graphics->SetPixelShader(seedShader->GetShaderStage(ShaderStage::PixelShader));
+			graphics->SetInputLayout(seedShader->GetInputLayout());
+			graphics->SetBlendState(BlendState::Opaque);
+			graphics->SetDepthBufferState(DepthBufferState::DepthNone);
+			graphics->SetCullingMode(CullingMode::BackFace);
+			graphics->DrawIndexedInstanced(mesh->GetNumIndices(), 1);
+		}
 
 		// 2 + 3: jump-flood propagation then composite, via the GUI fullscreen quad.
 		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
@@ -7909,6 +8215,11 @@ namespace HexEngine
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Begin");
 
 		const auto& bbvp = _currentCamera->GetViewport();
+		if (!(bbvp.width >= 1.0f) || !(bbvp.height >= 1.0f))
+		{
+			GFX_PERF_END();
+			return;   // zero-size view (minimised): no targets can exist at this size
+		}
 
 		// Recreate the SSR chain when r_ssrHalfRes flips at runtime (or the
 		// viewport changed under us - Resize handles the normal path, this is
@@ -7989,6 +8300,9 @@ namespace HexEngine
 			{
 				_diffuseGi.BindVoxelsForReflection();
 			}
+			// DDGI probes for the SSR miss fallback (GiFallbackRadiance); while
+			// DDGI is inactive this nulls b8 so the shader takes the voxel path.
+			_ddgi.BindForReflectionPS();
 
 			// Sky-view LUT at t21 = the environment fallback for specular rays that find
 			// nothing. Bound with an EXPLICIT slot rather than the auto-slot counter,
@@ -8143,6 +8457,9 @@ namespace HexEngine
 			// (same register + gating as the deferred pass; z flag guards it).
 			g_pEnv->_graphicsDevice->SetTexture2D(22,
 				_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
+			// DDGI probes (t56-64, b8): their sky visibility occludes the env
+			// specular while DDGI owns GI; nulls b8 (= no-op) otherwise.
+			_ddgi.BindForReflectionPS();
 
 			// PremultipliedAlpha (src + dst * (1 - src.a)), not Additive: the
 			// resolve writes the reflection in rgb and the surface's specular

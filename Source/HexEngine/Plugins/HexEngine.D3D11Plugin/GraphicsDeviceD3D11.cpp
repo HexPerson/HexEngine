@@ -2941,6 +2941,86 @@ void GraphicsDeviceD3D11::BeginFrame(HexEngine::Window* window, HexEngine::IText
 }
 
 
+bool GraphicsDeviceD3D11::RequestBackBufferCapture(const std::wstring& absolutePath)
+{
+	std::lock_guard<std::mutex> g(_bbCaptureLock);
+	_bbCapturePath = absolutePath;
+	_bbCaptureState = 0;
+	return true;
+}
+
+void GraphicsDeviceD3D11::ServiceBackBufferCapture(IDXGISwapChain* swapchain)
+{
+	std::wstring path;
+	{
+		std::lock_guard<std::mutex> g(_bbCaptureLock);
+		if (_bbCapturePath.empty())
+			return;
+		path.swap(_bbCapturePath);
+	}
+	bool ok = false;
+	ID3D11Texture2D* bb = nullptr;
+	ID3D11Texture2D* resolved = nullptr;
+	if (swapchain != nullptr && SUCCEEDED(swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&bb)) && bb != nullptr)
+	{
+		D3D11_TEXTURE2D_DESC desc = {};
+		bb->GetDesc(&desc);
+		ID3D11Texture2D* src = bb;
+		if (desc.SampleDesc.Count > 1)
+		{
+			// The editor swapchain is MSAA: resolve to a single-sample copy first.
+			D3D11_TEXTURE2D_DESC rd = desc;
+			rd.SampleDesc.Count = 1;
+			rd.SampleDesc.Quality = 0;
+			rd.BindFlags = 0;
+			rd.Usage = D3D11_USAGE_DEFAULT;
+			rd.CPUAccessFlags = 0;
+			rd.MiscFlags = 0;
+			if (SUCCEEDED(_device->CreateTexture2D(&rd, nullptr, &resolved)))
+			{
+				_deviceContext->ResolveSubresource(resolved, 0, bb, 0, desc.Format);
+				src = resolved;
+			}
+			else
+				src = nullptr;
+		}
+		if (src != nullptr)
+		{
+			DirectX::ScratchImage scratch;
+			if (SUCCEEDED(DirectX::CaptureTexture(_device, _deviceContext, src, scratch)))
+			{
+				const DirectX::Image* img = scratch.GetImage(0, 0, 0);
+				// ".dds" = the RAW back buffer (scRGB RGBA16F on an HDR swapchain).
+				// The PNG path below clamps float swapchains at scRGB 1.0 (80 nits,
+				// ~40% of a 200-nit paper white) and stores linear values, so it is
+				// not what an HDR display shows; look work should decode the DDS
+				// with the display mapping (r_hdrPaperWhiteNits) instead.
+				std::wstring lower = path;
+				for (auto& ch : lower) ch = (wchar_t)towlower(ch);
+				const bool rawDds = lower.size() >= 4 && lower.compare(lower.size() - 4, 4, L".dds") == 0;
+				if (rawDds)
+				{
+					ok = img != nullptr && SUCCEEDED(DirectX::SaveToDDSFile(*img, DirectX::DDS_FLAGS_NONE, path.c_str()));
+				}
+				else
+				{
+					DirectX::ScratchImage converted;
+					// PNG wants 8-bit: convert float/10-bit swapchains down first.
+					if (img != nullptr && img->format != DXGI_FORMAT_R8G8B8A8_UNORM && img->format != DXGI_FORMAT_B8G8R8A8_UNORM &&
+						SUCCEEDED(DirectX::Convert(*img, DXGI_FORMAT_R8G8B8A8_UNORM, DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, converted)))
+						img = converted.GetImage(0, 0, 0);
+					ok = img != nullptr && SUCCEEDED(DirectX::SaveToWICFile(*img, DirectX::WIC_FLAGS_FORCE_SRGB,
+						DirectX::GetWICCodec(DirectX::WIC_CODEC_PNG), path.c_str()));
+				}
+			}
+		}
+	}
+	if (resolved) resolved->Release();
+	if (bb) bb->Release();
+	_bbCaptureState = ok ? 1 : -1;
+	LOG_INFO("Back-buffer capture %s: %ls", ok ? "written" : "FAILED", path.c_str());
+}
+
 void GraphicsDeviceD3D11::EndFrame(HexEngine::Window* window)
 {
 	auto it = _deviceData.find(window);
@@ -2949,6 +3029,8 @@ void GraphicsDeviceD3D11::EndFrame(HexEngine::Window* window)
 		return;
 
 	//std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	ServiceBackBufferCapture(it->second.swapchain);
 
 	// Finally present the scene
 	//

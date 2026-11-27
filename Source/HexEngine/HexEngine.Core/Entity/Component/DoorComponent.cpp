@@ -12,6 +12,7 @@
 #include "../../Audio/AudioManager.hpp"
 #include "../../Audio/SoundEffect.hpp"
 #include "../../Math/easing.h"
+#include "../../Math/FloatMath.hpp"
 #include "../../GUI/Elements/ComponentWidget.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
 #include "../../GUI/Elements/Checkbox.hpp"
@@ -235,7 +236,10 @@ namespace HexEngine
 		if (_isOpen)
 			return;
 		_isOpen = true;
-		PlayDoorSound(_openSoundPath, _openSound);
+		if (!_openSoundPath.empty())
+			PlayDoorSound(_openSoundPath, _openSound, _soundVolume);
+		else
+			PlayDoorSound(_fallbackOpenPath, _fallbackOpenSound, _fallbackVolume);
 	}
 
 	void DoorComponent::Close()
@@ -243,7 +247,10 @@ namespace HexEngine
 		if (!_isOpen)
 			return;
 		_isOpen = false;
-		PlayDoorSound(_closeSoundPath, _closeSound);
+		if (!_closeSoundPath.empty())
+			PlayDoorSound(_closeSoundPath, _closeSound, _soundVolume);
+		else
+			PlayDoorSound(_fallbackClosePath, _fallbackCloseSound, _fallbackVolume);
 	}
 
 	void DoorComponent::Toggle()
@@ -254,7 +261,7 @@ namespace HexEngine
 			Open();
 	}
 
-	void DoorComponent::PlayDoorSound(const std::string& path, std::shared_ptr<SoundEffect>& master)
+	void DoorComponent::PlayDoorSound(const std::string& path, std::shared_ptr<SoundEffect>& master, float volume)
 	{
 		if (path.empty() || g_pEnv == nullptr || g_pEnv->_audioManager == nullptr)
 			return;
@@ -266,21 +273,51 @@ namespace HexEngine
 				[](const std::shared_ptr<SoundEffect>& s) { return s == nullptr || !s->IsPlaying(); }),
 			_activeSounds.end());
 
-		if (master == nullptr)
-			master = SoundEffect::Create(path);
-		if (master == nullptr)
+		// A comma-separated list is a set of takes: pick one per swing (with a
+		// touch of pitch spread) so a door used all day doesn't sound canned.
+		// SoundEffect::Create goes through the resource cache, so per-take
+		// lookups are cheap; `master` only caches the single-path case.
+		std::shared_ptr<SoundEffect> source;
+		if (path.find(',') != std::string::npos)
+		{
+			std::vector<std::string> takes;
+			size_t start = 0;
+			while (start <= path.size())
+			{
+				size_t end = path.find(',', start);
+				if (end == std::string::npos)
+					end = path.size();
+				std::string t = path.substr(start, end - start);
+				t.erase(0, t.find_first_not_of(" \t"));
+				t.erase(t.find_last_not_of(" \t") + 1);
+				if (!t.empty())
+					takes.push_back(std::move(t));
+				start = end + 1;
+			}
+			if (takes.empty())
+				return;
+			source = SoundEffect::Create(takes[(size_t)GetRandomInt(0, (int32_t)takes.size() - 1)]);
+		}
+		else
+		{
+			if (master == nullptr)
+				master = SoundEffect::Create(path);
+			source = master;
+		}
+		if (source == nullptr)
 			return;
 
-		auto clone = master->CreatePlaybackClone();
+		auto clone = source->CreatePlaybackClone();
 		if (clone == nullptr)
 			return;
-		clone->SetVolume(_soundVolume);
+		clone->SetVolume(volume);
+		clone->SetPitch(GetRandomFloat(-0.05f, 0.05f));
+		clone->SetRadius(16.0f);
 
 		// Positional (3D) playback at the door so it attenuates with distance.
-		if (auto* tf = GetEntity()->GetComponent<Transform>(); tf != nullptr)
-			g_pEnv->_audioManager->Play(clone, tf->GetPosition());
-		else
-			g_pEnv->_audioManager->Play(clone);
+		// World position: doors are parented into their building, so the
+		// Transform's own position is building-local.
+		g_pEnv->_audioManager->Play(clone, GetEntity()->GetWorldTM().Translation());
 
 		_activeSounds.push_back(std::move(clone));
 	}

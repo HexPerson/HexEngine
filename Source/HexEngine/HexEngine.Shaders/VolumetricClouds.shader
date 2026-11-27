@@ -86,6 +86,22 @@
 		return lerp(forward, backward, 0.35f);
 	}
 
+	// THREE-LOBE cloud phase. The old dual lobe peaked at only ~3x isotropic
+	// toward the sun (g 0.35) - real cloud droplets (Mie) have a forward
+	// peak ~100x isotropic, and THAT is the silver lining: thin edges of a
+	// cloud in front of a low sun light up brilliantly while its body stays
+	// dark. broad = the cvar lobe + back-scatter (unchanged character away
+	// from the sun); silver = a narrow g~0.86 diffraction peak weighted by the
+	// silver-lining cvar (0.55 -> 22%). k scales the eccentricity down for
+	// the higher multi-scatter octaves (light that has bounced several times
+	// has lost its direction).
+	float CloudPhase(float cosTheta, float anisotropy, float silverWeight, float k)
+	{
+		const float broad = lerp(HenyeyGreenstein(cosTheta, anisotropy * k), HenyeyGreenstein(cosTheta, -0.25f * k), 0.30f);
+		const float silver = HenyeyGreenstein(cosTheta, 0.86f * k);
+		return lerp(broad, silver, silverWeight);
+	}
+
 	float3 GetWorldRay(float2 uv)
 	{
 		float4 clipPos = float4(uv * 2.0f - 1.0f, 1.0f, 1.0f);
@@ -111,43 +127,139 @@
 		float3(-0.16852403f,  0.14748697f,  0.97460106f)
 	};
 
-	float MarchToLight(float3 samplePos, float3 boundsMin, float3 boundsMax, float3 windOffset, float3 sunDir, int lightSteps)
+	// Light march -> sun OPTICAL DEPTH (absorption applied), not a floored
+	// transmittance: the multi-scatter octaves need tau itself.
+	//
+	// QUADRATIC step distribution. The old march took 12 equal ~75 m steps,
+	// first sample 37 m in - every billow smaller than that was invisible
+	// to the light, so a cumulus shaded as one smooth gradient ("blobby").
+	// Sample i sits at span*(i^2+i+0.5)/N^2: the first steps are ~8 m, the
+	// last ~190 m, total still = span. Near steps resolve the self-shadow
+	// of individual cauliflower lobes (sculpted, crisp terminator); far
+	// steps still integrate the whole tower behind them.
+	// nearDetail: detail erosion for the first 3 (short) steps so lobes cast
+	// on each other. The caller zeroes it for grazing sun - long horizontal
+	// detail paths at sunset speckled the deck (see SampleCloudDensityTexImpl).
+	float MarchToLightTau(float3 samplePos, float3 boundsMin, float3 boundsMax, float3 windOffset, float3 sunDir, int lightSteps, float nearDetail)
 	{
 		const float2 lightHit = RayBoxDist(boundsMin, boundsMax, samplePos, sunDir);
 		if (lightHit.y <= 0.0f)
-			return 1.0f;
+			return 0.0f;
 
-		// Horizon-scale bounds can put kilometres of slab above a sample;
-		// light beyond ~900m of cloud is fully extinct anyway, and without
-		// this clamp the light steps stretch into uselessness.
-		const float lightSpan = min(lightHit.y, 900.0f);
-		const float stepLen = max(1.0f, lightSpan / max(1, lightSteps));
-		// Physical per-metre extinction (see ShaderMain) - the old
-		// height-normalized scale capped every vertical path at the same
-		// optical depth regardless of thickness or density.
-		const float invCloudHeight = 0.012f;
+		// Light beyond ~1.2 km of cloud is fully extinct anyway - for a HIGH
+		// sun. A low sun's ray runs nearly horizontally under/through the
+		// deck, and the cell that should shadow a base can be 3-5 km
+		// upwind: clamped at 1.2 km, every storm base saw a clear path to
+		// the setting sun and glowed one flat orange. Grow the span toward
+		// 5 km as the sun drops (same step count - the quadratic spacing
+		// keeps the first steps short).
+		const float lightSpan = min(lightHit.y, lerp(5000.0f, 1200.0f, saturate(sunDir.y * 4.0f)));
+		const float invN2 = 1.0f / (float)max(1, lightSteps * lightSteps);
 		// Cone half-tangent ~0.15 (=~8.5 deg): wide enough to break line
 		// aliasing, narrow enough that near-sample shadowing stays local.
 		const float coneSpread = 0.15f;
-		float travelled = stepLen * 0.5f;
 		float opticalDepth = 0.0f;
 
 		[loop]
 		for (int i = 0; i < lightSteps; ++i)
 		{
-			if (travelled >= lightSpan)
-				break;
-
-			const float3 coneOffset = kConeKernel[i % 6] * (coneSpread * travelled);
-			const float3 p = samplePos + sunDir * travelled + coneOffset;
-			// COARSE density (no detail erosion): grazing sunset light paths
-			// through the detailed field speckled the whole deck white.
-			const float density = SampleCloudDensityTexCoarse(g_shapeNoise, g_detailNoise, g_mirrorSampler, p, boundsMin, boundsMax, windOffset);
-			opticalDepth += density * stepLen * invCloudHeight;
-			travelled += stepLen;
+			const float fi = (float)i;
+			const float t = lightSpan * (fi * fi + fi + 0.5f) * invN2;
+			const float ds = lightSpan * (2.0f * fi + 1.0f) * invN2;
+			const float3 p = samplePos + sunDir * t + kConeKernel[i % 6] * (coneSpread * t);
+			const float density = SampleCloudDensityTexImpl(g_shapeNoise, g_detailNoise, g_mirrorSampler, p, boundsMin, boundsMax, windOffset, i < 3 ? nearDetail : 0.0f);
+			opticalDepth += density * ds;
 		}
 
-		return max(g_cloudParams3.z, exp(-opticalDepth * g_cloudParams1.x));
+		// Physical per-metre extinction (see ShaderMain).
+		return opticalDepth * 0.012f * g_cloudParams1.x;
+	}
+
+	// RAIN SHAFTS / VIRGA under storm cells. A second, cheap march through
+	// the air BELOW the cloud base (the cloud march never looks there):
+	// precipitation falls from the fullest weather-map cores, slanted
+	// downwind, streaked by a 2D noise extruded vertically, and some shafts
+	// evaporate before reaching the ground (virga). Lit by the sun through
+	// the deck above (3 coarse taps) with a strong forward phase - the
+	// backlit grey-gold veils of the reference - plus the dim under-deck
+	// ambient. Starts 450 m out: near rain is the particle system's job.
+	// Returns (in-scattered radiance, transmittance).
+	float4 MarchRainShafts(float3 eyePos, float3 rayDir, float sceneDepth, float3 boundsMin, float3 boundsMax,
+		float3 windOffset, float3 sunDir, float3 sunColour, float3 ambientRain, float jitter)
+	{
+		const float precip = saturate(g_weatherSurface.precipitationIntensity);
+		if (precip < 0.02f)
+			return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+		// Metres above the slab floor (was 5% of the slab - 400 m into the
+		// cloud once storms got a tall slab).
+		const float baseY = boundsMin.y + 100.0f;
+		if (eyePos.y >= baseY)
+			return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+		const float tNear = 450.0f;
+		float tFar = min(sceneDepth, min(g_cloudParams0.w, 16000.0f));
+		if (rayDir.y > 1e-4f)
+			tFar = min(tFar, (baseY - eyePos.y) / rayDir.y);
+		if (tFar <= tNear + 1.0f)
+			return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+		const int steps = 14;
+		const float ds = (tFar - tNear) / steps;
+		float2 windXz = g_cloudWindDirection.xz;
+		windXz = dot(windXz, windXz) > 1e-6f ? normalize(windXz) : float2(1.0f, 0.0f);
+		const float coverage = saturate(g_cloudParams0.y);
+		const float threshold = lerp(0.80f, 0.16f, coverage);
+		const float cosSun = dot(rayDir, sunDir);
+		// Drops scatter forward (large-particle Mie). Moderated (g 0.5, half
+		// weight) and the sun term scaled 0.3: the cloud sun basis is floored
+		// at 35% of a clear-day sun, and at g 0.7 a shaft between camera and
+		// a low sun rendered as a white blown-out wall on the horizon.
+		const float phase = lerp(1.0f / (4.0f * PI), HenyeyGreenstein(cosSun, 0.50f), 0.50f) * 0.30f;
+
+		float T = 1.0f;
+		float3 L = 0.0f.xxx;
+		[loop]
+		for (int i = 0; i < steps; ++i)
+		{
+			const float t = tNear + ((float)i + jitter) * ds;
+			const float3 p = eyePos + rayDir * t;
+			const float fall = baseY - p.y;
+			if (fall <= 0.0f)
+				continue;
+			const float2 slantXz = p.xz + windXz * fall * 0.30f;
+			const float wm = CloudColumnCoverage(slantXz, windOffset.xz);
+			const float core = smoothstep(threshold + 0.08f, threshold + 0.26f, wm);
+			if (core <= 0.001f)
+				continue;
+
+			const float streak = CloudValueNoise2(slantXz * (1.0f / 260.0f) + 5.3f.xx) * 0.65f
+			                   + CloudValueNoise2(slantXz * (1.0f / 85.0f) + 11.7f.xx) * 0.35f;
+			const float reach = lerp(0.30f, 1.15f, CloudValueNoise2(slantXz * (1.0f / 1700.0f) + 3.1f.xx));
+			const float fallFrac = fall / max(1.0f, baseY);
+			const float virga = 1.0f - smoothstep(reach - 0.30f, reach, fallFrac);
+			const float topFade = smoothstep(0.0f, 80.0f, fall);
+			const float nearFade = smoothstep(tNear, tNear + 700.0f, t);
+			// 0.00045 -> 0.0008: shafts were invisible at real distances.
+			const float sigma = 0.0008f * precip * core * smoothstep(0.30f, 0.72f, streak) * virga * topFade * nearFade;
+			if (sigma <= 1e-7f)
+				continue;
+
+			float sunVis = 0.0f;
+			if (sunDir.y > 0.01f)
+			{
+				const float tEnter = (boundsMin.y - p.y) / sunDir.y;
+				const float d0 = SampleCloudDensityTexCoarse(g_shapeNoise, g_detailNoise, g_mirrorSampler, p + sunDir * (tEnter + 150.0f), boundsMin, boundsMax, windOffset);
+				const float d1 = SampleCloudDensityTexCoarse(g_shapeNoise, g_detailNoise, g_mirrorSampler, p + sunDir * (tEnter + 450.0f), boundsMin, boundsMax, windOffset);
+				const float d2 = SampleCloudDensityTexCoarse(g_shapeNoise, g_detailNoise, g_mirrorSampler, p + sunDir * (tEnter + 900.0f), boundsMin, boundsMax, windOffset);
+				sunVis = exp(-(d0 * 300.0f + d1 * 300.0f + d2 * 450.0f) * 0.012f * g_cloudParams1.x);
+			}
+
+			const float3 Ls = sunColour * (phase * sunVis) + ambientRain;
+			L += T * sigma * ds * Ls;
+			T *= exp(-sigma * ds);
+		}
+		return float4(L, T);
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
@@ -178,19 +290,30 @@
 		}
 
 		const float3 boundsMin = g_cloudBoundsMin.xyz;
-		const float3 boundsMax = g_cloudBoundsMax.xyz;
+		// EFFECTIVE SLAB TOP. Only storm cells use height above the 2050 m
+		// design depth (CloudCommon's metre profiles), but a tall slab
+		// lengthened every ray - and so every coarse/fine step - for ALL
+		// skies: overcast gaps turned to speckle at an 8 km slab. Clip the
+		// march to the design depth unless the sky can hold storm cells
+		// (same coverage/type gates as CloudCommon's storminess, applied to
+		// the global coverage + type bias).
+		const float stormPotential = CloudStormSky();
+		const float3 boundsMax = float3(g_cloudBoundsMax.x,
+			min(g_cloudBoundsMax.y, g_cloudBoundsMin.y + lerp(2050.0f, max(2050.0f, g_cloudBoundsMax.y - g_cloudBoundsMin.y), stormPotential)),
+			g_cloudBoundsMax.z);
 		const float3 eyePos = g_eyePos.xyz;
 		const float3 rayDir = GetWorldRay(uv);
 		const float2 cloudHit = RayBoxDist(boundsMin, boundsMax, eyePos, rayDir);
 
-		if (cloudHit.y <= 0.0f)
-			return float4(0.0f, 0.0f, 0.0f, 0.0f);
-
 		const float entryDist = cloudHit.x;
 		float maxTraceDistance = min(cloudHit.y, max(0.0f, pixelDepth - entryDist));
 		maxTraceDistance = min(maxTraceDistance, g_cloudParams0.w);
-		if (maxTraceDistance <= 0.0f)
+		// Rays that miss the slab may still cross rain shafts below it.
+		const bool rainPossible = g_weatherSurface.precipitationIntensity >= 0.02f && eyePos.y < boundsMin.y;
+		if ((cloudHit.y <= 0.0f || maxTraceDistance <= 0.0f) && !rainPossible)
 			return float4(0.0f, 0.0f, 0.0f, 0.0f);
+		if (cloudHit.y <= 0.0f)
+			maxTraceDistance = 0.0f;
 
 		int viewSteps = max(8, (int)g_cloudMarch.x);
 		int lightSteps = max(2, (int)g_cloudMarch.y);
@@ -225,7 +348,9 @@
 		// windOffset.w = "atmosphere LUTs valid" (set by BuildCloudConstants).
 		const bool useAtmosphereLuts = g_cloudWindOffset.w > 0.5f;
 		const float3 sunDir = normalize(-g_lightDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
-		const float3 cloudProbeOrigin = float3(0.0f, lerp(boundsMin.y, boundsMax.y, 0.58f), 0.0f);
+		// Fixed ~1.2 km into the deck (was 58% of the slab): with a tall storm
+		// slab the probe sat at ~5 km, under-reddening every sunset cloud.
+		const float3 cloudProbeOrigin = float3(0.0f, min(boundsMin.y + 1200.0f, boundsMax.y), 0.0f);
 		const float sunElevation = -g_lightDirection.y;
 		// Sun visibility: the direct term must switch OFF once the sun is below
 		// the horizon. It used to carry a hard max(lightMult, 0.35) floor, so a
@@ -284,9 +409,28 @@
 		const float lightningFlash = saturate(g_weatherSurface.lightningFlash);
 		const float3 lightningDir = normalize(g_weatherSurface.lightningBoltDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
 		const float3 lightningColour = float3(0.64f, 0.78f, 1.0f) * lightningFlash;
+		// LOCALISED lightning: the flash used to light every cloud in the sky
+		// uniformly. Put the discharge INSIDE the cell along the bolt's sky
+		// direction (35% up the slab, at most 9 km out) and let it glow
+		// through the surrounding cloud with distance falloff; a small
+		// sky-wide term remains for the sheet-lightning brightening.
+		float3 boltPos;
+		{
+			const float boltT = min(9000.0f, max(0.0f, lerp(boundsMin.y, boundsMax.y, 0.35f) - eyePos.y) / max(lightningDir.y, 0.08f));
+			boltPos = eyePos + lightningDir * boltT;
+		}
 		const float cosSun = dot(rayDir, sunDir);
 		const float isotropicPhase = 1.0f / (4.0f * PI);
 		const float phase = lerp(isotropicPhase, DualLobeHG(cosSun, g_cloudParams1.z), 0.85f) * g_cloudParams3.w;
+		const float silverWeight = saturate(g_cloudParams4.x * 0.40f);
+		// Octave phases are per-RAY (cosSun is fixed along the march).
+		const float phaseOct0 = CloudPhase(cosSun, g_cloudParams1.z, silverWeight, 1.0f) * g_cloudParams3.w;
+		const float phaseOct1 = CloudPhase(cosSun, g_cloudParams1.z, silverWeight, 0.5f) * g_cloudParams3.w;
+		const float phaseOct2 = CloudPhase(cosSun, g_cloudParams1.z, silverWeight, 0.25f) * g_cloudParams3.w;
+		// Octave contribution b (Wrenninge): the multi-scatter cvar 0.45 -> ~0.5.
+		const float msB = saturate(g_cloudParams4.z * 1.1f);
+		// Light-march detail only for a well-raised sun (grazing paths speckle).
+		const float lightDetailGate = smoothstep(0.06f, 0.25f, sunDir.y) * 0.6f;
 		// x1.6 inherent lift: clouds are the brightest ambient scatterers in
 		// a daytime scene, and the probe inscatter alone under-lit the
 		// undersides to a dirty grey-brown (user report). The strength cvar
@@ -315,7 +459,16 @@
 		// Pull the cloud ambient toward the same dimmed overcast colour the
 		// sky dome / fog / IBL lerp toward (g_skyOvercast, per-frame), scaled
 		// by the ambient-strength cvar so presets keep their meaning.
-		ambientSky = lerp(ambientSky, g_skyOvercast.rgb * ambientLift, saturate(g_skyOvercast.w));
+		// Keep part of the SKY's hue when pulling toward the neutral overcast
+		// grey: storm undersides in the reference are dark BLUE-grey (lit by
+		// what open sky remains), not neutral - a pure grey ambient against
+		// the warm sun term is a big part of why storm decks read flat/muddy.
+		{
+			const float3 lumaW = float3(0.299f, 0.587f, 0.114f);
+			const float3 skyHue = min(ambientSky / max(dot(ambientSky, lumaW), 1e-5f), 2.5f.xxx);
+			const float3 overcastTinted = dot(g_skyOvercast.rgb * ambientLift, lumaW) * lerp(1.0f.xxx, skyHue, 0.40f);
+			ambientSky = lerp(ambientSky, overcastTinted, saturate(g_skyOvercast.w));
+		}
 
 		// Stylized-term sun basis: the HDR sun radiance (~28 at noon on the
 		// LUT energy scale) is correct for the PHYSICAL direct term (the
@@ -338,7 +491,12 @@
 		const float3 ambientChromatic = lerp(ambientNeutral, ambientSky, saturate(g_cloudParams5.y));
 		// Warm-sun contributions scale with sunUp: lerping toward a zero sun
 		// colour at night would only darken the ambient, not tint it.
-		const float3 ambientShaded = lerp(ambientChromatic, sunStylized, saturate(g_cloudParams5.x) * 0.28f * sunUp);
+		// Warm sun pull is applied PER SAMPLE by sun visibility (see the march):
+		// baked into the ambient it tinted the SHADOWED side orange/tan as
+		// well, so lit and shadowed faces shared one colour. Shadowed bases
+		// keep the cool sky chroma (the reference's blue-grey undersides).
+		const float3 ambientShaded = ambientChromatic;
+		const float3 ambientWarm = lerp(ambientChromatic, sunStylized, saturate(g_cloudParams5.x) * 0.28f * sunUp);
 		const float3 topTint = lerp(ambientShaded, sunStylized, 0.48f * sunUp);
 		const float3 bottomTint = lerp(ambientNeutral, ambientShaded, 0.88f);
 
@@ -366,9 +524,12 @@
 		// within a handful of samples and empty air now costs no detail fetch.
 		const float kFineScale = 0.30f;
 		const int kEmptyToCoarse = 5;
-		const int maxIters = viewSteps * 2;
+		// x3 (was x2) for the metre-capped fine steps; dense rays still
+		// terminate on transmittance within a handful of samples.
+		const int maxIters = viewSteps * 3;
 		bool fineMode = false;
 		int emptyRun = 0;
+		float emptyDist = 0.0f;
 		[loop]
 		for (int i = 0; i < maxIters; ++i)
 		{
@@ -380,11 +541,24 @@
 			// distant clouds ("lined" look). 0.0005/3.5x keeps the horizon
 			// deck inside budget while sampling the profile densely enough.
 			const float coarseStep = baseStep * clamp(1.0f + (entryDist + travelled) * 0.0005f, 1.0f, 3.5f);
-			const float stepLenView = fineMode ? coarseStep * kFineScale : coarseStep;
+			// Fine steps CAPPED in metres: coarseStep*0.3 reached ~290 m at
+			// 5 km, which sampled 100-300 m billow lobes once or not at all -
+			// they aliased into soft mush (+ jitter fur). Dense cells still
+			// terminate within a few fine steps, so the cost is bounded.
+			// Past ~6 km the cap relaxes back to the old 0.3x coarse step:
+			// long grazing far rays otherwise exhausted maxIters mid-cloud
+			// and ended half-transparent (a sparkly streak band on the deck).
+			const float marchDist = entryDist + travelled;
+			const float fineStep = min(coarseStep * kFineScale, 45.0f + marchDist * 0.008f + max(0.0f, marchDist - 6000.0f) * 0.03f);
+			const float stepLenView = fineMode ? fineStep : coarseStep;
 			const float3 samplePos = eyePos + rayDir * (entryDist + travelled);
 			// Distance LOD on the detail erosion: full detail near, coarse
 			// far - far detail aliases into sparkle grain at dusk.
-			const float detailLod = fineMode ? (1.0f - smoothstep(1200.0f, 6000.0f, entryDist + travelled)) : 0.0f;
+			// LOD range widened 1.2-6 km -> 3-14 km with a 0.3 floor: with
+			// the deck seen almost entirely at 2-15 km, the old ramp stripped
+			// detail from nearly every visible cloud (the "blobby" read).
+			// The 154 m detail period still spans ~4+ half-res pixels at 10 km.
+			const float detailLod = fineMode ? lerp(0.30f, 1.0f, 1.0f - smoothstep(3000.0f, 14000.0f, entryDist + travelled)) : 0.0f;
 			const float density = SampleCloudDensityTexImpl(g_shapeNoise, g_detailNoise, g_mirrorSampler, samplePos, boundsMin, boundsMax, windOffset, detailLod);
 
 			if (!fineMode)
@@ -395,6 +569,7 @@
 					// span this coarse step just leapt over.
 					fineMode = true;
 					emptyRun = 0;
+					emptyDist = 0.0f;
 					travelled = max(0.0f, travelled - coarseStep);
 					continue;
 				}
@@ -405,7 +580,10 @@
 			if (density > 0.0001f)
 			{
 				emptyRun = 0;
-				const float lightTrans = MarchToLight(samplePos, boundsMin, boundsMax, windOffset, sunDir, lightSteps);
+				emptyDist = 0.0f;
+				const float sunTau = MarchToLightTau(samplePos, boundsMin, boundsMax, windOffset, sunDir, lightSteps, detailLod * lightDetailGate);
+				const float rawLightTrans = exp(-sunTau);
+				const float lightTrans = max(g_cloudParams3.z, rawLightTrans);
 				const float shadowAmount = 1.0f - lightTrans;
 				const float viewToSun = saturate(dot(rayDir, sunDir));
 				// Schneider beer-powder: the light march gives
@@ -418,7 +596,11 @@
 				// samples and produced neither effect. x2 keeps the mid-range
 				// above unity so the strength cvar's meaning survives.
 				const float schneiderPowder = 1.0f - lightTrans * lightTrans;
-				const float powder = lerp(1.0f, 2.0f * schneiderPowder, saturate(g_cloudParams1.y));
+				// Powder is a view-dependent effect: looking TOWARD the sun the
+				// thin edges must glow (silver lining), not darken - fade it
+				// out with view-sun alignment (Nubis). Capped at 1: the old x2
+				// form brightened mid-depth bulk and flattened the gradient.
+				const float powder = lerp(1.0f, min(1.0f, 2.0f * schneiderPowder), saturate(g_cloudParams1.y) * (1.0f - viewToSun * viewToSun));
 				// Soft distance fade toward the trace limit - the horizon deck
 				// dissolves into the atmosphere instead of ending at a wall.
 				const float distanceFade = 1.0f - smoothstep(0.70f, 1.0f, (entryDist + travelled) / maxDist);
@@ -433,44 +615,69 @@
 				// (<= 1): the path integral now tops out at (1 - T).
 				const float scatter = density * stepLenView * invCloudHeight * g_cloudParams3.x * transmittance * distanceFade;
 				const float diffuseProbeDistance = max(1.0f, baseStep * 0.75f);
-				const float densityTowardSun = SampleCloudDensity(samplePos + sunDir * diffuseProbeDistance, boundsMin, boundsMax, windOffset);
-				const float derivativeDiffuse = saturate((density - densityTowardSun) * 2.25f + 0.12f);
-				const float directionalDiffuse = lerp(1.0f, derivativeDiffuse, saturate(g_cloudParams5.z));
-				const float densityTowardLightning = SampleCloudDensity(samplePos + lightningDir * diffuseProbeDistance, boundsMin, boundsMax, windOffset);
-				const float lightningDerivative = saturate((density - densityTowardLightning) * 2.0f + 0.10f);
-				const float silverLining = pow(saturate(shadowAmount), max(0.5f, g_cloudParams4.y)) * g_cloudParams4.x;
-				// Energy-conserving multiple scattering: on top of the single-scatter
-				// (octave 0 = 1.0), add dimmer, deeper-penetrating higher orders whose
-				// extinction is progressively attenuated (lightTrans^0.5, ^0.25) so
-				// dense cores glow with soft internal bounce instead of going flat.
-				// Scaled by the weather-driven multi-scatter strength.
-				const float msStrength = saturate(g_cloudParams4.z);
-				const float multiScatter = 1.0f + msStrength * (0.60f * pow(lightTrans, 0.5f) + 0.35f * pow(lightTrans, 0.25f));
-				const float height01 = saturate((samplePos.y - boundsMin.y) / max(1.0f, boundsMax.y - boundsMin.y));
+				// Directional-derivative diffuse (off in the shipped scene: cvar
+				// pinned 0) - only pay for its full-detail fetch when enabled.
+				float directionalDiffuse = 1.0f;
+				[branch] if (g_cloudParams5.z > 0.001f)
+				{
+					const float densityTowardSun = SampleCloudDensity(samplePos + sunDir * diffuseProbeDistance, boundsMin, boundsMax, windOffset);
+					const float derivativeDiffuse = saturate((density - densityTowardSun) * 2.25f + 0.12f);
+					directionalDiffuse = lerp(1.0f, derivativeDiffuse, saturate(g_cloudParams5.z));
+				}
+
+				// MULTIPLE SCATTERING OCTAVES (Wrenninge / Hillaire 2016):
+				// sum_i b^i * phase(g * 0.5^i) * exp(-tau * 0.5^i). Each octave
+				// penetrates deeper (halved extinction) with a flatter phase.
+				// Replaces (a) a multiplier on the single-scatter term - which
+				// is ~0 wherever lightTrans is ~0, so it never lit a core - and
+				// (b) the stylized "silver lining" pow(shadowAmount, 5) and
+				// "forward glow" terms, which were strongest in DEEP SHADOW and
+				// painted sun colour over the dark side of every cloud: the
+				// main reason lit vs shadowed sides barely differed. The silver
+				// lining now comes from the narrow forward lobe in CloudPhase
+				// acting on thin edges (tau ~ 0) only.
+				const float oct0 = rawLightTrans * phaseOct0 * powder;
+				const float oct1 = msB * exp(-sunTau * 0.5f) * phaseOct1;
+				const float oct2 = msB * msB * exp(-sunTau * 0.25f) * phaseOct2;
+				// Shadow floor applied to the SUM (an isotropic-phase floor), so
+				// the octaves can't amplify it into a flat lift.
+				const float sunScatter = max(oct0 + oct1 + oct2, g_cloudParams3.z * isotropicPhase * g_cloudParams3.w);
+				const float3 directLight = cloudSunColour * (sunScatter * directionalDiffuse);
+
+				// Metre scale (2050 m design depth, see CloudCommon) so a tall
+				// storm slab doesn't push every low cloud into the bottom tint.
+				const float height01 = saturate((samplePos.y - boundsMin.y) / 2050.0f);
 				const float3 heightTint = lerp(bottomTint, topTint, smoothstep(0.08f, 0.92f, height01));
 				const float3 stylizedTint = lerp(1.0f.xxx, heightTint, g_cloudParams4.w);
-				// Softened (was 0.8 + 1.8x): stacked with coreDarken this
-				// halved the underside ambient - the dark-brown base look.
 				const float localAO = exp(-density * (0.5f + 1.0f * saturate(g_cloudParams5.w)));
 				const float aoTerm = lerp(1.0f, localAO, saturate(g_cloudParams5.w));
-				const float densityAhead = SampleCloudDensity(samplePos + rayDir * diffuseProbeDistance * 0.7f, boundsMin, boundsMax, windOffset);
-				const float edgeFactor = saturate(abs(density - densityAhead) * 2.4f);
-				const float forwardGlow = pow(viewToSun, 4.0f) * saturate(1.0f - density * 0.95f) * (0.25f + 0.75f * shadowAmount);
-				const float coreDarken = lerp(1.0f, 0.85f, saturate(density * 0.9f));
-				const float edgeBoost = 1.0f + edgeFactor * 0.24f;
-				// Physical single-scatter keeps the FULL HDR sun radiance
-				// (phase has the 1/4pi); the stylized silver-lining and
-				// forward-glow additions run on the normalized sunStylized
-				// basis they were authored against.
-				const float3 directLight = ((lightTrans * powder * phase * cloudSunColour + silverLining * sunStylized * (0.22f + 0.48f * viewToSun)) * edgeBoost + sunStylized * forwardGlow * g_cloudParams4.x * 0.22f) * multiScatter * directionalDiffuse;
-				const float lightningScatterPhase = 0.35f + 0.65f * saturate(dot(rayDir, lightningDir) * 0.5f + 0.5f);
-				const float lightningEdge = pow(saturate(1.0f - density), 1.4f);
-				const float3 lightningLight = lightningColour * (0.34f + lightningDerivative * 0.66f) * lightningScatterPhase * (0.55f + lightningEdge * 0.45f);
-				// Sun-occlusion DARKENS ambient (was 0.35+0.65*shadow, which
-				// BRIGHTENED shadowed samples - a legacy fill that inverted the
-				// deck's vertical gradient: undersides lit up instead of
-				// falling off). Deep-shadow interiors keep 55%.
-				const float3 ambientLight = (ambientShaded * (1.0f - shadowAmount * 0.45f) + lightningColour * (0.08f + 0.14f * lightningEdge)) * aoTerm * coreDarken;
+
+				// SKY VISIBILITY from above (2 coarse taps straight up). Cloud
+				// bodies are lit by the sky hemisphere ABOVE them; a sample under
+				// 1 km of tower sees almost none of it. The old ambient had no
+				// notion of this, so a storm base was lit like a cloud top -
+				// that is the "dark blue-grey underside vs bright crown"
+				// contrast of the reference. Diffuse skylight is attenuated less
+				// than the collimated sun (x0.25 on the extinction).
+				// Taps at 40 m and 170 m (were 90/300): the near tap resolves
+				// the crevices BETWEEN billow lobes, so the lobes themselves
+				// read through shading instead of one flat ambient wash.
+				const float upD1 = SampleCloudDensityTexCoarse(g_shapeNoise, g_detailNoise, g_mirrorSampler, samplePos + float3(0.0f, 40.0f, 0.0f), boundsMin, boundsMax, windOffset);
+				const float upD2 = SampleCloudDensityTexCoarse(g_shapeNoise, g_detailNoise, g_mirrorSampler, samplePos + float3(0.0f, 170.0f, 0.0f), boundsMin, boundsMax, windOffset);
+				const float skyVis = exp(-(upD1 * 110.0f + upD2 * 300.0f) * 0.012f * g_cloudParams1.x * 0.25f);
+				// Under-cloud floor: bounce from the ground + the open sky at the
+				// horizon (neutral-ish, dim).
+				const float3 ambientLight = (lerp(ambientShaded, ambientWarm, rawLightTrans) * (0.14f + 0.86f * skyVis) * (1.0f - shadowAmount * 0.20f)
+				                          + ambientNeutral * 0.06f) * aoTerm;
+
+				// Localised lightning glow (see boltPos).
+				float3 lightningLight = 0.0f.xxx;
+				[branch] if (lightningFlash > 0.001f)
+				{
+					const float boltDist = length(samplePos - boltPos);
+					const float lightningEdge = pow(saturate(1.0f - density), 1.4f);
+					lightningLight = lightningColour * (0.10f + 2.6f * exp(-boltDist / 1100.0f)) * (0.6f + 0.4f * lightningEdge);
+				}
 				cloudLight += scatter * (directLight + ambientLight + lightningLight) * stylizedTint;
 
 				const float transmittanceBefore = transmittance;
@@ -481,20 +688,45 @@
 				if (transmittance < 0.01f)
 					break;
 			}
-			else if (++emptyRun >= kEmptyToCoarse)
+			else
 			{
-				fineMode = false;
+				// Leave fine mode only after BOTH 5 empty samples and >= 1.5
+				// coarse steps of empty air. With metre-capped fine steps and
+				// lobed (mid-octave) clouds, 5 samples could be just ~225 m - a
+				// crevice between lobes - and the next coarse leap (up to ~1 km)
+				// jumped clean over the following lobe: sky showing through
+				// cracks along a constant-distance arc.
+				++emptyRun;
+				emptyDist += stepLenView;
+				if (emptyRun >= kEmptyToCoarse && emptyDist >= coarseStep * 1.5f)
+					fineMode = false;
 			}
 
 			travelled += stepLenView;
 		}
 
-		// Keep dense cores from collapsing to pure black under aggressive shadowing.
-		cloudLight = max(cloudLight, ambientShaded * (1.0f - transmittance) * 0.20f);
+		// Keep dense cores from collapsing to pure black under aggressive
+		// shadowing. 0.20 -> 0.08: with sky-visibility ambient the floor was
+		// the dominant term on storm bases and pinned them at a flat grey.
+		cloudLight = max(cloudLight, ambientShaded * (1.0f - transmittance) * 0.08f);
+
+		// Rain shafts sit BELOW the base, i.e. in front of the cloud on every
+		// ray from a camera under the deck.
+		float4 rain = float4(0.0f, 0.0f, 0.0f, 1.0f);
+		if (rainPossible)
+		{
+			const float3 ambientRain = ambientShaded * 0.45f + ambientNeutral * 0.10f;
+			rain = MarchRainShafts(eyePos, rayDir, pixelDepth, boundsMin, boundsMax, windOffset, sunDir, cloudSunColour, ambientRain, jitter);
+		}
 
 		const float alpha = saturate(1.0f - transmittance);
 		if (alpha <= 1e-4f)
-			return 0.0f.xxxx;
+		{
+			const float rainAlpha = 1.0f - rain.a;
+			if (rainAlpha <= 1e-4f)
+				return 0.0f.xxxx;
+			return float4(min(rain.rgb / max(0.03f, rainAlpha), 64.0f.xxx), rainAlpha);
+		}
 
 		// AERIAL PERSPECTIVE on the cloud itself. The scene's AP pass skips
 		// sky pixels (the dome already contains the atmosphere), so clouds
@@ -521,8 +753,10 @@
 		// 8 -> 64 for the HDR sky: sunset silver linings on the LUT energy
 		// scale legitimately exceed the old cap (which was sized for the
 		// pre-HDR tonemapped-in-shader sky).
-		const float safeAlpha = max(0.03f, alpha);
-		const float3 straightCloud = min(cloudLight / safeAlpha, 64.0f.xxx);
-		return float4(straightCloud, alpha);
+		const float3 totalLight = rain.rgb + rain.a * cloudLight;
+		const float totalAlpha = 1.0f - rain.a * (1.0f - alpha);
+		const float safeAlpha = max(0.03f, totalAlpha);
+		const float3 straightCloud = min(totalLight / safeAlpha, 64.0f.xxx);
+		return float4(straightCloud, totalAlpha);
 	}
 }

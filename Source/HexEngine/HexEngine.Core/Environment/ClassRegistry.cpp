@@ -2,6 +2,7 @@
 
 #include "ClassRegistry.hpp"
 #include "ComponentFieldMeta.hpp"
+#include "../Entity/Component/ComponentSignature.hpp"
 
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/ReflectionProbeComponent.hpp"
@@ -26,9 +27,12 @@
 #include "../Entity/Component/SnowFootprintsComponent.hpp"
 #include "../Entity/Component/PlayerStartComponent.hpp"
 #include "../Entity/Component/DoorComponent.hpp"
+#include "../Entity/Component/FootstepComponent.hpp"
+#include "../Entity/Component/RagdollComponent.hpp"
 #include "../Entity/Component/SoundEffectComponent.hpp"
 #include "../Entity/Component/DrivableComponent.hpp"
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
+#include "../Entity/Component/TerrainCutout.hpp"
 #include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "../HexEngine.hpp"
 
@@ -83,7 +87,10 @@ namespace HexEngine
 		REG_CLASS(PlayerStartComponent);
 		REG_CLASS(DrivableComponent);
 		REG_CLASS(DoorComponent);
+		REG_CLASS(FootstepComponent);
+		REG_CLASS(RagdollComponent);
 		REG_CLASS(NavMeshBlockingVolume);
+		REG_CLASS(TerrainCutout);
 		REG_CLASS(NavMeshLinkComponent);
 		REG_CLASS(ReflectionProbeComponent);
 		REG_CLASS(SoundEffectComponent);
@@ -120,6 +127,10 @@ namespace HexEngine
 		cls.cloneInstanceFn = cloneInstanceFn;
 		cls.newInstanceFn = newInstanceFn;
 		cls.compId = (uint32_t)_registry.size();
+		// Component signatures have one bit per id (ComponentSignature). Past the limit
+		// HasA<T>() and signature queries can't see this type: raise MAX_COMPONENTS.
+		if (cls.compId >= MAX_COMPONENTS)
+			LOG_CRIT("Class '%s' got component id %u, past MAX_COMPONENTS (%u): raise MAX_COMPONENTS in ComponentSignature.hpp", name.c_str(), cls.compId, MAX_COMPONENTS);
 
 		_registry[nameHash] = cls;
 

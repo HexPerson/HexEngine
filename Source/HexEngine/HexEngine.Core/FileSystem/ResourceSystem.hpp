@@ -57,6 +57,13 @@ namespace HexEngine
 		bool							DoesResourceExistAsAsset(const fs::path& path);
 		FileSystem*						FindAssetFileSystemForAsset(const fs::path& path);
 
+		// Reads a raw data file (JSON, binary sidecar...) wherever it lives: an
+		// absolute disk path, a file-system-relative path ("GameData.Dialogs/x.json"
+		// or "Dialogs/x.json") on a loose Data folder, or inside a mounted asset
+		// package (GameData.pkg). Use this instead of std::ifstream on a resolved
+		// path - that only works in the editor, never in a packaged game.
+		bool							ReadFileData(const fs::path& path, std::vector<uint8_t>& outData);
+
 		// Read-only snapshot of currently-loaded resources for diagnostics / the
 		// editor bridge. Thread-safe (takes the resource lock); dead weak refs are
 		// skipped and the result is capped. No pointers/handles are exposed.

@@ -257,6 +257,15 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="ParticleBillboardLit.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />
     <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
+    <HexEngineShader Include="RtCommon.shader" />
+    <HexEngineShader Include="DDGICommon.shader" />
+    <HexEngineShader Include="DDGITrace.shader" />
+    <HexEngineShader Include="DDGIBlendIrradiance.shader" />
+    <HexEngineShader Include="DDGIBlendDepth.shader" />
+    <HexEngineShader Include="DDGIApply.shader" />
+    <HexEngineShader Include="DDGISSGI.shader" />
+    <HexEngineShader Include="DDGISSGIBlur.shader" />
+    <HexEngineShader Include="RtDebug.shader" />
     <HexEngineShader Include="DiffuseGIBuildCandidates.shader" />
     <HexEngineShader Include="DiffuseGICandidateArgsFixup.shader" />
     <HexEngineShader Include="DiffuseGIInjectResolve.shader" />

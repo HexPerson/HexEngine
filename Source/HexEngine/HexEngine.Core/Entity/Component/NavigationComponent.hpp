@@ -47,6 +47,8 @@ namespace HexEngine
 		void GoToTarget();
 		void ClearPath();
 		bool HasPath() const { return !_result.path.empty(); }
+		// The last FindPath could not reach its target (it stops at the nearest reachable point).
+		bool IsPathPartial() const { return _result.partial; }
 		const std::vector<math::Vector3>& GetPathPoints() const { return _result.path; }
 		uint32_t GetPathIndex() const { return _pathIndex; }
 

@@ -18,6 +18,13 @@ namespace HexEditor
 			if (a.name != b.name || a.duration != b.duration || a.ticksPerSecond != b.ticksPerSecond || a.channels.size() != b.channels.size())
 				return false;
 
+			// Events are part of the clip too: an event-only edit is a real change.
+			if (a.events.size() != b.events.size())
+				return false;
+			for (size_t i = 0; i < a.events.size(); ++i)
+				if (a.events[i].time != b.events[i].time || a.events[i].name != b.events[i].name)
+					return false;
+
 			for (size_t i = 0; i < a.channels.size(); ++i)
 			{
 				const auto& ca = a.channels[i];

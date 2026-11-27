@@ -63,6 +63,15 @@ namespace HexEngine
 		// Largest key time in the clip (0 when nothing is keyed).
 		HEX_API float GetLastKeyTime(const Animation& anim);
 
+		// Finds foot plants (each foot coming down into the bottom of its swing) in
+		// `anim` and writes them as events named leftEvent / rightEvent, replacing
+		// earlier ones of those names. Returns how many were added (0 for a clip
+		// where the feet don't move, e.g. idle).
+		// `fallbackRoot` = the AnimationData's _globalInverseTransform (used when the
+		// clip carries none, exactly as playback does) - heights are measured in model space.
+		HEX_API int32_t DetectFootEvents(Animation& anim, const math::Matrix& fallbackRoot, const std::string& leftNode, const std::string& rightNode,
+			const std::string& leftEvent, const std::string& rightEvent);
+
 		// ---- per-track key helpers (keys kept sorted by time) ------------------------
 
 		template<typename T>
