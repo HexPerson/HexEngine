@@ -24,7 +24,14 @@ namespace HexEngine
 	namespace
 	{
 		NavigationComponent::SegmentGateFn s_segmentGate = nullptr;
+		// Every live agent, for the avoidance neighbour scan (ctor/dtor maintained).
+		std::vector<NavigationComponent*> s_agents;
 	}
+
+	HVar nav_avoid("nav_avoid", "Pedestrian avoidance: agents step around each other and the player", true, false, true);
+	HVar nav_avoidRadius("nav_avoidRadius", "Personal-space radius between agents (m)", 0.9f, 0.2f, 3.0f);
+	HVar nav_avoidPlayerRadius("nav_avoidPlayerRadius", "Personal-space radius around the player (m)", 1.4f, 0.2f, 4.0f);
+	HVar nav_avoidMaxOffset("nav_avoidMaxOffset", "Furthest an agent may drift sideways off its path line while avoiding (m)", 0.6f, 0.0f, 2.0f);
 
 	void NavigationComponent::SetSegmentGate(SegmentGateFn gate)
 	{
@@ -34,6 +41,7 @@ namespace HexEngine
 	NavigationComponent::NavigationComponent(Entity* entity) :
 		UpdateComponent(entity)
 	{
+		s_agents.push_back(this);
 
 		//g_pEnv->_debugGui->AddCallback(this);
 	}
@@ -41,6 +49,7 @@ namespace HexEngine
 	NavigationComponent::NavigationComponent(Entity* entity, NavigationComponent* copy) :
 		UpdateComponent(entity, copy)
 	{
+		s_agents.push_back(this);
 		//g_pEnv->_debugGui->AddCallback(this);
 
 		// Carry config across prefab spawn / duplicate (clone path doesn't deserialize).
@@ -57,6 +66,11 @@ namespace HexEngine
 
 	NavigationComponent::~NavigationComponent()
 	{
+		if (auto it = std::find(s_agents.begin(), s_agents.end(), this); it != s_agents.end())
+		{
+			*it = s_agents.back();
+			s_agents.pop_back();
+		}
 		//g_pEnv->_debugGui->RemoveCallback(this);
 
 		// Drop the one-shot pick listener if we were still waiting for a click.
@@ -325,6 +339,7 @@ namespace HexEngine
 	void NavigationComponent::Update(float dt)
 	{
 		UpdateComponent::Update(dt);
+		_moving = false;
 
 		if (_paused)
 			return;
@@ -409,8 +424,38 @@ namespace HexEngine
 
 				delta /= length;
 
-				const float moveDistance = std::min(length, std::max(0.0f, dt * _movementSpeed));
+				float moveScale = 1.0f;
+				const math::Vector3 avoid = nav_avoid._val.b ? ComputeAvoidance(currentPos, delta, dt, moveScale) : math::Vector3(0.0f, 0.0f, 0.0f);
+
+				const float moveDistance = std::min(length, std::max(0.0f, dt * _movementSpeed * moveScale));
 				currentPos += delta * moveDistance;
+				_moveDir = delta;
+				_moving = true;
+
+				if (avoid.LengthSquared() > 0.0f)
+				{
+					currentPos += avoid;
+					// Stay within nav_avoidMaxOffset of the path line being walked
+					// (previous node -> next node): avoidance must never push an agent
+					// off the pavement into the road or a wall.
+					const math::Vector3& b = _result.path[_pathIndex];
+					const math::Vector3 a = _pathIndex > 0 ? _result.path[_pathIndex - 1] : b - delta * 2.0f;
+					const math::Vector2 ab(b.x - a.x, b.z - a.z);
+					const float abLenSq = ab.LengthSquared();
+					if (abLenSq > 1e-6f)
+					{
+						const float t = std::clamp(((currentPos.x - a.x) * ab.x + (currentPos.z - a.z) * ab.y) / abLenSq, 0.0f, 1.0f);
+						const math::Vector2 closest(a.x + ab.x * t, a.z + ab.y * t);
+						math::Vector2 off(currentPos.x - closest.x, currentPos.z - closest.y);
+						const float maxOff = nav_avoidMaxOffset._val.f32;
+						if (off.Length() > maxOff)
+						{
+							off.Normalize();
+							currentPos.x = closest.x + off.x * maxOff;
+							currentPos.z = closest.y + off.y * maxOff;
+						}
+					}
+				}
 
 				// Navmesh height under the new position: interpolate along the segment
 				// being walked (previous node -> current node) by horizontal progress.
@@ -491,6 +536,73 @@ namespace HexEngine
 				_hasPath = false;
 			}*/
 		}
+	}
+
+	math::Vector3 NavigationComponent::ComputeAvoidance(const math::Vector3& pos, const math::Vector3& dir, float dt, float& moveScale) const
+	{
+		moveScale = 1.0f;
+		const math::Vector3 right(dir.z, 0.0f, -dir.x);   // dir rotated -90 deg about Y
+		float lateral = 0.0f;       // + = step right
+		float brake = 0.0f;         // how blocked the way ahead is (0..1)
+
+		auto consider = [&](const math::Vector3& otherPos, const math::Vector3& otherDir, bool otherMoving, float radius, float weight)
+		{
+			math::Vector3 d(pos.x - otherPos.x, 0.0f, pos.z - otherPos.z);
+			const float dist = d.Length();
+			if (dist > radius * 3.0f || dist < 1e-4f)
+				return;
+			const float ahead = -d.Dot(dir);          // >0: the other is in front of us
+			const float side = d.Dot(right);          // >0: we are to its right
+			// Separation: inside personal space, push apart (sideways only - pushing
+			// backwards along the path just makes agents stutter).
+			if (dist < radius)
+			{
+				const float s = (radius - dist) / radius;
+				lateral += (side >= 0.0f ? 1.0f : -1.0f) * s * weight;
+				if (ahead > 0.0f)
+					brake = std::max(brake, s * 0.8f);
+			}
+			// Head-on / overtaking: someone in front within ~2.5 radii and roughly in
+			// our lane - pass on the right (or keep the side we're already on).
+			if (ahead > 0.0f && ahead < radius * 2.5f && std::fabs(side) < radius)
+			{
+				const bool oncoming = !otherMoving || otherDir.Dot(dir) < -0.3f;
+				const float closeness = 1.0f - ahead / (radius * 2.5f);
+				if (oncoming)
+					lateral += (std::fabs(side) < 0.15f ? 1.0f : (side > 0.0f ? 1.0f : -1.0f)) * closeness * 0.7f * weight;
+				else if (otherDir.Dot(dir) > 0.5f && ahead < radius * 1.2f)
+					brake = std::max(brake, closeness * 0.6f);   // same direction, slower in front: queue
+			}
+		};
+
+		const float r = nav_avoidRadius._val.f32;
+		for (const NavigationComponent* other : s_agents)
+		{
+			if (other == this || other == nullptr || other->GetEntity() == nullptr || other->GetEntity()->IsPendingDeletion())
+				continue;
+			// Cheap reject before any matrix work: entity transforms are world for root agents.
+			const math::Vector3 op = other->GetEntity()->GetWorldTM().Translation();
+			if (std::fabs(op.x - pos.x) > r * 3.0f || std::fabs(op.z - pos.z) > r * 3.0f || std::fabs(op.y + other->_footOffset - pos.y) > 2.0f)
+				continue;
+			const bool walking = other->_moving && !other->_paused && other->HasPath();
+			consider(op, other->_moveDir, walking, r, 1.0f);
+		}
+
+		// The player (main camera's entity): NPCs give way fully.
+		if (auto* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr)
+			if (auto* cam = scene->GetMainCamera(); cam != nullptr && cam->GetEntity() != nullptr)
+			{
+				const math::Vector3 pp = cam->GetEntity()->GetWorldTM().Translation();
+				if (std::fabs(pp.y - pos.y) < 3.0f)
+					consider(pp, math::Vector3(0.0f, 0.0f, 0.0f), false, nav_avoidPlayerRadius._val.f32, 1.6f);
+			}
+
+		if (lateral == 0.0f && brake == 0.0f)
+			return math::Vector3(0.0f, 0.0f, 0.0f);
+		moveScale = std::clamp(1.0f - brake, 0.25f, 1.0f);
+		// Sidestep speed: up to ~0.9x walking speed while squeezed.
+		const float step = std::clamp(lateral, -1.0f, 1.0f) * _movementSpeed * 0.9f * dt;
+		return right * step;
 	}
 
 	void NavigationComponent::OnDebugGUI()
