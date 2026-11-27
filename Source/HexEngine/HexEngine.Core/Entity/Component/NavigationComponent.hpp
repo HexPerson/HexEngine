@@ -75,6 +75,15 @@ namespace HexEngine
 		// or a missed ray.
 		bool ResolveGroundY(const math::Vector3& navPos, float& outY);
 
+		// Pedestrian avoidance (nav_avoid*): a sideways nudge away from nearby
+		// agents and the player, keep-right for head-on encounters, and a slow-down
+		// when the way ahead is crowded. Returns the lateral offset to add this step
+		// and scales moveScale (0..1). Never moves an agent more than
+		// nav_avoidMaxOffset off its path line (the caller clamps).
+		math::Vector3 ComputeAvoidance(const math::Vector3& pos, const math::Vector3& dir, float dt, float& moveScale) const;
+		math::Vector3 _moveDir = math::Vector3(0.0f, 0.0f, 0.0f);   // runtime: last step direction (others read it)
+		bool _moving = false;                                        // runtime: walked this frame
+
 		math::Vector3 _targetPosition;
 		INavMeshProvider::PathResult _result;
 		uint32_t _pathIndex = 0;
