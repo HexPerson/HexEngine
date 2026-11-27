@@ -84,8 +84,12 @@
 		float4 g_giParams11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
 		float4 g_giParams12; // x=live triangle count, y=candidate routing, z=snap boost, w reserved
 		float4 g_giParams13; // x=litInjection strength, y=litInjection maxLuma, z=feedback bound, w=directional voxels active
-		float4 g_giParams14; // x=ssgi intensity (0=off), y=ssgi radius (world m), z/w reserved
+		float4 g_giParams14; // x=ssgi intensity (0=off), y=ssgi radius (world m), z=lit cache active, w=ssgi blur radius
+		float4 g_giParams15; // x=cone gather strength (0=off), y=cone max distance (m), z=cone occlusion -> AO blend, w=cone gather saturation
 	};
+
+	// Cone aperture: tan(30 deg), 6 cones tile the hemisphere.
+	static const float kConeAperture = 0.577f;
 
 	static const float3 kClipDebugColours[4] =
 	{
@@ -200,6 +204,52 @@
 		return saturate(e / max(l0, 1e-4f.xxx));
 	}
 
+	// Leak gate for SOLID (surface) voxels. DirectionalVoxelFactor scores
+	// arrival, which is right for air but wrong for the receiver's own surface
+	// voxel - whose radiance exits along the receiver's own normal and would
+	// score 0 - so solid taps used to skip directional filtering entirely. A
+	// voxel straddling a wall thinner than a voxel, though, holds the FAR face's
+	// light (a sunlit exterior), exiting AWAY from an interior receiver: that is
+	// the glow along interior wall bases and ceiling lines. Keep radiance that
+	// exits along the receiver normal or carries no strong direction (factor 1),
+	// suppress radiance exiting opposite to it (factor 0).
+	float3 DirectionalSurfaceFactor(uint clipIdx, float3 uvw, float3 receiverNormal)
+	{
+		float3 l0;
+		float3 l1x;
+		float3 l1y;
+		float3 l1z;
+		switch (clipIdx)
+		{
+		case 0:
+			l0 = g_voxelRadianceTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		case 1:
+			l0 = g_voxelRadianceTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		case 2:
+			l0 = g_voxelRadianceTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		default:
+			l0 = g_voxelRadianceTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		}
+		const float3 exitAlongN = l1x * receiverNormal.x + l1y * receiverNormal.y + l1z * receiverNormal.z;
+		return saturate(1.0f.xxx + 2.0f * exitAlongN / max(l0, 1e-4f.xxx));
+	}
+
 	float SampleVoxelOpacity(uint clipIdx, float3 uvw)
 	{
 		switch (clipIdx)
@@ -221,6 +271,160 @@
 		default: return g_voxelAlbedoTex3.SampleLevel(g_linearSampler, uvw, 0.0f);
 		}
 	}
+
+	// Lambert exitance of a voxel TOWARD direction w, from its SH-1 moment.
+	// Injection stores L1 = sum(radiance * surface normal), i.e. L0 * n for a
+	// single surface, so max(0, L1.w) is that surface's cosine-weighted
+	// radiance toward w. Sideways or away-facing content (sunlit ground beside
+	// an interior wall base, the sunlit exterior face of a thin wall) scores 0.
+	float3 VoxelExitToward(uint clipIdx, float3 uvw, float3 w)
+	{
+		float3 l1x;
+		float3 l1y;
+		float3 l1z;
+		switch (clipIdx)
+		{
+		case 0:
+			l1x = g_voxelL1xTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		case 1:
+			l1x = g_voxelL1xTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		case 2:
+			l1x = g_voxelL1xTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		default:
+			l1x = g_voxelL1xTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		}
+		return max(0.0f.xxx, l1x * w.x + l1y * w.y + l1z * w.z);
+	}
+
+	// Long-range cone-traced gather (r_giConeGather). The per-clip evaluation
+	// only reads voxels within ~0.5 m of the receiver plus two taps 1-2 m out
+	// along the normal, so light from a sun patch or lit wall a few metres away
+	// never arrived and rooms were lit almost entirely by flat ambient. This
+	// marches 6 cones (1 along N + a ring of 5 at 60 deg, cosine-weighted)
+	// through the clipmaps, stepping to a coarser clip as the cone widens,
+	// compositing solid voxels' exitant radiance front-to-back and stopping at
+	// walls. Returns rgb = gathered radiance (voxel radiance units, same scale
+	// as EvaluateClipContribution's gi), a = occlusion (1 - fraction of the
+	// hemisphere that escaped to open sky within maxDist).
+	float4 ConeTraceGather(float3 posWS, float3 N, float maxDist, float aperture, float rot)
+	{
+		const float3 helper = (abs(N.y) < 0.9f) ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+		const float3 T = normalize(cross(helper, N));
+		const float3 B = cross(N, T);
+		const float voxel0 = max(g_clipVoxelInfo[0].x, 1e-3f);
+		const bool directional = g_giParams13.w > 0.5f;
+		// Start just off the surface so the receiver's own voxel doesn't
+		// occlude its cones.
+		const float3 origin = posWS + N * voxel0 * 0.75f;
+
+		float3 gathered = 0.0f.xxx;
+		float visibility = 0.0f;
+		[loop]
+		for (uint c = 0u; c < 6u; ++c)
+		{
+			float3 dir;
+			float coneW;
+			if (c == 0u)
+			{
+				dir = N;
+				coneW = 0.25f;
+			}
+			else
+			{
+				const float a = rot + (float)(c - 1u) * 1.2566371f;
+				dir = normalize(N * 0.5f + (T * cos(a) + B * sin(a)) * 0.8660254f);
+				coneW = 0.15f;
+			}
+
+			float3 coneRad = 0.0f.xxx;
+			float alpha = 0.0f;
+			float t = voxel0 * 1.0f;
+			[loop]
+			for (uint s = 0u; s < 12u; ++s)
+			{
+				if (alpha >= 0.97f || t >= maxDist)
+					break;
+				const float diam = max(voxel0, 2.0f * aperture * t);
+				const float3 p = origin + dir * t;
+				// One clip FINER than the cone footprint (and the finest that
+				// contains p): a footprint-matched clip switched to 0.67-1.33 m
+				// voxels within a metre, and a voxel that size straddles a
+				// ceiling and the sunlit roof above it - a warm leak strip along
+				// interior ceiling lines.
+				uint clip = (uint)clamp(floor(log2(diam / voxel0)) - 1.0f, 0.0f, 3.0f);
+				float3 uvw = 0.0f.xxx;
+				bool inside = false;
+				[loop]
+				for (; clip < 4u; ++clip)
+				{
+					uvw = ((p - g_clipCenterExtent[clip].xyz) / (max(g_clipCenterExtent[clip].w, 1e-3f) * 2.0f)) + 0.5f;
+					if (IsInside01(uvw))
+					{
+						inside = true;
+						break;
+					}
+				}
+				if (!inside)
+					break;
+
+				const float clipVoxel = max(g_clipVoxelInfo[clip].x, 1e-3f);
+				// Never step further than one voxel of the sampled clip, or a
+				// one-voxel-thick wall can be stepped over entirely.
+				const float stepLen = clamp(diam * 0.5f, voxel0 * 0.5f, clipVoxel);
+				// Occupancy from the ALBEDO volume's coverage alpha, not radiance .a:
+				// propagation dilates radiance occupancy into the air around every
+				// surface (max(neighbour) x 0.95 per pass), which wrapped all
+				// geometry in a near-opaque shell and stopped cones within a voxel
+				// of the receiver - a sunlit facade facing open street read as fully
+				// enclosed. Albedo coverage is written only where triangles land.
+				const float occRaw = saturate(SampleVoxelAlbedo(clip, uvw).a * 1.25f);
+				// Opacity is per voxel; correct it for this step's length.
+				// Most steps are in empty air: skip the radiance / L1 fetches
+				// there (4 of the 5 texture reads per step).
+				const float nearFadeEarly = smoothstep(voxel0 * 1.5f, voxel0 * 3.0f, t);
+				if (occRaw < 0.02f || nearFadeEarly <= 0.0f)
+				{
+					if (occRaw >= 0.02f)
+					{
+						// Near field still OCCLUDES (no radiance read needed).
+						const float occNear = 1.0f - pow(max(1.0f - occRaw, 1e-4f), stepLen / clipVoxel);
+						alpha += (1.0f - alpha) * occNear;
+					}
+					t += stepLen;
+					continue;
+				}
+				const float occ = 1.0f - pow(max(1.0f - occRaw, 1e-4f), stepLen / clipVoxel);
+				// Radiance leaving the voxel back toward the cone origin. Without
+				// directional voxels fall back to the isotropic value.
+				const float3 rad = directional ? VoxelExitToward(clip, uvw, -dir) : SampleVoxelRadiance(clip, uvw).rgb;
+				// Near field: occlusion only. The first voxels around a receiver
+				// straddle its own wall/floor, and a house floor sits within a
+				// voxel of the sunlit ground outside - reading their radiance put
+				// a glowing band along every interior wall base. The per-clip
+				// evaluation already covers this range with its own leak guards.
+				const float nearFade = smoothstep(voxel0 * 1.5f, voxel0 * 3.0f, t);
+				coneRad += (1.0f - alpha) * occ * rad * nearFade;
+				alpha += (1.0f - alpha) * occ;
+				t += stepLen;
+			}
+			gathered += coneRad * coneW;
+			visibility += (1.0f - alpha) * coneW;
+		}
+		return float4(gathered, saturate(1.0f - visibility));
+	}
+
 
 	float3 SampleProbeIrradiance(uint clipIdx, float2 uv)
 	{
@@ -499,11 +703,21 @@
 		// those by arrival direction cancels the receiver's own GI (the
 		// builds-up-then-resolves-to-nothing collapse as the moment field
 		// converges). Occupancy gates the two regimes per tap.
+		// Sample from just OFF the surface, on its own side. The receiver point is
+		// the pixel's exact surface position, which sits inside the voxel the
+		// surface was voxelised into - and with walls thinner than a voxel
+		// (0.33m at the default clip) that voxel also holds the OTHER side's
+		// radiance: a sunlit exterior bled through every interior wall as a
+		// glowing band along the floor and ceiling lines.
+		const float3 surfUVW = uvw + worldNormal * voxelTexel * 0.75f;
+
 		const bool directionalArrival = g_giParams13.w > 0.5f;
 		float3 arrivalFactor = 1.0f.xxx;
+		float3 surfaceFactor = 1.0f.xxx;
 		if (directionalArrival)
 		{
-			arrivalFactor = DirectionalVoxelFactor(clipIdx, saturate(uvw + jitterUVW), worldNormal);
+			arrivalFactor = DirectionalVoxelFactor(clipIdx, saturate(surfUVW + jitterUVW), worldNormal);
+			surfaceFactor = DirectionalSurfaceFactor(clipIdx, saturate(uvw + jitterUVW), worldNormal);
 		}
 
 		const float3 localOffsets[7] =
@@ -519,15 +733,22 @@
 		[unroll]
 		for (uint n = 0; n < 7; ++n)
 		{
-			const float w = (n == 0) ? 1.0f : 0.70f;
-			const float3 suv = saturate(uvw + jitterUVW + localOffsets[n] * voxelTexel * 1.5f);
+			// Taps 1.5 voxels out in EVERY direction reached straight through the
+			// surface behind the receiver (outside a wall, into the ground). Weight
+			// them by which side of the surface they land on: in front full,
+			// tangent 0.7x, behind nothing.
+			const float tapFacing = dot(localOffsets[n], worldNormal);
+			const float w = (n == 0) ? 1.0f : 0.70f * saturate(tapFacing * 2.0f + 1.0f);
+			if (w <= 0.0f)
+				continue;
+			const float3 suv = saturate(surfUVW + jitterUVW + localOffsets[n] * voxelTexel * 1.5f);
 			const float4 voxelData = SampleVoxelRadiance(clipIdx, suv);
 			const float4 albedoData = SampleVoxelAlbedo(clipIdx, suv);
 			const float occSample = (g_giParams2.w > 0.5f) ? voxelData.a : SampleVoxelOpacity(clipIdx, suv);
 			float3 tapRadiance = voxelData.rgb;
 			if (directionalArrival)
 			{
-				tapRadiance *= lerp(max(arrivalFactor, 0.35f.xxx), 1.0f.xxx, saturate(occSample * 2.0f));
+				tapRadiance *= lerp(max(arrivalFactor, 0.35f.xxx), surfaceFactor, saturate(occSample * 2.0f));
 			}
 			const float tapPresence = saturate(dot(tapRadiance, float3(0.2126f, 0.7152f, 0.0722f)) * 3.0f);
 			const float radW = w * lerp(0.15f, 1.0f, tapPresence);
@@ -545,7 +766,7 @@
 		for (uint coneStep = 0; coneStep < 2; ++coneStep)
 		{
 			const float rayT = (float)(coneStep + 1u) * stepScale * 3.0f;
-			const float3 rayUVW = saturate(uvw + jitterUVW * 0.5f + worldNormal * rayT);
+			const float3 rayUVW = saturate(surfUVW + jitterUVW * 0.5f + worldNormal * rayT);
 			const float4 voxelData = SampleVoxelRadiance(clipIdx, rayUVW);
 			const float4 albedoData = SampleVoxelAlbedo(clipIdx, rayUVW);
 			const float occSample = (g_giParams2.w > 0.5f) ? voxelData.a : SampleVoxelOpacity(clipIdx, rayUVW);
@@ -592,23 +813,31 @@
 			float neighOcc = 0.0f;
 			float3 neighAlb = 0.0f.xxx;
 			float neighAlbConf = 0.0f;
+			float neighW = 0.0f;
 			[unroll]
 			for (uint n = 0; n < 6; ++n)
 			{
-				const float3 nuv = saturate(uvw + nOff[n] * voxelTexel);
+				// Same rule as the taps above: never smooth in a neighbour that
+				// lies behind the surface (the far side of a wall).
+				const float nw = saturate(dot(nOff[n], worldNormal) * 2.0f + 1.0f);
+				if (nw <= 0.0f)
+					continue;
+				const float3 nuv = saturate(surfUVW + nOff[n] * voxelTexel);
 				const float4 nData = SampleVoxelRadiance(clipIdx, nuv);
 				const float4 nAlb = SampleVoxelAlbedo(clipIdx, nuv);
 				const float nOcc = (g_giParams2.w > 0.5f) ? nData.a : SampleVoxelOpacity(clipIdx, nuv);
-				neighRad += nData.rgb;
-				neighOcc += nOcc;
-				neighAlb += saturate(nAlb.rgb) * saturate(nAlb.a);
-				neighAlbConf += saturate(nAlb.a);
+				neighRad += nData.rgb * nw;
+				neighOcc += nOcc * nw;
+				neighAlb += saturate(nAlb.rgb) * saturate(nAlb.a) * nw;
+				neighAlbConf += saturate(nAlb.a) * nw;
+				neighW += nw;
 			}
-			neighRad *= (1.0f / 6.0f);
-			neighOcc *= (1.0f / 6.0f);
+			const float invNeighW = rcp(max(neighW, 1e-4f));
+			neighRad *= invNeighW;
+			neighOcc *= invNeighW;
 			const float neighAlbInv = (neighAlbConf > 1e-4f) ? rcp(neighAlbConf) : 0.0f;
 			const float3 neighAlbAvg = (neighAlbConf > 1e-4f) ? (neighAlb * neighAlbInv) : 1.0f.xxx;
-			const float neighAlbConfAvg = saturate(neighAlbConf * (1.0f / 6.0f));
+			const float neighAlbConfAvg = saturate(neighAlbConf * invNeighW);
 
 			voxelRadiance = lerp(voxelRadiance, neighRad, neighbourBlend);
 			voxelOcc = lerp(voxelOcc, saturate(neighOcc), neighbourBlend * 0.75f);
@@ -834,6 +1063,50 @@
 			gi += ComputeSSGI(uv, pixelPosWS.xyz, worldNormal) * g_giParams14.x;
 		}
 
+		// Long-range cone gather (see ConeTraceGather). Its radiance adds to the
+		// local voxel GI; its occlusion (true hemisphere sky visibility out to
+		// maxDist) feeds the AO channel, which the deferred pass uses to remove
+		// flat ambient + sky fill from enclosed spaces - so an interior is lit
+		// by what actually reaches it instead of a uniform fill.
+		{
+			const float4 coneParams = g_giParams15;
+			const float coneSaturation = g_giParams15.w;
+			const bool coneDebug = (debugMode == 7.0f || debugMode == 8.0f);
+			if (foundClip && (coneParams.x > 0.0001f || coneDebug))
+			{
+				const float coneRot = Hash12(float2(
+					pixelPosWS.x * 0.371f + pixelPosWS.y * 0.213f,
+					pixelPosWS.z * 0.297f + pixelPosWS.y * 0.159f)) * 6.2831853f;
+				const float4 cone = ConeTraceGather(
+					pixelPosWS.xyz, worldNormal,
+					clamp(coneParams.y, 1.0f, 32.0f),
+					kConeAperture,
+					coneRot);
+				if (coneDebug)
+				{
+					// 7 = cone sky visibility (R) + receiver surface coverage (G),
+					// 8 = raw cone-gathered radiance x8.
+					if (debugMode == 7.0f)
+					{
+						// R = cone sky visibility, G = albedo coverage at the receiver's own surface voxel (clip 0).
+						const float3 covUvw = ((pixelPosWS.xyz - worldNormal * g_clipVoxelInfo[0].x * 0.25f - g_clipCenterExtent[0].xyz) / (max(g_clipCenterExtent[0].w, 1e-3f) * 2.0f)) + 0.5f;
+						const float cov = IsInside01(covUvw) ? saturate(SampleVoxelAlbedo(0u, covUvw).a) : 0.0f;
+						return float4(1.0f - cone.a, cov, 0.0f, 1.0f);
+					}
+					return float4(cone.rgb * 8.0f, 1.0f);
+				}
+				// Saturation trim: the injection-side bleed boosts
+				// (r_giAlbedoBleedBoost / r_giColourBleedStrength) were tuned when
+				// bounce barely travelled; carried a room's width they turned a
+				// ceiling over a wood floor saturated red.
+				const float coneLuma = dot(cone.rgb, float3(0.2126f, 0.7152f, 0.0722f));
+				const float3 coneRgb = lerp(coneLuma.xxx, cone.rgb, saturate(coneSaturation));
+				gi += coneRgb * coneParams.x;
+				debugVoxelRadiance += cone.rgb * coneParams.x;
+				voxelOcc = lerp(voxelOcc, max(voxelOcc, cone.a), saturate(coneParams.z));
+			}
+		}
+
 		if (debugMode == 2.0f)
 		{
 			return float4(probeGi, 1.0f);
@@ -842,6 +1115,14 @@
 		{
 			const float3 vis = debugVoxelRadiance * 1.65f + voxelOcc * 0.08f;
 			return float4(vis, 1.0f);
+		}
+		if (debugMode == 6.0f)
+		{
+			// Raw voxel radiance AT the receiver's own surface (clip 0, a
+			// quarter voxel inside the surface): what was injected there,
+			// e.g. whether a window sun patch reached the voxel field.
+			const float3 rawUvw = ((pixelPosWS.xyz - worldNormal * g_clipVoxelInfo[0].x * 0.25f - g_clipCenterExtent[0].xyz) / (max(g_clipCenterExtent[0].w, 1e-3f) * 2.0f)) + 0.5f;
+			return IsInside01(rawUvw) ? float4(SampleVoxelRadiance(0u, rawUvw).rgb * 1.65f, 1.0f) : float4(0.0f, 0.0f, 0.0f, 1.0f);
 		}
 		if (debugMode == 4.0f)
 		{

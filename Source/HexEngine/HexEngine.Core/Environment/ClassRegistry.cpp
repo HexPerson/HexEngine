@@ -1,6 +1,8 @@
 
 
 #include "ClassRegistry.hpp"
+#include "ComponentFieldMeta.hpp"
+#include "../Entity/Component/ComponentSignature.hpp"
 
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/ReflectionProbeComponent.hpp"
@@ -25,9 +27,12 @@
 #include "../Entity/Component/SnowFootprintsComponent.hpp"
 #include "../Entity/Component/PlayerStartComponent.hpp"
 #include "../Entity/Component/DoorComponent.hpp"
+#include "../Entity/Component/FootstepComponent.hpp"
+#include "../Entity/Component/RagdollComponent.hpp"
 #include "../Entity/Component/SoundEffectComponent.hpp"
 #include "../Entity/Component/DrivableComponent.hpp"
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
+#include "../Entity/Component/TerrainCutout.hpp"
 #include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "../HexEngine.hpp"
 
@@ -59,6 +64,7 @@ namespace HexEngine
 		REG_CLASS(Transform);
 		REG_CLASS(UpdateComponent);
 		REG_CLASS(SpotLight);
+		REG_CLASS(AreaLight);
 		REG_CLASS(MotorComponent);
 		REG_CLASS(Billboard);
 		REG_CLASS(RTSCameraController);
@@ -81,16 +87,35 @@ namespace HexEngine
 		REG_CLASS(PlayerStartComponent);
 		REG_CLASS(DrivableComponent);
 		REG_CLASS(DoorComponent);
+		REG_CLASS(FootstepComponent);
+		REG_CLASS(RagdollComponent);
 		REG_CLASS(NavMeshBlockingVolume);
+		REG_CLASS(TerrainCutout);
 		REG_CLASS(NavMeshLinkComponent);
 		REG_CLASS(ReflectionProbeComponent);
 		REG_CLASS(SoundEffectComponent);
+
+		// Enum names / ranges / descriptions for the serialised fields above
+		// (consumed by the editor bridge's component catalogue).
+		ComponentFieldMeta::RegisterBuiltIns();
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)
 	{
 		if (auto current = Find(nameHash); current != nullptr)
 		{
+			// A class released for a module hot reload: the reloaded module is
+			// registering it again, so take its new factories (same compId, so
+			// component signatures and cached ids stay valid).
+			if (!current->newInstanceFn)
+			{
+				current->type = &type;
+				current->cloneInstanceFn = cloneInstanceFn;
+				current->newInstanceFn = newInstanceFn;
+				LOG_INFO("Re-registered class '%s' with ID: %d (module reload)", name.c_str(), current->compId);
+				return current->compId;
+			}
+
 			LOG_DEBUG("A class with name '%s' has already been registered, ignoring", name.c_str());
 			return current->compId;
 		}
@@ -102,6 +127,10 @@ namespace HexEngine
 		cls.cloneInstanceFn = cloneInstanceFn;
 		cls.newInstanceFn = newInstanceFn;
 		cls.compId = (uint32_t)_registry.size();
+		// Component signatures have one bit per id (ComponentSignature). Past the limit
+		// HasA<T>() and signature queries can't see this type: raise MAX_COMPONENTS.
+		if (cls.compId >= MAX_COMPONENTS)
+			LOG_CRIT("Class '%s' got component id %u, past MAX_COMPONENTS (%u): raise MAX_COMPONENTS in ComponentSignature.hpp", name.c_str(), cls.compId, MAX_COMPONENTS);
 
 		_registry[nameHash] = cls;
 
@@ -145,5 +174,55 @@ namespace HexEngine
 	const std::map<uint32_t, ClassRegistry::Class>& ClassRegistry::GetAllClasses() const
 	{
 		return _registry;
+	}
+
+	void ClassRegistry::SetHasDebugRender(uint32_t nameHash, bool hasDebugRender)
+	{
+		if (auto* cls = Find(nameHash); cls != nullptr)
+			cls->hasDebugRender = hasDebugRender;
+	}
+
+	bool ClassRegistry::HasDebugRender(uint32_t componentId)
+	{
+		auto* cls = FindByComponentId(componentId);
+		return cls == nullptr || cls->hasDebugRender;
+	}
+
+	namespace
+	{
+		bool ClassOwnedByModule(const ClassRegistry::Class& cls, void* moduleHandle)
+		{
+			if (cls.type == nullptr || moduleHandle == nullptr)
+				return false;
+			HMODULE owner = nullptr;
+			if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCWSTR>(cls.type), &owner))
+				return false;
+			return owner == static_cast<HMODULE>(moduleHandle);
+		}
+	}
+
+	std::vector<std::string> ClassRegistry::GetModuleClassNames(void* moduleHandle) const
+	{
+		std::vector<std::string> names;
+		for (const auto& it : _registry)
+		{
+			if (ClassOwnedByModule(it.second, moduleHandle))
+				names.push_back(it.second.name);
+		}
+		return names;
+	}
+
+	void ClassRegistry::ReleaseModuleClasses(void* moduleHandle)
+	{
+		for (auto& it : _registry)
+		{
+			if (!ClassOwnedByModule(it.second, moduleHandle))
+				continue;
+			it.second.newInstanceFn = nullptr;
+			it.second.cloneInstanceFn = nullptr;
+			it.second.type = nullptr;
+			LOG_INFO("Released class '%s' (ID %d) for module unload", it.second.name.c_str(), it.second.compId);
+		}
 	}
 }

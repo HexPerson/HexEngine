@@ -107,8 +107,11 @@ namespace HexEngine
 
 		void SetTexture(MaterialTexture type, const std::shared_ptr<ITexture2D>& texture);
 
-		void SetStandardShader(const std::shared_ptr<IShader>& shader);
+		void SetStandardShader(const std::shared_ptr<IShader>& shader);   // ignores nullptr (keeps the current shader)
 		void SetShadowMapShader(const std::shared_ptr<IShader>& shader);
+		// Explicitly drop the standard shader (SetStandardShader(nullptr) is a
+		// no-op by design) - used to force a graph recompile of a stale cache.
+		void ClearStandardShader();
 
 		std::shared_ptr<IShader> GetStandardShader() const;
 		std::shared_ptr<IShader> GetShadowMapShader() const;
@@ -161,6 +164,8 @@ namespace HexEngine
 
 		bool DoesHaveAnyReflectivity();
 
+		std::vector<ITexture2D*>& GetCachedTextureArray() {	return _cachedTextureArray;	}
+
 	public:
 		MaterialProperties _properties;
 		MaterialGraph _graph;
@@ -205,5 +210,7 @@ namespace HexEngine
 		// offsets plugin code compiled against an older header relies on.
 		mutable math::Vector4 _giGraphTintCache = math::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
 		mutable bool _giGraphTintCacheValid = false;
+
+		std::vector<ITexture2D*> _cachedTextureArray;
 	};
 }

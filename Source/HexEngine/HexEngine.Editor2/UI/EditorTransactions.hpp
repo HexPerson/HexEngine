@@ -13,14 +13,88 @@ namespace HexEditor
 		virtual const char* GetLabel() const = 0;
 	};
 
+	// Several transactions undone/redone as ONE step (e.g. everything a single
+	// editor-bridge request or batch did). Undo runs in reverse order, redo in
+	// order; a member that fails is skipped so the rest still apply.
+	class CompoundTransaction final : public IEditorTransaction
+	{
+	public:
+		CompoundTransaction(std::string label, std::vector<std::unique_ptr<IEditorTransaction>> items) :
+			_label(std::move(label)), _items(std::move(items))
+		{}
+
+		virtual bool Undo() override
+		{
+			bool any = false;
+			for (auto it = _items.rbegin(); it != _items.rend(); ++it)
+				any = (*it)->Undo() || any;
+			return any;
+		}
+
+		virtual bool Redo() override
+		{
+			bool any = false;
+			for (auto& item : _items)
+				any = item->Redo() || any;
+			return any;
+		}
+
+		virtual const char* GetLabel() const override { return _label.c_str(); }
+
+	private:
+		std::string _label;
+		std::vector<std::unique_ptr<IEditorTransaction>> _items;
+	};
+
 	class EditorTransactionStack
 	{
 	public:
+		// Group every Push until the matching EndGroup into one undo step.
+		// Groups nest; only the outermost one produces a transaction (and only
+		// if something was pushed).
+		void BeginGroup(const std::string& label)
+		{
+			if (_groupDepth++ == 0)
+			{
+				_groupLabel = label;
+				_groupItems.clear();
+			}
+		}
+
+		void EndGroup()
+		{
+			if (_groupDepth == 0 || --_groupDepth > 0)
+				return;
+			if (_groupItems.empty())
+				return;
+			auto items = std::move(_groupItems);
+			_groupItems.clear();
+			if (items.size() == 1)
+				PushInternal(std::move(items.front()));
+			else
+				PushInternal(std::make_unique<CompoundTransaction>(_groupLabel, std::move(items)));
+		}
+
 		bool Push(std::unique_ptr<IEditorTransaction> transaction)
 		{
 			if (!transaction)
 				return false;
 
+			if (_groupDepth > 0)
+			{
+				_groupItems.push_back(std::move(transaction));
+				return true;
+			}
+
+			return PushInternal(std::move(transaction));
+		}
+
+		size_t UndoCount() const { return _undoStack.size(); }
+		size_t RedoCount() const { return _redoStack.size(); }
+
+	private:
+		bool PushInternal(std::unique_ptr<IEditorTransaction> transaction)
+		{
 			if (_undoStack.size() >= _maxTransactions)
 			{
 				_undoStack.erase(_undoStack.begin());
@@ -31,6 +105,7 @@ namespace HexEditor
 			return true;
 		}
 
+	public:
 		bool Undo()
 		{
 			if (_undoStack.empty())
@@ -71,10 +146,15 @@ namespace HexEditor
 		{
 			_undoStack.clear();
 			_redoStack.clear();
+			_groupItems.clear();
+			_groupDepth = 0;
 		}
 
 	private:
 		size_t _maxTransactions = 512;
+		int32_t _groupDepth = 0;
+		std::string _groupLabel;
+		std::vector<std::unique_ptr<IEditorTransaction>> _groupItems;
 		std::vector<std::unique_ptr<IEditorTransaction>> _undoStack;
 		std::vector<std::unique_ptr<IEditorTransaction>> _redoStack;
 	};
@@ -275,7 +355,12 @@ namespace HexEditor
 					return nullptr;
 				}
 
-				entity->SetParent(parent);
+				// The snapshot transforms are LOCAL (Transform serializes local space)
+				// and were applied in pass 2 while the entity was still unparented.
+				// The default SetParent keeps the WORLD position, which re-expressed
+				// every restored child relative to its parent: undoing the delete of a
+				// prefab group put all of its meshes at the world origin.
+				entity->SetParent(parent, false);
 			}
 
 			return scene->GetEntityByName(snapshot.rootEntityName);
@@ -356,7 +441,7 @@ namespace HexEditor
 				if (cls == nullptr)
 					return nullptr;
 
-				component = cls->newInstanceFn(entity);
+				component = cls->newInstanceFn ? cls->newInstanceFn(entity) : nullptr;
 				if (component == nullptr)
 					return nullptr;
 

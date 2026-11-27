@@ -114,6 +114,40 @@ namespace HexEngine::Weather
 		float transitionSeconds = 2.0f;
 	};
 
+	// Sky moods: day-to-day variations of a preset's look, so "Clear at 17:00"
+	// isn't the same sunset every day. A mood is RELATIVE: it scales / tints
+	// the preset's own values (sunset trims, aerosol haze, sun + ambient hue,
+	// fog, cirrus), and each preset only rolls the moods that suit it, at a
+	// reach that suits it (Clear gets the full range; Storm a subtler shift
+	// that never touches its coverage, which gates the storm towers).
+	enum class WeatherMoodId : int32_t
+	{
+		Standard = 0, // the preset exactly as authored
+		Golden,       // warm, rich sunset glow
+		Ember,        // hot and dusty: thick aerosol, deep red-orange low sun
+		Crisp,        // cold and clean: thin haze, cooler light, pink-blue dusk
+		Violet,       // pastel dusk: strong anti-sun purple, extra cirrus
+		Hazy,         // milky, muted, soft sun
+		Streaked,     // more cirrus streaks + a few more clouds to catch the colour
+		Count
+	};
+
+	// One rolled mood plus small continuous jitter, so two days with the same
+	// mood still differ a little. jitter[] is uniform in [-1, 1]:
+	//   [0] sunset warmth  [1] cloud coverage  [2] cirrus amount  [3] wind heading
+	struct WeatherMoodRoll
+	{
+		WeatherMoodId mood = WeatherMoodId::Standard;
+		float jitter[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	};
+
+	const wchar_t* GetMoodDisplayName(WeatherMoodId mood);
+	// Moods this preset can roll (Standard always first). Empty for Custom.
+	const std::vector<WeatherMoodId>& GetPresetMoods(WeatherPresetId presetId);
+	// Applies the roll to a state built from `presetId`. strength scales the
+	// mood on top of the preset's own reach (0 = no change, 1 = authored).
+	void ApplyWeatherMood(WeatherState& state, WeatherPresetId presetId, const WeatherMoodRoll& roll, float strength);
+
 	const wchar_t* GetPresetDisplayName(WeatherPresetId presetId);
 	const wchar_t* GetPrecipitationDisplayName(WeatherPrecipitationType type);
 	const wchar_t* GetZoneShapeDisplayName(WeatherZoneShape shape);

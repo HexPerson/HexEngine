@@ -17,6 +17,18 @@ namespace HexEngine
 
 		JsonFile(const DiskFile& file) = delete;
 
+		/** True while writing/reading a GAME save (GameStateSave): components then also
+		 * serialise their runtime state (an active job, money, a door's open state).
+		 * Scene and prefab saves leave it false, so runtime state never lands in
+		 * authored data. */
+		bool IsGameStateSave() const { return _gameStateSave; }
+		void SetGameStateSave(bool gameState) { _gameStateSave = gameState; }
+
+	private:
+		bool _gameStateSave = false;
+
+	public:
+
 		json& Serialize(json& container, const std::string& key, const json& value)
 		{
 			container[key] = value;

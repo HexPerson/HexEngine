@@ -23,7 +23,7 @@ namespace HexEngine
 {
 	HVar r_grassCullDist("r_grassCullDist", "The distance at which to cull grass", 1000.0f, 0.0f, 10000.0f);
 	HVar r_hlodEnable("r_hlodEnable", "Enable runtime HLOD substitution for generated HLOD entities", true, false, true);
-	HVar r_hlodClusterSize("r_hlodClusterSize", "Cluster size used when mapping source meshes to generated HLOD entities", 200.0f, 1.0f, 100000.0f);
+	HVar r_hlodClusterSize("r_hlodClusterSize", "HLOD cluster cell size (m). The editor's generator bakes with this value (it saves with the scene); changing it afterwards breaks the source->proxy mapping until you regenerate", 200.0f, 1.0f, 100000.0f);
 	HVar r_hlodSwitchDistance("r_hlodSwitchDistance", "Distance from camera where runtime HLOD replaces source meshes", 400.0f, 1.0f, 100000.0f);
 	HVar r_hlodDebugShowOnly("r_hlodDebugShowOnly", "Debug: render only generated HLOD entities", false, false, true);
 	HVar r_hlodAffectTerrain("r_hlodAffectTerrain", "Allow runtime HLOD substitution to affect chunk-based terrain meshes", false, false, true);
@@ -33,13 +33,16 @@ namespace HexEngine
 
 	namespace
 	{
-		std::unordered_map<StaticMeshComponent*, fs::path> g_hlodMeshPaths;
-		std::unordered_set<StaticMeshComponent*> g_hlodPendingLoads;
+		// Heap-allocated and never freed: PVS::ForgetHlodComponent runs from
+		// ~StaticMeshComponent, which can happen after static destruction at exit.
+		std::unordered_map<StaticMeshComponent*, fs::path>& g_hlodMeshPaths = *new std::unordered_map<StaticMeshComponent*, fs::path>();
+		std::unordered_set<StaticMeshComponent*>& g_hlodPendingLoads = *new std::unordered_set<StaticMeshComponent*>();
 
 		struct HlodClusterRuntimeData
 		{
 			math::Vector3 center = math::Vector3::Zero;
 			bool hasCenter = false;
+			bool allLoaded = true; // every proxy of the cluster has its mesh resident
 		};
 
 		// Allocation-free: runs for every candidate on every PVS rebuild (and
@@ -167,7 +170,10 @@ namespace HexEngine
 				}
 			}
 
-			if (pos != n)
+			// Tolerate a trailing "_..." (an entity-name dedupe suffix after the
+			// material-group index, e.g. a regenerate while the old proxies were
+			// still pending removal): the cell is the first three numbers.
+			if (pos != n && clusterKey[pos] != '_')
 				return false;
 
 			outPacked = PackHlodClusterCell(v[0], v[1], v[2]);
@@ -234,6 +240,11 @@ namespace HexEngine
 							component->SetMesh(mesh);
 							if (originalMaterial)
 								component->SetMaterial(originalMaterial);
+
+							// Re-evaluate the cluster tables now that this proxy is
+							// resident (until then its sources draw and it doesn't).
+							if (auto* owner = component->GetEntity(); owner != nullptr && owner->GetScene() != nullptr)
+								owner->GetScene()->ForceRebuildPVS();
 						}
 					});
 				}
@@ -242,6 +253,70 @@ namespace HexEngine
 			{
 				component->SetMesh(nullptr);
 			}
+		}
+	}
+
+	void PVS::ForgetHlodComponent(StaticMeshComponent* component)
+	{
+		if (component == nullptr || g_hlodMeshPaths.empty())
+			return;
+
+		g_hlodMeshPaths.erase(component);
+		g_hlodPendingLoads.erase(component);
+	}
+
+	uint8_t PVS::ResolveHlodRole(Entity* entity, math::Vector3& outCentre) const
+	{
+		if (!_hlodLive || entity == nullptr)
+			return 0;
+
+		std::string_view clusterKey;
+		if (TryExtractHlodClusterKey(entity->GetName(), clusterKey))
+		{
+			int64_t packed = 0;
+			auto it = ParseHlodClusterKey(clusterKey, packed) ? _hlodClusters.find(packed) : _hlodClusters.end();
+			if (it == _hlodClusters.end())
+			{
+				outCentre = entity->GetWorldTM().Translation();
+				return 1;
+			}
+			outCentre = it->second.centre;
+			// A cluster with a proxy not resident draws its sources instead, so
+			// its other (resident) proxies must not draw on top of them.
+			return it->second.allLoaded ? 1 : 3;
+		}
+
+		if (!entity->HasFlag(EntityFlags::RepresentedByHLOD))
+			return 0;
+		if (!r_hlodAffectTerrain._val.b && entity->GetChunk() != nullptr)
+			return 0;
+
+		auto it = _hlodClusters.find(PackHlodClusterKeyFromPosition(entity->GetWorldTM().Translation(), r_hlodClusterSize._val.f32));
+		if (it == _hlodClusters.end() || !it->second.allLoaded)
+			return 0;
+
+		outCentre = it->second.centre;
+		return 2;
+	}
+
+	bool HlodEntryDrawsAt(const RenderableSnapshot& entry, const math::Vector3& cameraPos)
+	{
+		// The cvars apply live here, not just at the next PVS rebuild.
+		if (entry.hlodRole != 0 && !r_hlodEnable._val.b)
+			return entry.hlodRole != 1 && entry.hlodRole != 3; // proxies off, sources on
+		if (entry.hlodRole != 0 && r_hlodDebugShowOnly._val.b)
+			return entry.hlodRole == 1 || entry.hlodRole == 3;   // proxies only
+
+		switch (entry.hlodRole)
+		{
+		case 0: return true;
+		case 3: return false;
+		default:
+		{
+			const float s = r_hlodSwitchDistance._val.f32;
+			const bool beyond = (entry.hlodCentre - cameraPos).LengthSquared() >= s * s;
+			return entry.hlodRole == 1 ? beyond : !beyond;
+		}
 		}
 	}
 
@@ -442,7 +517,14 @@ namespace HexEngine
 		// below take the scene lock, and acquiring it while holding the PVS lock
 		// would invert the order used by entity-add paths (scene lock ->
 		// PVS::FlushEntity).
-		std::vector<StaticMeshComponent*> components;
+		// Per-thread scratch reused across rebuilds: a fresh vector grew to ~10k
+		// candidates by repeated push_back on EVERY rebuild, and right after a
+		// play start (camera teleport + every shadow light rebuilding) those
+		// reallocations were the top main-thread cost. clear() keeps capacity.
+		// Not re-entrant per thread, so one buffer per thread is safe.
+		thread_local std::vector<StaticMeshComponent*> t_candidateScratch;
+		std::vector<StaticMeshComponent*>& components = t_candidateScratch;
+		components.clear();
 
 		if (g_pEnv->_chunkManager->HasActiveChunks(scene))
 		{
@@ -562,7 +644,8 @@ namespace HexEngine
 					auto& clusterData = hlodClusters[packedKey];
 					if (!clusterData.hasCenter)
 					{
-						clusterData.center = entity->GetPosition();
+						// World position: GetPosition() is parent-LOCAL for children.
+						clusterData.center = entity->GetWorldTM().Translation();
 						clusterData.hasCenter = true;
 					}
 				}
@@ -572,6 +655,11 @@ namespace HexEngine
 		// The per-entity work below (cluster lookups for every source mesh) only
 		// pays off when generated HLOD actually exists in the scene.
 		const bool hlodClustersActive = !hlodClusters.empty() || r_hlodDebugShowOnly._val.b;
+		// HLOD substitution is live for this PVS only with the feature on, a
+		// camera to measure distance from, and a PVS that wants proxies (local-
+		// light shadow maps don't). When it isn't, proxies are kept out and every
+		// source draws - before, r_hlodEnable 0 drew the proxies ON TOP.
+		const bool hlodLive = r_hlodEnable._val.b && hlodClustersActive && params.camera != nullptr && params.allowHlod;
 		const auto gatherEnd = std::chrono::high_resolution_clock::now();
 
 		// Translation hysteresis of this PVS (spheres are inflated 25% at build).
@@ -688,61 +776,44 @@ namespace HexEngine
 
 			if (component)
 			{
-				if (r_hlodEnable._val.b && hlodClustersActive && params.camera != nullptr)
+				// HLOD: where substitution is live the PVS keeps proxies AND baked
+				// sources, and the draw loops pick one per frame by distance
+				// (HlodEntryDrawsAt). Deciding it here went stale: the camera can
+				// move a long way inside the PVS hysteresis without a rebuild.
+				std::string_view hlodClusterKey;
+				const bool isHlodEntity = hlodClustersActive && TryExtractHlodClusterKey(entity->GetName(), hlodClusterKey);
+
+				if (isHlodEntity)
 				{
-					if (!r_hlodAffectTerrain._val.b && (entity->GetChunk() != nullptr || entity->HasFlag(EntityFlags::ExcludeFromHLOD)))
+					if (!hlodLive)
+						continue;
+
+					int64_t packedKey = 0;
+					const bool haveKey = ParseHlodClusterKey(hlodClusterKey, packedKey);
+					auto hlodIt = haveKey ? hlodClusters.find(packedKey) : hlodClusters.end();
+
+					if (r_hlodStreamEnable._val.b)
 					{
-						// Terrain/chunk meshes have their own LOD path and can share proxy origins; skip HLOD substitution by default.
-						bool ignore = false;
+						const math::Vector3 clusterCenter = (hlodIt != hlodClusters.end() && hlodIt->second.hasCenter)
+							? hlodIt->second.center
+							: entity->GetWorldTM().Translation();
+						const float distanceToCluster = (clusterCenter - params.camera->GetEntity()->GetWorldTM().Translation()).Length();
+						UpdateHlodStreamingState(component, distanceToCluster, r_hlodSwitchDistance._val.f32, r_hlodDebugShowOnly._val.b);
 					}
-					else
+
+					if (!component->GetMesh())
 					{
-						const float switchDistance = r_hlodSwitchDistance._val.f32;
-						std::string_view hlodClusterKey;
-						const bool isHlodEntity = TryExtractHlodClusterKey(entity->GetName(), hlodClusterKey);
-
-						if (r_hlodDebugShowOnly._val.b)
-						{
-							if (!isHlodEntity)
-								continue;
-						}
-						else
-						{
-							if (isHlodEntity)
-							{
-								int64_t packedKey = 0;
-								const bool haveKey = ParseHlodClusterKey(hlodClusterKey, packedKey);
-								auto hlodIt = haveKey ? hlodClusters.find(packedKey) : hlodClusters.end();
-								const math::Vector3 clusterCenter = (hlodIt != hlodClusters.end() && hlodIt->second.hasCenter)
-									? hlodIt->second.center
-									: entity->GetPosition();
-								const float distanceToCluster = (clusterCenter - params.camera->GetEntity()->GetPosition()).Length();
-
-								if (r_hlodStreamEnable._val.b)
-								{
-									UpdateHlodStreamingState(component, distanceToCluster, switchDistance, r_hlodDebugShowOnly._val.b);
-									if (!component->GetMesh())
-										continue;
-								}
-
-								if (distanceToCluster < switchDistance)
-									continue;
-							}
-							else
-							{
-								const int64_t sourceClusterKey = PackHlodClusterKeyFromPosition(entity->GetPosition(), r_hlodClusterSize._val.f32);
-								auto hlodIt = hlodClusters.find(sourceClusterKey);
-								if (hlodIt != hlodClusters.end())
-								{
-									const math::Vector3 clusterCenter = hlodIt->second.hasCenter ? hlodIt->second.center : entity->GetPosition();
-									const float distanceToCluster = (clusterCenter - params.camera->GetEntity()->GetPosition()).Length();
-									if (distanceToCluster >= switchDistance)
-										continue;
-								}
-							}
-						}
+						// Not resident (streamed out, or still loading): its cluster's
+						// sources keep drawing at every distance until a rebuild sees
+						// the whole cluster loaded - never a hole.
+						if (hlodIt != hlodClusters.end())
+							hlodIt->second.allLoaded = false;
+						continue;
 					}
 				}
+				// r_hlodDebugShowOnly is applied per frame in HlodEntryDrawsAt. Dropping
+				// the baked sources HERE left holes in the city until the next PVS
+				// rebuild after the debug view was switched off.
 
 				bool visible = IsEntityVisible(entity, params);
 
@@ -817,6 +888,18 @@ namespace HexEngine
 
 				batch.push_back({ mesh, entity, component, meshInstance->GetInstanceId() });
 
+			}
+		}
+
+		// Cluster table for the per-entry HLOD roles (snapshot build + recache).
+		_hlodLive = hlodLive;
+		_hlodClusters.clear();
+		if (hlodLive)
+		{
+			for (const auto& [key, data] : hlodClusters)
+			{
+				if (data.hasCenter)
+					_hlodClusters[key] = HlodClusterInfo{ data.center, data.allLoaded };
 			}
 		}
 
@@ -942,15 +1025,14 @@ namespace HexEngine
 		(void)entity;
 	}
 
-	void PVS::FlushEntity(Entity* entity, bool recache)
+	// Removes every entry of the given entities from the PVS and the render snapshot
+	// in ONE pass over each (was one full pass per entity, per PVS, per flush - the
+	// city sim hides/shows and spawns entities every frame, and with the camera plus
+	// every shadow-casting light owning a PVS that was ~20% of a Debug frame).
+	void PVS::RemoveEntitiesLocked(const std::unordered_set<Entity*>& entities)
 	{
-		/*if (_updatesDisabled)
-			return;*/
-
-		if (!entity)
+		if (entities.empty())
 			return;
-
-		std::unique_lock lock(_lock);
 
 		uint32_t removedFromPvs = 0;
 		uint32_t removedSkeletal = 0;
@@ -960,13 +1042,13 @@ namespace HexEngine
 			auto& entries = it->second;
 			entries.erase(
 				std::remove_if(entries.begin(), entries.end(),
-					[entity, &removedFromPvs, &removedSkeletal](const MeshEntityPair& pair)
+					[&entities, &removedFromPvs, &removedSkeletal](const MeshEntityPair& pair)
 					{
-						const bool shouldRemove = std::get<1>(pair) == entity;
+						const bool shouldRemove = entities.count(std::get<1>(pair)) != 0;
 						if (shouldRemove)
 						{
 							removedFromPvs++;
-							if (entity->HasA<SkeletalAnimationComponent>())
+							if (std::get<1>(pair)->HasA<SkeletalAnimationComponent>())
 								removedSkeletal++;
 						}
 						return shouldRemove;
@@ -984,9 +1066,9 @@ namespace HexEngine
 			auto& snapshotEntries = it->second;
 			snapshotEntries.erase(
 				std::remove_if(snapshotEntries.begin(), snapshotEntries.end(),
-					[entity](const RenderableSnapshot& snapshot)
+					[&entities](const RenderableSnapshot& snapshot)
 					{
-						return snapshot.entity == entity;
+						return entities.count(snapshot.entity) != 0;
 					}),
 				snapshotEntries.end());
 
@@ -998,17 +1080,31 @@ namespace HexEngine
 
 		_totalEnts = _totalEnts > removedFromPvs ? _totalEnts - removedFromPvs : 0;
 		_totalSkeletalAnimators = _totalSkeletalAnimators > removedSkeletal ? _totalSkeletalAnimators - removedSkeletal : 0;
+	}
 
-		if (!recache)
-			return;
-
+	// Re-adds one entity's visible meshes; the batches it touched are recorded so
+	// the caller sorts each once instead of once per inserted mesh.
+	void PVS::RecacheEntityLocked(Entity* entity, std::vector<MeshEntityVector*>& touched)
+	{
 		if (!_hasBuildOptimisation)
 			return;
 
 		if (entity->GetLayer() == Layer::Invisible || entity->GetLayer() == Layer::Trigger || entity->HasFlag(EntityFlags::DoNotRender))
 			return;
 
+		// About to be deleted: its removal flushes it again, but anything cached
+		// after that point would dangle.
+		if (entity->IsPendingDeletion())
+			return;
+
 		if (_optimisedParams.isShadow && !entity->GetCastsShadows())
+			return;
+
+		// HLOD proxies only belong in a PVS where substitution is live (the
+		// rebuild applies the same rule). This path used to re-add them to
+		// every PVS - local-light shadows and the near camera included - the
+		// moment the generator created them or a stream-in set their mesh.
+		if (!_hlodLive && entity->GetName().rfind("HLOD_", 0) == 0)
 			return;
 
 		if (!IsEntityVisible(entity, _optimisedParams))
@@ -1069,11 +1165,8 @@ namespace HexEngine
 			auto& pvsBatch = _pvs[material];
 			pvsBatch.push_back({ mesh, entity, meshComponent, meshInstance->GetInstanceId() });
 
-			std::sort(pvsBatch.begin(), pvsBatch.end(),
-				[](const MeshEntityPair& left, const MeshEntityPair& right)
-				{
-					return std::get<3>(left) < std::get<3>(right);
-				});
+			if (std::find(touched.begin(), touched.end(), &pvsBatch) == touched.end())
+				touched.push_back(&pvsBatch);
 
 			auto snapshotIt = std::find_if(_renderableSnapshot.begin(), _renderableSnapshot.end(),
 				[&material](const auto& batch)
@@ -1099,6 +1192,7 @@ namespace HexEngine
 			snapshot.entity = entity;
 			snapshot.component = meshComponent;
 			snapshot.transformVersion = entity->GetTransformVersion();
+			snapshot.hlodRole = ResolveHlodRole(entity, snapshot.hlodCentre);
 
 			if (snapshot.isBoundToBone)
 			{
@@ -1120,6 +1214,43 @@ namespace HexEngine
 			if (hasSkeletalAnimation)
 				_totalSkeletalAnimators++;
 		}
+	}
+
+	void PVS::SortTouchedLocked(std::vector<MeshEntityVector*>& touched)
+	{
+		for (auto* batch : touched)
+			std::sort(batch->begin(), batch->end(),
+				[](const MeshEntityPair& left, const MeshEntityPair& right)
+				{
+					return std::get<3>(left) < std::get<3>(right);
+				});
+		touched.clear();
+	}
+
+	void PVS::FlushEntity(Entity* entity, bool recache)
+	{
+		if (!entity)
+			return;
+		std::unique_lock lock(_lock);
+		RemoveEntitiesLocked({ entity });
+		if (!recache)
+			return;
+		std::vector<MeshEntityVector*> touched;
+		RecacheEntityLocked(entity, touched);
+		SortTouchedLocked(touched);
+	}
+
+	void PVS::AddEntities(const std::vector<Entity*>& entities)
+	{
+		if (entities.empty())
+			return;
+		std::unique_lock lock(_lock);
+		RemoveEntitiesLocked(std::unordered_set<Entity*>(entities.begin(), entities.end()));
+		std::vector<MeshEntityVector*> touched;
+		for (auto* entity : entities)
+			if (entity != nullptr)
+				RecacheEntityLocked(entity, touched);
+		SortTouchedLocked(touched);
 	}
 
 	void PVS::RemoveEntity(Entity* entity)

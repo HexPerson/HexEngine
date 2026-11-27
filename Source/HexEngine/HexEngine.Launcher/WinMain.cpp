@@ -102,6 +102,17 @@ int WinMain(
 {
 	SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
 
+	// Run from the executable's own folder. Everything the game loads at startup
+	// (EngineAssets.pkg, GameData.pkg / Data, Game.dll, Plugins) is resolved from
+	// the working directory, which is wherever the game was STARTED from - a
+	// shortcut, a debugger or a command prompt elsewhere found none of it.
+	{
+		wchar_t exePath[MAX_PATH * 4] = {};
+		const DWORD len = GetModuleFileNameW(nullptr, exePath, (DWORD)(sizeof(exePath) / sizeof(exePath[0])));
+		if (len > 0 && len < (DWORD)(sizeof(exePath) / sizeof(exePath[0])))
+			SetCurrentDirectoryW(fs::path(exePath).parent_path().wstring().c_str());
+	}
+
 	// Get the desktop resolution
 	int screenWidth, screenheight;
 	HexEngine::Window::GetDesktopResolution(screenWidth, screenheight);

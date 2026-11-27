@@ -65,6 +65,9 @@ namespace HexEngine
 
 		void FixedStep(float dt);
 
+		// Scene-load physics hold, extended while post-load async collider cooks are in flight.
+		bool IsWorldSettling() const;
+
 	private:
 		virtual void Destroy() override;
 

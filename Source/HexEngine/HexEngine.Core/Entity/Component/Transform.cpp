@@ -786,10 +786,9 @@ namespace HexEngine
 		_previous.position = position;
 		_previous.rotation = rotation;
 		_previous.scale = scale;
-
-		LOG_DEBUG("Position %.3f %.3f %.3f", position.x, position.y, position.z);
-		LOG_DEBUG("Rotation %.3f %.3f %.3f", rotation.x, rotation.y, rotation.z);
-		LOG_DEBUG("Scale %.3f %.3f %.3f", scale.x, scale.y, scale.z);
+		// (No per-transform logging: it ran for every entity on scene load and was
+		// a large share of load time - each line is flushed to disk and fanned out
+		// to the editor log panel + bridge.)
 	}
 
 	bool Transform::CreateWidget(ComponentWidget* widget)
@@ -809,9 +808,19 @@ namespace HexEngine
 
 	}
 
+	namespace
+	{
+		bool g_editorGizmosEnabled = true;
+	}
+
+	void Transform::SetEditorGizmosEnabled(bool enabled)
+	{
+		g_editorGizmosEnabled = enabled;
+	}
+
 	void Transform::OnRenderEditorGizmo(bool isSelected, bool& isHovering)
 	{
-		if (!isSelected || !g_pEnv->IsEditorMode())
+		if (!isSelected || !g_pEnv->IsEditorMode() || !g_editorGizmosEnabled)
 		{
 			if (g_translateGizmoState.activeTransform == this)
 				g_translateGizmoState = {};

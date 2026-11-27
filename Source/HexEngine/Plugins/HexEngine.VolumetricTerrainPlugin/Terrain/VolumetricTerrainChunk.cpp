@@ -156,12 +156,36 @@ namespace HexEngine::VolumetricTerrain
 		};
 		static_assert((sizeof(GpuSurfaceChunkParams) % 16) == 0, "GpuSurfaceChunkParams must be 16-byte aligned.");
 
-		IShaderStage* g_gpuSurfaceVs = nullptr;
-		IShaderStage* g_gpuSurfacePs = nullptr;
-		IShaderStage* g_gpuSurfaceExtractCs = nullptr;
 		IConstantBuffer* g_gpuSurfaceChunkBuffer = nullptr;
 		std::shared_ptr<IShader> g_gpuSurfaceShader;
 		std::shared_ptr<IShader> g_gpuSurfaceExtractShader;
+
+		// Never cache IShaderStage* from these shaders. A hot reload
+		// (ShaderSystem::OnResourceChanged) keeps the same IShader object but
+		// calls IShader::Destroy() on it - deleting every stage - and moves
+		// freshly compiled stages into _stages. A cached stage pointer then
+		// dangles, and binding it lands in GraphicsDeviceD3D11::SetVertexShader
+		// as a call through a freed vtable (_purecall). Always read the stage
+		// through the owning IShader, the way materials do.
+		IShaderStage* GetGpuSurfaceVs()
+		{
+			return g_gpuSurfaceShader != nullptr ? g_gpuSurfaceShader->GetShaderStage(ShaderStage::VertexShader) : nullptr;
+		}
+
+		IShaderStage* GetGpuSurfacePs()
+		{
+			return g_gpuSurfaceShader != nullptr ? g_gpuSurfaceShader->GetShaderStage(ShaderStage::PixelShader) : nullptr;
+		}
+
+		IShaderStage* GetGpuSurfaceExtractCs()
+		{
+			return g_gpuSurfaceExtractShader != nullptr ? g_gpuSurfaceExtractShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
+		}
+
+		bool GpuSurfaceShadersReady()
+		{
+			return GetGpuSurfaceVs() != nullptr && GetGpuSurfacePs() != nullptr && GetGpuSurfaceExtractCs() != nullptr && g_gpuSurfaceChunkBuffer != nullptr;
+		}
 		std::shared_ptr<ITexture2D> g_gpuTerrainLayerAlbedo[4];
 		std::shared_ptr<ITexture2D> g_gpuTerrainLayerNormal[4];
 		std::shared_ptr<ITexture2D> g_gpuTerrainLayerAo[4];
@@ -174,22 +198,13 @@ namespace HexEngine::VolumetricTerrain
 		{
 			if (g_gpuSurfaceInitTried)
 			{
-				return g_gpuSurfaceVs != nullptr && g_gpuSurfacePs != nullptr && g_gpuSurfaceExtractCs != nullptr && g_gpuSurfaceChunkBuffer != nullptr;
+				return GpuSurfaceShadersReady();
 			}
 
 			g_gpuSurfaceInitTried = true;
 
 			g_gpuSurfaceShader = IShader::Create("EngineData.Shaders/VolumetricTerrainSurface.hcs");
 			g_gpuSurfaceExtractShader = IShader::Create("EngineData.Shaders/VolumetricTerrainExtract.hcs");
-			if (g_gpuSurfaceShader != nullptr)
-			{
-				g_gpuSurfaceVs = g_gpuSurfaceShader->GetShaderStage(ShaderStage::VertexShader);
-				g_gpuSurfacePs = g_gpuSurfaceShader->GetShaderStage(ShaderStage::PixelShader);
-			}
-			if (g_gpuSurfaceExtractShader != nullptr)
-			{
-				g_gpuSurfaceExtractCs = g_gpuSurfaceExtractShader->GetShaderStage(ShaderStage::ComputeShader);
-			}
 			g_gpuTerrainLayerAlbedo[0] = ITexture2D::Create("EngineData.Textures/Terrain/grass1-albedo3.png");
 			g_gpuTerrainLayerNormal[0] = ITexture2D::Create("EngineData.Textures/Terrain/grass1-normal1-ogl.png");
 			g_gpuTerrainLayerAo[0] = ITexture2D::Create("EngineData.Textures/Terrain/grass1-ao.png");
@@ -241,7 +256,7 @@ namespace HexEngine::VolumetricTerrain
 				}
 			}
 			g_gpuSurfaceChunkBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(static_cast<uint32_t>(sizeof(GpuSurfaceChunkParams)));
-			return g_gpuSurfaceVs != nullptr && g_gpuSurfacePs != nullptr && g_gpuSurfaceExtractCs != nullptr && g_gpuSurfaceChunkBuffer != nullptr;
+			return GpuSurfaceShadersReady();
 		}
 
 		bool EnsureGpuBrushKernel()
@@ -374,6 +389,8 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			_entity = parentEntity->GetScene()->CreateEntity(chunkName, _origin);
 			if (_entity != nullptr)
 			{
+				_scene = parentEntity->GetScene();
+				_entityId = _entity->GetId();
 				_entity->SetParent(parentEntity);
 				// DoNotBlockNavMesh: keep the volumetric terrain out of scene navmesh
 				// bakes (CalculateSceneStats skips this flag) so agents navigate the
@@ -657,6 +674,10 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 
 	bool VolumetricTerrainChunk::ApplyBrush(const math::Vector3& center, const BrushSettings& settings, float deltaTime)
 	{
+		// Any brush edit invalidates the pre-cooked collision blob loaded with the
+		// scene: it describes the OLD surface. Left in place, the collision refresh
+		// re-attached it ("cache-hit") so sculpted terrain kept its pre-edit
+		// collider forever - and the next save wrote that stale blob back out.
 		if (ApplyBrushGpu(center, settings, deltaTime))
 		{
 			BrushSettings cpuMirror = settings;
@@ -667,10 +688,14 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			_densityDirty = false;
 			_meshDirty = true;
 			_collisionDirty = true;
+			_cachedCookedCollisionBlob.clear();
 			return true;
 		}
 
-		return ApplyBrushCpu(center, settings, deltaTime, true, true);
+		const bool modified = ApplyBrushCpu(center, settings, deltaTime, true, true);
+		if (modified)
+			_cachedCookedCollisionBlob.clear();
+		return modified;
 	}
 
 	bool VolumetricTerrainChunk::ApplyBrushCpu(const math::Vector3& center, const BrushSettings& settings, float deltaTime, bool uploadGpuAfterModify, bool runRelaxation)
@@ -843,6 +868,123 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		return modified;
 	}
 
+	namespace
+	{
+		// Removes the parts of a triangle soup that lie inside upright boxes,
+		// cutting triangles exactly at the box faces. For each box the polygon
+		// is peeled plane by plane: the piece OUTSIDE a face is kept, the piece
+		// inside goes on to the next face, and whatever is inside all six is
+		// dropped. Kept pieces are convex, so a fan re-triangulates them.
+		void CutTrianglesByBoxes(std::vector<math::Vector3>& verts, std::vector<MeshIndexFormat>& indices,
+			const std::vector<HexEngine::TerrainCutoutBox>& boxes)
+		{
+			if (boxes.empty() || indices.empty())
+				return;
+
+			using Poly = std::vector<math::Vector3>;
+			std::vector<Poly> polys;
+			polys.reserve(indices.size() / 3);
+			for (size_t i = 0; i + 2 < indices.size(); i += 3)
+				polys.push_back({ verts[indices[i]], verts[indices[i + 1]], verts[indices[i + 2]] });
+
+			auto split = [](const Poly& in, const auto& dist, Poly& outside, Poly& inside)
+			{
+				outside.clear(); inside.clear();
+				const size_t n = in.size();
+				for (size_t i = 0; i < n; ++i)
+				{
+					const math::Vector3& a = in[i];
+					const math::Vector3& b = in[(i + 1) % n];
+					const float da = dist(a), db = dist(b);
+					if (da > 0.0f) outside.push_back(a); else inside.push_back(a);
+					if ((da > 0.0f) != (db > 0.0f))
+					{
+						const float t = da / (da - db);
+						const math::Vector3 p = a + (b - a) * t;
+						outside.push_back(p);
+						inside.push_back(p);
+					}
+				}
+			};
+
+			for (const auto& box : boxes)
+			{
+				const math::Vector3 ax(box.axisX.x, 0.0f, box.axisX.y);
+				const math::Vector3 az(-box.axisX.y, 0.0f, box.axisX.x);
+				const float reach = std::sqrt(box.halfExtents.x * box.halfExtents.x + box.halfExtents.z * box.halfExtents.z);
+				std::vector<Poly> next;
+				next.reserve(polys.size());
+				for (auto& poly : polys)
+				{
+					// Quick reject: the triangle's AABB against the box's AABB. (Testing
+					// only the corners missed collision triangles - 8 m cells - whose
+					// corners all lie outside a small box they completely cover.)
+					float mnx = 1e30f, mxx = -1e30f, mny = 1e30f, mxy = -1e30f, mnz = 1e30f, mxz = -1e30f;
+					for (const auto& p : poly)
+					{
+						mnx = std::min(mnx, p.x); mxx = std::max(mxx, p.x);
+						mny = std::min(mny, p.y); mxy = std::max(mxy, p.y);
+						mnz = std::min(mnz, p.z); mxz = std::max(mxz, p.z);
+					}
+					if (mxx < box.centre.x - reach || mnx > box.centre.x + reach ||
+						mxz < box.centre.z - reach || mnz > box.centre.z + reach ||
+						mxy <= box.centre.y - box.halfExtents.y || mny >= box.centre.y + box.halfExtents.y)
+					{
+						next.push_back(std::move(poly));
+						continue;
+					}
+
+					const math::Vector3 normals[6] = { ax, -ax, az, -az, math::Vector3(0.0f, 1.0f, 0.0f), math::Vector3(0.0f, -1.0f, 0.0f) };
+					const float extents[6] = { box.halfExtents.x, box.halfExtents.x, box.halfExtents.z, box.halfExtents.z, box.halfExtents.y, box.halfExtents.y };
+					Poly rest = poly, outside, inside;
+					for (int32_t f = 0; f < 6; ++f)
+					{
+						const math::Vector3 n = normals[f];
+						const float e = extents[f];
+						split(rest, [&](const math::Vector3& p) { return (p - box.centre).Dot(n) - e; }, outside, inside);
+						if (outside.size() >= 3)
+							next.push_back(outside);
+						rest.swap(inside);
+						if (rest.size() < 3)
+							break;
+					}
+					// `rest` is now inside the box: dropped.
+				}
+				polys.swap(next);
+			}
+
+			verts.clear();
+			indices.clear();
+			for (const auto& poly : polys)
+			{
+				const MeshIndexFormat base = static_cast<MeshIndexFormat>(verts.size());
+				for (const auto& p : poly)
+					verts.push_back(p);
+				for (size_t k = 1; k + 1 < poly.size(); ++k)
+				{
+					indices.push_back(base);
+					indices.push_back(base + static_cast<MeshIndexFormat>(k));
+					indices.push_back(base + static_cast<MeshIndexFormat>(k + 1));
+				}
+			}
+		}
+	}
+
+	bool VolumetricTerrainChunk::SetCutouts(std::vector<TerrainCutoutBox>&& boxes, uint64_t hash)
+	{
+		if (hash == _cutoutHash)
+			return false;
+		// Collision (and visual) marching-cubes vertices are CHUNK-LOCAL - the chunk
+		// entity's transform places them - so keep the boxes in that space too.
+		_cutouts = std::move(boxes);
+		for (auto& box : _cutouts)
+			box.centre -= _origin;
+		_cutoutHash = hash;
+		_cachedCookedCollisionBlob.clear();
+		_collisionDirty = true;
+		return true;
+	}
+
 	void VolumetricTerrainChunk::RebuildMesh(const MarchingCubes& marchingCubes, bool rebuildCollision)
 	{
 		if (_meshComponent == nullptr || !_generated)
@@ -924,6 +1066,9 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 	{
 		if (_rigidBody == nullptr || _cachedCookedCollisionBlob.empty())
 			return false;
+		if (!_cutouts.empty())
+			LOG_INFO("VolumetricTerrain chunk (%d,%d,%d): attaching cached collision (%zu bytes) with %zu cutout(s)",
+				_coord.x, _coord.y, _coord.z, _cachedCookedCollisionBlob.size(), _cutouts.size());
 		_rigidBody->RemoveCollider();
 		_rigidBody->AddTriangleMeshColliderFromCookedBuffer(_cachedCookedCollisionBlob, true);
 		_collisionDirty = false;
@@ -952,7 +1097,7 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		// field - _mesh is not consulted, so we can run it even when the
 		// visual mesh wasn't built (GPU visuals path skips RebuildMesh to
 		// save ~80ms per chunk).
-		if (collisionResolution >= _params.chunkResolution)
+		if (collisionResolution >= _params.chunkResolution && _cutouts.empty())
 		{
 			if (_mesh == nullptr || _mesh->GetNumFaces() == 0)
 			{
@@ -979,6 +1124,16 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		collisionVertices.reserve(collisionOutput.vertices.size());
 		for (const auto& vertex : collisionOutput.vertices)
 			collisionVertices.emplace_back(vertex._position.x, vertex._position.y, vertex._position.z);
+		const size_t trisBeforeCut = collisionOutput.indices.size() / 3;
+		CutTrianglesByBoxes(collisionVertices, collisionOutput.indices, _cutouts);
+		if (!_cutouts.empty())
+			LOG_INFO("VolumetricTerrain chunk (%d,%d,%d): cut collision by %zu cutout(s): %zu -> %zu triangles",
+				_coord.x, _coord.y, _coord.z, _cutouts.size(), trisBeforeCut, collisionOutput.indices.size() / 3);
+		if (collisionOutput.indices.empty())
+		{
+			_collisionDirty = false;
+			return false;
+		}
 
 		const bool queued = _rigidBody->BeginAddTriangleMeshColliderAsync(
 			collisionVertices,
@@ -1026,7 +1181,7 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			return;
 		}
 
-		if (collisionResolution >= _params.chunkResolution)
+		if (collisionResolution >= _params.chunkResolution && _cutouts.empty())
 		{
 			if (_mesh->GetNumFaces() > 0)
 			{
@@ -1048,7 +1203,9 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			{
 				collisionVertices.emplace_back(vertex._position.x, vertex._position.y, vertex._position.z);
 			}
+			CutTrianglesByBoxes(collisionVertices, collisionOutput.indices, _cutouts);
 
+			if (!collisionOutput.indices.empty())
 			_rigidBody->AddTriangleMeshCollider(collisionVertices, collisionOutput.indices, static_cast<uint32_t>(collisionOutput.indices.size() / 3), true);
 		}
 
@@ -1385,7 +1542,8 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 
 	void VolumetricTerrainChunk::ReleaseEntityReferences(bool queueDeleteEntity)
 	{
-		if (queueDeleteEntity && _entity != nullptr && _entity->GetScene() != nullptr)
+		const bool entityAlive = _entity != nullptr && _scene != nullptr && _scene->TryGetEntity(_entityId) == _entity;
+		if (queueDeleteEntity && entityAlive)
 		{
 			_entity->SetParent(nullptr);
 			_entity->DeleteMe(false);
@@ -1395,6 +1553,7 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		_meshComponent = nullptr;
 		_rigidBody = nullptr;
 		_entity = nullptr;
+		_entityId = EntityId{};
 	}
 
 	void VolumetricTerrainChunk::SetVisualMeshHidden(bool hidden)
@@ -1653,7 +1812,7 @@ bool VolumetricTerrainChunk::BuildGpuSurface(uint32_t lodIndex)
 	graphics->SetConstantBufferCS(6, g_gpuSurfaceChunkBuffer);
 	graphics->SetComputeTexture3D(0, _gpuDensityTexture);
 	graphics->SetComputeRwStructuredBuffer(0, _gpuSurfaceTriangles[lodIndex], 0u);
-	graphics->SetComputeShader(g_gpuSurfaceExtractCs);
+	graphics->SetComputeShader(GetGpuSurfaceExtractCs());
 	const uint32_t groups = static_cast<uint32_t>((GetGpuLodResolution(lodIndex) + 3u) / 4u);
 	graphics->Dispatch(groups, groups, groups);
 	graphics->SetComputeShader(nullptr);
@@ -1836,9 +1995,9 @@ void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 	graphics->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 	graphics->SetInputLayout(nullptr);
 	graphics->SetVertexBuffer(0, nullptr);
-	graphics->SetVertexShader(g_gpuSurfaceVs);
+	graphics->SetVertexShader(GetGpuSurfaceVs());
 	graphics->SetGeometryShader(nullptr);
-	graphics->SetPixelShader(g_gpuSurfacePs);
+	graphics->SetPixelShader(GetGpuSurfacePs());
 	graphics->SetConstantBufferVS(2, graphics->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer));
 	graphics->SetConstantBufferPS(2, graphics->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer));
 	graphics->SetConstantBufferVS(6, g_gpuSurfaceChunkBuffer);

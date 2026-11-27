@@ -6,6 +6,8 @@
 #include "../Scene/Prefab.hpp"
 #include "../Scene/SceneManager.hpp"
 #include "FileSystem.hpp"
+#include <fstream>
+#include <mutex>
 
 namespace
 {
@@ -185,7 +187,7 @@ namespace
 				continue;
 			}
 
-			component = cls->newInstanceFn(entity);
+			component = (cls->newInstanceFn ? cls->newInstanceFn(entity) : nullptr);
 			if (component == nullptr)
 			{
 				LOG_WARN("Prefab variant failed to instantiate component class '%s' on '%s'.",
@@ -497,6 +499,53 @@ namespace
 		return true;
 	}
 
+	bool LoadPrefabAssetToSceneFromMemory(
+		const std::vector<uint8_t>& data,
+		const fs::path& prefabAssetPath,
+		const std::shared_ptr<HexEngine::Scene>& targetScene,
+		std::unordered_set<std::wstring>& recursionGuard);
+
+	// Finds a prefab inside a mounted asset package (GameData.pkg in a shipped
+	// build). TryResolvePrefabPathToAbsolute only finds files ON DISK, so a
+	// variant whose base lives in a package - every variant in a packaged game,
+	// since the base path is "<variant's folder>/<basePrefab>" - failed with
+	// "Failed to resolve prefab path" (a critical error) the moment one spawned.
+	bool TryReadPrefabFromPackages(const fs::path& prefabAssetPath, std::vector<uint8_t>& outData, fs::path& outPackagePath)
+	{
+		outData.clear();
+		outPackagePath.clear();
+		if (prefabAssetPath.empty() || HexEngine::g_pEnv == nullptr)
+			return false;
+
+		const std::wstring pathStr = prefabAssetPath.wstring();
+		const auto firstSep = pathStr.find_first_of(L"\\/");
+		const auto dot = pathStr.find(L'.');
+		const bool hasFsPrefix = dot != std::wstring::npos && (firstSep == std::wstring::npos || dot < firstSep);
+		const std::wstring fsPrefix = hasFsPrefix ? pathStr.substr(0, dot) : std::wstring();
+		const std::wstring localPath = hasFsPrefix ? pathStr.substr(dot + 1) : pathStr;
+
+		for (auto* fileSystem : HexEngine::g_pEnv->GetResourceSystem().GetFileSystems())
+		{
+			if (fileSystem == nullptr || !fileSystem->IsAsset())
+				continue;
+			if (hasFsPrefix && fileSystem->GetName() != fsPrefix)
+				continue;
+
+			// Package keys are forward-slashed (GetLocalAbsoluteDataPath normalises).
+			const fs::path packagePath = fileSystem->GetLocalAbsoluteDataPath(fs::path(localPath).lexically_normal());
+			if (!fileSystem->DoesAbsolutePathExist(packagePath))
+				continue;
+
+			fileSystem->GetFileData(packagePath, outData);
+			if (outData.empty())
+				continue;
+
+			outPackagePath = packagePath;
+			return true;
+		}
+		return false;
+	}
+
 	bool LoadPrefabAssetToSceneRecursive(
 		const fs::path& prefabAssetPath,
 		const std::shared_ptr<HexEngine::Scene>& targetScene,
@@ -508,6 +557,11 @@ namespace
 		fs::path resolvedPrefabPath;
 		if (!TryResolvePrefabPathToAbsolute(prefabAssetPath, resolvedPrefabPath))
 		{
+			std::vector<uint8_t> packagedData;
+			fs::path packagePath;
+			if (TryReadPrefabFromPackages(prefabAssetPath, packagedData, packagePath))
+				return LoadPrefabAssetToSceneFromMemory(packagedData, packagePath, targetScene, recursionGuard);
+
 			LOG_CRIT("Failed to resolve prefab path '%s' to an absolute path.", prefabAssetPath.string().c_str());
 			return false;
 		}
@@ -625,6 +679,95 @@ namespace HexEngine
 		g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 	}
 
+	namespace
+	{
+		std::string ComputePrefabRevisionRecursive(const fs::path& path, std::unordered_set<std::wstring>& guard)
+		{
+			fs::path absolutePath;
+			if (!TryResolvePrefabPathToAbsolute(path, absolutePath))
+				return std::string();
+
+			const std::wstring key = BuildComparablePath(absolutePath);
+			if (key.empty() || !guard.insert(key).second)
+				return std::string();	// unreadable, or a variant cycle
+
+			std::error_code ec;
+			const auto size = fs::file_size(absolutePath, ec);
+			if (ec)
+				return std::string();
+			const auto writeTime = fs::last_write_time(absolutePath, ec).time_since_epoch().count();
+
+			// variantBase: the base prefab path when the file is a variant (parsed once
+			// per file version - the editor asks for revisions on every list refresh).
+			struct CacheEntry { uintmax_t size; int64_t writeTime; uint64_t fileHash; fs::path variantBase; };
+			static std::mutex s_cacheLock;
+			static std::unordered_map<std::wstring, CacheEntry> s_cache;
+
+			uint64_t fileHash = 0;
+			fs::path variantBase;
+			bool cached = false;
+			{
+				std::lock_guard lock(s_cacheLock);
+				if (auto it = s_cache.find(key); it != s_cache.end() && it->second.size == size && it->second.writeTime == (int64_t)writeTime)
+				{
+					fileHash = it->second.fileHash;
+					variantBase = it->second.variantBase;
+					cached = true;
+				}
+			}
+
+			if (!cached)
+			{
+				std::ifstream file(absolutePath, std::ios::binary);
+				if (!file)
+					return std::string();
+				// FNV-1a 64 - change detection, not security.
+				fileHash = 1469598103934665603ull;
+				char buffer[65536];
+				while (file)
+				{
+					file.read(buffer, sizeof(buffer));
+					const std::streamsize read = file.gcount();
+					for (std::streamsize i = 0; i < read; ++i)
+					{
+						fileHash ^= (uint8_t)buffer[i];
+						fileHash *= 1099511628211ull;
+					}
+				}
+
+				PrefabVariantData variantData;
+				if (TryReadPrefabVariantData(absolutePath, variantData))
+					variantBase = variantData.basePrefabPath;
+
+				std::lock_guard lock(s_cacheLock);
+				s_cache[key] = CacheEntry{ size, (int64_t)writeTime, fileHash, variantBase };
+			}
+
+			// A variant's effective content also depends on its base.
+			if (!variantBase.empty())
+			{
+				const std::string baseRevision = ComputePrefabRevisionRecursive(variantBase, guard);
+				for (const char ch : baseRevision)
+				{
+					fileHash ^= (uint8_t)ch;
+					fileHash *= 1099511628211ull;
+				}
+			}
+
+			char hex[17];
+			snprintf(hex, sizeof(hex), "%016llx", (unsigned long long)fileHash);
+			return std::string(hex);
+		}
+	}
+
+	std::string PrefabLoader::ComputePrefabRevision(const fs::path& path)
+	{
+		if (path.empty())
+			return std::string();
+		std::unordered_set<std::wstring> guard;
+		return ComputePrefabRevisionRecursive(path, guard);
+	}
+
 	std::vector<Entity*> PrefabLoader::LoadPrefab(const std::shared_ptr<Scene>& scene, const fs::path& path)
 	{
 		if (scene == nullptr || path.empty())
@@ -639,6 +782,7 @@ namespace HexEngine
 
 		std::vector<std::pair<Entity*, Entity*>> sourceToMerged;
 		auto mergedEntities = scene->MergeFrom(prefab->_scene.get(), &sourceToMerged);
+		const std::string revision = ComputePrefabRevision(path);
 
 		auto findSourceRoot = [](Entity* sourceEntity) -> Entity*
 		{
@@ -669,6 +813,8 @@ namespace HexEngine
 
 			const bool isRootInstance = sourceEntity->GetParent() == nullptr;
 			mergedEntity->SetPrefabSource(path, sourceRoot->GetName(), isRootInstance);
+			if (isRootInstance)
+				mergedEntity->SetPrefabRevision(revision);
 		}
 
 		return mergedEntities;
@@ -750,8 +896,12 @@ namespace HexEngine
 		if (prefab == nullptr)
 			return;
 
+		// The entities live in (and die with) the prefab's private scene; resetting it
+		// releases the scene through its own deleter. Then free the prefab itself - it
+		// was leaked on every unload before.
 		prefab->_entities.clear();
 		prefab->_scene.reset();
+		delete prefab;
 	}
 
 	std::vector<std::string> PrefabLoader::GetSupportedResourceExtensions()

@@ -27,6 +27,42 @@ namespace HexEngine
 		UpdateComponent(entity)
 	{
 		g_pEnv->_inputSystem->AddInputListener(this, InputEvent::KeyDown | InputEvent::KeyUp | InputEvent::MouseDown | InputEvent::MouseUp | InputEvent::MouseWheel | InputEvent::MouseMove);
+
+		if (clone != nullptr)
+		{
+			_movementSpeed = clone->_movementSpeed;
+			_strafeMovementSpeed = clone->_strafeMovementSpeed;
+			_viewOffset = clone->_viewOffset;
+			_targetOffset = clone->_targetOffset;
+			_physicsRadius = clone->_physicsRadius;
+			_targetPitch = clone->_targetPitch;
+			_rotationSpringSpeed = clone->_rotationSpringSpeed;
+			_positionSpringSpeed = clone->_positionSpringSpeed;
+		}
+	}
+
+	void ThirdPersonCameraController::Serialize(json& data, JsonFile* file)
+	{
+		SERIALIZE_VALUE(_movementSpeed);
+		SERIALIZE_VALUE(_strafeMovementSpeed);
+		SERIALIZE_VALUE(_viewOffset);
+		SERIALIZE_VALUE(_targetOffset);
+		SERIALIZE_VALUE(_physicsRadius);
+		SERIALIZE_VALUE(_targetPitch);
+		SERIALIZE_VALUE(_rotationSpringSpeed);
+		SERIALIZE_VALUE(_positionSpringSpeed);
+	}
+
+	void ThirdPersonCameraController::Deserialize(json& data, JsonFile* file, uint32_t mask)
+	{
+		DESERIALIZE_VALUE(_movementSpeed);
+		DESERIALIZE_VALUE(_strafeMovementSpeed);
+		DESERIALIZE_VALUE(_viewOffset);
+		DESERIALIZE_VALUE(_targetOffset);
+		DESERIALIZE_VALUE(_physicsRadius);
+		DESERIALIZE_VALUE(_targetPitch);
+		DESERIALIZE_VALUE(_rotationSpringSpeed);
+		DESERIALIZE_VALUE(_positionSpringSpeed);
 	}
 
 	ThirdPersonCameraController::~ThirdPersonCameraController()

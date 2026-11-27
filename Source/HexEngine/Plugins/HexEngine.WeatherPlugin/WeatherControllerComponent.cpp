@@ -323,6 +323,12 @@ namespace HexEngine::Weather
 			_indoorThunderVolumeScale = copy->_indoorThunderVolumeScale;
 			_indoorThunderPitchOffset = copy->_indoorThunderPitchOffset;
 			_skyProbeDistance = copy->_skyProbeDistance;
+			_moodSelection = copy->_moodSelection;
+			_moodStrength = copy->_moodStrength;
+			_moodTransitionSeconds = copy->_moodTransitionSeconds;
+			_moodRoll = copy->_moodRoll;
+			_moodRolledFor = copy->_moodRolledFor;
+			_moodRolled = copy->_moodRolled;
 		}
 	}
 
@@ -370,6 +376,85 @@ namespace HexEngine::Weather
 		_cycleElapsedSeconds = 0.0f;
 	}
 
+	void WeatherControllerComponent::RollMood(bool slowBlend)
+	{
+		const auto& moods = GetPresetMoods(_globalPresetId);
+		WeatherMoodRoll roll;
+		if (!moods.empty())
+		{
+			// Never repeat the mood that is already showing (when there is a choice).
+			const bool hasCurrent = _moodRolled && _moodRolledFor == _globalPresetId;
+			std::vector<WeatherMoodId> candidates;
+			for (auto mood : moods)
+			{
+				if (!hasCurrent || mood != _moodRoll.mood)
+					candidates.push_back(mood);
+			}
+			if (candidates.empty())
+				candidates = moods;
+			roll.mood = candidates[NextRng(_moodRngState) % candidates.size()];
+			for (float& j : roll.jitter)
+				j = static_cast<float>(NextRng(_moodRngState) & 0xFFFFFFu) / static_cast<float>(0xFFFFFFu) * 2.0f - 1.0f;
+		}
+
+		_moodRoll = roll;
+		_moodRolledFor = _globalPresetId;
+		_moodRolled = true;
+		_moodBlendPending = slowBlend;
+
+		LOG_INFO("Weather mood: %S %S (jitter %.2f %.2f %.2f %.2f)%s",
+			GetPresetDisplayName(_globalPresetId), GetMoodDisplayName(roll.mood),
+			roll.jitter[0], roll.jitter[1], roll.jitter[2], roll.jitter[3],
+			_moodSelection >= 0 ? " - a pinned mood overrides it" : "");
+	}
+
+	WeatherMoodRoll WeatherControllerComponent::GetEffectiveMoodRoll() const
+	{
+		if (_moodSelection >= 0)
+		{
+			// Pinned for look-dev: the mood exactly as authored, no jitter.
+			WeatherMoodRoll pinned;
+			pinned.mood = static_cast<WeatherMoodId>(std::clamp(_moodSelection, 0, static_cast<int32_t>(WeatherMoodId::Count) - 1));
+			return pinned;
+		}
+		if (_moodRolled && _moodRolledFor == _globalPresetId)
+			return _moodRoll;
+		return WeatherMoodRoll{};
+	}
+
+	WeatherState WeatherControllerComponent::BuildGlobalState() const
+	{
+		if (_globalPresetId == WeatherPresetId::Custom)
+			return _globalState;
+
+		WeatherState state = MakePresetState(_globalPresetId);
+		ApplyWeatherMood(state, _globalPresetId, GetEffectiveMoodRoll(), _moodStrength);
+		return state;
+	}
+
+	void WeatherControllerComponent::UpdateMoodClock(Scene* scene)
+	{
+		std::vector<DayNightCycleComponent*> clocks;
+		if (scene == nullptr || !scene->GetComponents<DayNightCycleComponent>(clocks) || clocks.empty() || clocks[0] == nullptr)
+		{
+			_lastClockHours = -1.0f;
+			return;
+		}
+
+		const float hours = clocks[0]->GetCurrentTimeHours();
+		const float hoursPerDay = std::max(clocks[0]->GetHoursPerDay(), 1.0f);
+		// A new day = the clock wrapped FORWARD past midnight: it went down, but
+		// only a short way forward round the dial. A big backwards jump (the
+		// editor's time-of-day scrub from 17:30 to 09:00) is not a new day.
+		if (_lastClockHours >= 0.0f && hours < _lastClockHours &&
+			(hours + hoursPerDay - _lastClockHours) < hoursPerDay * 0.25f &&
+			_moodSelection < 0 && _globalPresetId != WeatherPresetId::Custom)
+		{
+			RollMood(true);
+		}
+		_lastClockHours = hours;
+	}
+
 	void WeatherControllerComponent::Update(float frameTime)
 	{
 		UpdateComponent::Update(frameTime);
@@ -404,6 +489,12 @@ namespace HexEngine::Weather
 		const math::Vector3 samplePosition =
 			(camera != nullptr && camera->GetEntity() != nullptr) ? camera->GetEntity()->GetPosition() : GetEntity()->GetPosition();
 
+		// Sky moods: a new one each in-game day, and one per preset (a preset
+		// changed by any path other than ApplyPreset still gets rolled here).
+		UpdateMoodClock(scene);
+		if (_globalPresetId != WeatherPresetId::Custom && (!_moodRolled || _moodRolledFor != _globalPresetId))
+			RollMood(false);
+
 		const WeatherState desiredState = ResolveDesiredState(scene, samplePosition);
 		if (!WeatherStateMatches(desiredState, _transitionTargetState))
 		{
@@ -411,6 +502,10 @@ namespace HexEngine::Weather
 			_transitionTargetState = desiredState;
 			_transitionElapsed = 0.0f;
 			_transitionDuration = std::max(0.0f, desiredState.transitionSeconds > 0.0f ? desiredState.transitionSeconds : _defaultTransitionSeconds);
+			// A day-rollover mood change drifts in slowly instead of popping.
+			if (_moodBlendPending)
+				_transitionDuration = std::max(_transitionDuration, _moodTransitionSeconds);
+			_moodBlendPending = false;
 		}
 
 		if (_transitionDuration <= 0.0f)
@@ -510,6 +605,8 @@ namespace HexEngine::Weather
 	{
 		RestoreSceneBaseline();
 
+		ValidateHelperEntities(GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr);
+
 		auto* audioManager = (g_pEnv != nullptr) ? g_pEnv->_audioManager : nullptr;
 		for (auto& entity : _precipitationEntities)
 			CleanupHelperEntity(entity);
@@ -551,6 +648,20 @@ namespace HexEngine::Weather
 		file->Serialize(data, "_cycleIntervalSeconds", _cycleIntervalSeconds);
 		file->Serialize(data, "_enabledPresetMask", _enabledPresetMask);
 		SerializeWeatherState(_globalState, data["_globalState"], file);
+
+		json& moodData = data["_mood"];
+		file->Serialize(moodData, "selection", _moodSelection);
+		file->Serialize(moodData, "strength", _moodStrength);
+		file->Serialize(moodData, "transitionSeconds", _moodTransitionSeconds);
+		file->Serialize(moodData, "rolled", _moodRolled);
+		int32_t moodRolledFor = static_cast<int32_t>(_moodRolledFor);
+		file->Serialize(moodData, "rolledFor", moodRolledFor);
+		int32_t moodId = static_cast<int32_t>(_moodRoll.mood);
+		file->Serialize(moodData, "mood", moodId);
+		file->Serialize(moodData, "jitter0", _moodRoll.jitter[0]);
+		file->Serialize(moodData, "jitter1", _moodRoll.jitter[1]);
+		file->Serialize(moodData, "jitter2", _moodRoll.jitter[2]);
+		file->Serialize(moodData, "jitter3", _moodRoll.jitter[3]);
 
 		json& audioData = data["_audio"];
 		file->Serialize(audioData, "indoorWeatherVolumeScale", _indoorWeatherVolumeScale);
@@ -596,6 +707,30 @@ namespace HexEngine::Weather
 		file->Deserialize(data, "_enabledPresetMask", _enabledPresetMask);
 		if (data.contains("_globalState"))
 			DeserializeWeatherState(_globalState, data["_globalState"], file);
+		if (data.contains("_mood"))
+		{
+			json& moodData = data["_mood"];
+			file->Deserialize(moodData, "selection", _moodSelection);
+			file->Deserialize(moodData, "strength", _moodStrength);
+			file->Deserialize(moodData, "transitionSeconds", _moodTransitionSeconds);
+			file->Deserialize(moodData, "rolled", _moodRolled);
+			int32_t moodRolledFor = static_cast<int32_t>(_moodRolledFor);
+			file->Deserialize(moodData, "rolledFor", moodRolledFor);
+			_moodRolledFor = static_cast<WeatherPresetId>(moodRolledFor);
+			int32_t moodId = static_cast<int32_t>(_moodRoll.mood);
+			file->Deserialize(moodData, "mood", moodId);
+			_moodRoll.mood = static_cast<WeatherMoodId>(std::clamp(moodId, 0, static_cast<int32_t>(WeatherMoodId::Count) - 1));
+			file->Deserialize(moodData, "jitter0", _moodRoll.jitter[0]);
+			file->Deserialize(moodData, "jitter1", _moodRoll.jitter[1]);
+			file->Deserialize(moodData, "jitter2", _moodRoll.jitter[2]);
+			file->Deserialize(moodData, "jitter3", _moodRoll.jitter[3]);
+			_moodSelection = std::clamp(_moodSelection, -1, static_cast<int32_t>(WeatherMoodId::Count) - 1);
+		}
+		// Scenes saved before moods existed: roll one now so the first frame
+		// already shows it (rather than a 2 s lerp from the bare preset).
+		if (_globalPresetId != WeatherPresetId::Custom && (!_moodRolled || _moodRolledFor != _globalPresetId))
+			RollMood(false);
+		_moodBlendPending = false;
 		if (data.contains("_audio"))
 		{
 			json& audioData = data["_audio"];
@@ -651,9 +786,7 @@ namespace HexEngine::Weather
 		// Snapping the state machine to the resolved preset here means the
 		// first frame already has the correct atmospheric / surface values,
 		// matching what the editor preview shows.
-		const WeatherState initialState = (_globalPresetId == WeatherPresetId::Custom)
-			? _globalState
-			: MakePresetState(_globalPresetId);
+		const WeatherState initialState = BuildGlobalState();
 		_currentState = initialState;
 		_transitionSourceState = initialState;
 		_transitionTargetState = initialState;
@@ -672,6 +805,36 @@ namespace HexEngine::Weather
 			ApplyPreset(presetId);
 			preset->SetValue(GetPresetDisplayName(presetId));
 		});
+
+		// --- Sky moods ---
+		// "Random (daily)" rolls a mood per in-game day and per preset change;
+		// picking a mood pins it (look-dev, cutscenes). Reroll previews another.
+		auto* mood = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Sky Mood");
+		mood->SetValue(_moodSelection < 0 ? L"Random (daily)" : GetMoodDisplayName(static_cast<WeatherMoodId>(_moodSelection)));
+		mood->GetContextMenu()->AddItem(new ContextItem(L"Random (daily)", [this, mood](const std::wstring&)
+		{
+			_moodSelection = -1;
+			mood->SetValue(L"Random (daily)");
+		}));
+		for (int32_t i = 0; i < static_cast<int32_t>(WeatherMoodId::Count); ++i)
+		{
+			const auto moodId = static_cast<WeatherMoodId>(i);
+			mood->GetContextMenu()->AddItem(new ContextItem(GetMoodDisplayName(moodId), [this, mood, i, moodId](const std::wstring&)
+			{
+				_moodSelection = i;
+				mood->SetValue(GetMoodDisplayName(moodId));
+			}));
+		}
+		new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 22), L"Reroll Mood",
+			[this, mood](Button*) -> bool
+			{
+				_moodSelection = -1;
+				RollMood(false);
+				mood->SetValue(L"Random (daily)");
+				return true;
+			});
+		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Mood Strength", &_moodStrength, 0.0f, 2.0f, 0.01f, 2);
+		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Mood Blend (s)", &_moodTransitionSeconds, 0.0f, 600.0f, 1.0f, 1);
 
 		// --- Random preset cycling ---
 		// Group all the cycling UI here so it's visually one block. Order: master
@@ -796,16 +959,22 @@ namespace HexEngine::Weather
 		_globalPresetId = presetId;
 		_globalState = MakePresetState(presetId);
 		_globalState.transitionSeconds = _defaultTransitionSeconds;
+		// Every preset change rolls a fresh mood: the weather turning Clear
+		// again tomorrow shouldn't bring back yesterday's exact sunset.
+		if (presetId != WeatherPresetId::Custom)
+			RollMood(false);
+		WeatherState targetState = BuildGlobalState();
+		targetState.transitionSeconds = _defaultTransitionSeconds;
 		const bool snapImmediately = (_defaultTransitionSeconds <= 0.0f);
 		_transitionSourceState = _currentState;
-		_transitionTargetState = _globalState;
+		_transitionTargetState = targetState;
 		_transitionElapsed = 0.0f;
 		_transitionDuration = std::max(0.0f, _defaultTransitionSeconds);
 		if (snapImmediately)
 		{
-			_currentState = _globalState;
-			_transitionSourceState = _globalState;
-			_transitionTargetState = _globalState;
+			_currentState = targetState;
+			_transitionSourceState = targetState;
+			_transitionTargetState = targetState;
 			_lightningCooldown = 0.0f;
 			_lightningRemaining = 0.0f;
 			_lightningFlash = 0.0f;
@@ -824,7 +993,7 @@ namespace HexEngine::Weather
 
 	WeatherState WeatherControllerComponent::ResolveDesiredState(Scene* scene, const math::Vector3& samplePosition) const
 	{
-		WeatherState desiredState = (_globalPresetId == WeatherPresetId::Custom) ? _globalState : MakePresetState(_globalPresetId);
+		WeatherState desiredState = BuildGlobalState();
 		desiredState.transitionSeconds = _defaultTransitionSeconds;
 
 		std::vector<WeatherZoneComponent*> zones;
@@ -945,6 +1114,8 @@ namespace HexEngine::Weather
 	{
 		if (scene == nullptr)
 			return;
+
+		ValidateHelperEntities(scene);
 
 		const bool currentActive = (currentState.precipitationType != WeatherPrecipitationType::None && currentState.precipitationIntensity > 0.01f);
 		const bool targetActive = (targetState.precipitationType != WeatherPrecipitationType::None && targetState.precipitationIntensity > 0.01f);
@@ -1394,6 +1565,24 @@ namespace HexEngine::Weather
 		entity = nullptr;
 	}
 
+	void WeatherControllerComponent::ValidateHelperEntities(Scene* scene)
+	{
+		for (size_t i = 0; i < _precipitationEntities.size(); ++i)
+		{
+			Entity*& entity = _precipitationEntities[i];
+			if (entity == nullptr)
+				continue;
+
+			// No scene to ask, or the id now resolves to nothing / someone else:
+			// the helper was freed under us. Forget it - never dereference it.
+			if (scene == nullptr || scene->TryGetEntity(_precipitationEntityIds[i]) != entity)
+			{
+				entity = nullptr;
+				_precipitationEntityIds[i] = EntityId{};
+			}
+		}
+	}
+
 	Entity* WeatherControllerComponent::EnsurePrecipitationEntity(Scene* scene, size_t index)
 	{
 		if (index >= _precipitationEntities.size())
@@ -1405,6 +1594,7 @@ namespace HexEngine::Weather
 		_precipitationEntities[index] = scene->CreateEntity(std::format("WeatherPrecipitation{}", index));
 		if (_precipitationEntities[index] == nullptr)
 			return nullptr;
+		_precipitationEntityIds[index] = _precipitationEntities[index]->GetId();
 
 		_precipitationEntities[index]->SetLayer(Layer::Particle);
 		_precipitationEntities[index]->SetFlag(EntityFlags::DoNotSave);
@@ -1437,6 +1627,9 @@ namespace HexEngine::Weather
 
 		auto pushEmitter = [&effect](ParticleEmitterDesc emitter)
 		{
+			// Every weather emitter stops under cover (roofs, awnings): the
+			// particle shader tests against the renderer's rain occlusion map.
+			emitter.shelterOccluded = true;
 			effect->emitters.push_back(std::move(emitter));
 		};
 

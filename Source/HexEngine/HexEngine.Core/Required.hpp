@@ -96,6 +96,13 @@ using json = nlohmann::json;
 #define HEX_RGBA_TO_FLOAT4(r,g,b,a) (float)r/255.0f, (float)g/255.0f, (float)b/255.0f, (float)a/255.0f
 #define HEX_RGBA(R,G,B,A)    (((uint32_t)(A)<<24) | ((uint32_t)(B)<<16) | ((uint32_t)(G)<<8) | ((uint32_t)(R)<<0))
 
+// Release version (MAJOR.MINOR.PATCH from the Git tag): see HexVersion.hpp.
+#include "HexVersion.hpp"
+
+// Project/asset FORMAT versions - stored in project .json files and compared
+// for EXACT equality on load (ProjectFile.cpp). Deliberately separate from the
+// release version: bumping these breaks every existing project, so they only
+// change when the file format does, never per release.
 #define MAKE_VERSION(tag, major, minor) inline const uint32_t tag = ((major << 4) | (minor << 0))
 
 MAKE_VERSION(HexEngineVersion, 0, 1);

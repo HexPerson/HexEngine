@@ -350,17 +350,38 @@ namespace HexEngine::VolumetricTerrain
 	{
 	}
 
+	void VolumetricTerrain::SyncSettleBlocker(bool forceRelease)
+	{
+		const bool want = !forceRelease && _pendingCollisionRefresh;
+		if (want == _settleBlockerRaised || g_pEnv == nullptr || g_pEnv->_sceneManager == nullptr)
+			return;
+		g_pEnv->_sceneManager->AddWorldSettleBlocker(want ? 1 : -1);
+		_settleBlockerRaised = want;
+	}
+
+	Entity* VolumetricTerrain::LiveRootEntity() const
+	{
+		if (_rootEntity == nullptr || _owner == nullptr)
+			return nullptr;
+		Scene* scene = _owner->GetScene();
+		if (scene == nullptr || scene->TryGetEntity(_rootEntityId) != _rootEntity)
+			return nullptr;
+		return _rootEntity;
+	}
+
 	VolumetricTerrain::~VolumetricTerrain()
 	{
+		SyncSettleBlocker(true);
+
 		if (_owner != nullptr && _owner->GetScene() != nullptr)
 		{
 			_owner->GetScene()->UnregisterCustomRenderer(this);
 		}
 
-		if (_rootEntity != nullptr && _rootEntity->GetScene() != nullptr)
+		if (Entity* root = LiveRootEntity(); root != nullptr)
 		{
-			_rootEntity->SetParent(nullptr);
-			_rootEntity->DeleteMe(false);
+			root->SetParent(nullptr);
+			root->DeleteMe(false);
 		}
 	}
 
@@ -406,10 +427,10 @@ namespace HexEngine::VolumetricTerrain
 		}
 		_chunks.clear();
 
-		if (_rootEntity != nullptr && _rootEntity->GetScene() != nullptr)
+		if (Entity* root = LiveRootEntity(); root != nullptr)
 		{
-			_rootEntity->SetParent(nullptr);
-			_rootEntity->DeleteMe(false);
+			root->SetParent(nullptr);
+			root->DeleteMe(false);
 		}
 		_rootEntity = nullptr;
 		_pendingCollisionRefresh = false;
@@ -433,6 +454,7 @@ namespace HexEngine::VolumetricTerrain
 				_rootEntity = _owner->GetScene()->CreateEntity(std::format("{}_Chunks", _owner->GetName()), _owner->GetPosition());
 				if (_rootEntity != nullptr)
 				{
+					_rootEntityId = _rootEntity->GetId();
 					_rootEntity->SetParent(_owner);
 					_rootEntity->SetFlag(EntityFlags::ExcludeFromHLOD | EntityFlags::DoNotSave);
 				}
@@ -882,8 +904,63 @@ namespace HexEngine::VolumetricTerrain
 		_stats.lastMeshRebuildMs = std::chrono::duration<float, std::milli>(end - begin).count();
 	}
 
+	void VolumetricTerrain::SyncCutouts(float deltaTime)
+	{
+		_cutoutPollTimer -= deltaTime;
+		if (_cutoutPollTimer > 0.0f)
+			return;
+		_cutoutPollTimer = 0.25f;
+
+		Scene* scene = _owner != nullptr ? _owner->GetScene() : nullptr;
+		if (scene == nullptr)
+			return;
+		std::vector<TerrainCutoutBox> boxes;
+		scene->GatherTerrainCutouts(boxes);
+
+		auto hashBox = [](uint64_t h, const TerrainCutoutBox& b)
+		{
+			const float v[8] = { b.centre.x, b.centre.y, b.centre.z, b.halfExtents.x, b.halfExtents.y, b.halfExtents.z, b.axisX.x, b.axisX.y };
+			for (float f : v)
+			{
+				uint32_t bits; memcpy(&bits, &f, 4);
+				h = (h ^ bits) * 1099511628211ull;
+			}
+			return h;
+		};
+
+		int32_t changed = 0;
+		for (auto& [coord, chunk] : _chunks)
+		{
+			(void)coord;
+			if (chunk == nullptr)
+				continue;
+			const auto& bounds = chunk->GetBounds();
+			std::vector<TerrainCutoutBox> mine;
+			uint64_t h = 0;
+			for (const auto& b : boxes)
+			{
+				const float reach = std::sqrt(b.halfExtents.x * b.halfExtents.x + b.halfExtents.z * b.halfExtents.z) + 1.0f;
+				if (std::fabs(b.centre.x - bounds.Center.x) > bounds.Extents.x + reach ||
+					std::fabs(b.centre.z - bounds.Center.z) > bounds.Extents.z + reach ||
+					std::fabs(b.centre.y - bounds.Center.y) > bounds.Extents.y + b.halfExtents.y + 1.0f)
+					continue;
+				mine.push_back(b);
+				h = hashBox(h == 0 ? 1469598103934665603ull : h, b);
+			}
+			if (chunk->SetCutouts(std::move(mine), h))
+				++changed;
+		}
+		if (changed > 0)
+		{
+			LOG_INFO("VolumetricTerrain: %zu terrain cutout(s); re-cooking collision for %d chunk(s)", boxes.size(), changed);
+			QueueCollisionRefresh();
+		}
+	}
+
 	void VolumetricTerrain::Tick(float deltaTime)
 	{
+		struct SettleSync { VolumetricTerrain* t; ~SettleSync() { t->SyncSettleBlocker(); } } settleSync{ this };
+
 		if (!_initialized)
 			return;
 
@@ -907,6 +984,7 @@ namespace HexEngine::VolumetricTerrain
 		}
 
 		RegenerateDirtyChunks();
+		SyncCutouts(deltaTime);
 
 		if (_pendingCollisionRefresh)
 		{
@@ -1265,6 +1343,26 @@ namespace HexEngine::VolumetricTerrain
 		StitchChunkBorders();
 	}
 
+	namespace
+	{
+		// FNV-1a over 8-byte words (tail bytewise): fast enough to hash every
+		// chunk's data per save (~100+ MB) in a fraction of the compression cost.
+		inline void HashBytes(uint64_t& h, const void* data, size_t size)
+		{
+			const uint8_t* p = static_cast<const uint8_t*>(data);
+			size_t i = 0;
+			for (; i + 8 <= size; i += 8)
+			{
+				uint64_t w;
+				memcpy(&w, p + i, 8);
+				h = (h ^ w) * 1099511628211ull;
+			}
+			for (; i < size; ++i)
+				h = (h ^ p[i]) * 1099511628211ull;
+			h = (h ^ (uint64_t)size) * 1099511628211ull;
+		}
+	}
+
 	void VolumetricTerrain::Serialize(json& data, JsonFile* file)
 	{
 		if (_pendingCollisionRefresh)
@@ -1301,23 +1399,46 @@ namespace HexEngine::VolumetricTerrain
 			if (chunk == nullptr)
 				continue;
 
+			json out;
+			out["coord"] = { coord.x, coord.y, coord.z };
+
+			// Hash straight from the chunk's buffers; only build (copy) the blob
+			// when the cached payload is stale.
+			const auto& densities = chunk->GetDensities();
+			const auto& materials = chunk->GetMaterials();
+			const auto& materialWeights = chunk->GetMaterialWeights();
+			const auto& cookedBlob = chunk->GetCachedCookedCollisionBlob();
+			uint64_t hash = 14695981039346656037ull;
+			HashBytes(hash, densities.data(), densities.size() * sizeof(float));
+			HashBytes(hash, materials.data(), materials.size());
+			HashBytes(hash, materialWeights.data(), materialWeights.size());
+			HashBytes(hash, cookedBlob.data(), cookedBlob.size());
+			hash = (hash ^ (chunk->HasMaterialEdits() ? 1ull : 2ull)) * 1099511628211ull;
+
+			auto cached = _payloadCache.find(coord);
+			if (cached != _payloadCache.end() && cached->second.hash == hash && !cached->second.payload.empty())
+			{
+				out["payload"] = cached->second.payload;
+				bakedChunks.push_back(std::move(out));
+				continue;
+			}
+
 			EditedChunkBlob blob;
 			blob.coord = coord;
-			blob.densities = chunk->GetDensities();
-			blob.materials = chunk->GetMaterials();
-			blob.materialWeights = chunk->GetMaterialWeights();
+			blob.densities = densities;
+			blob.materials = materials;
+			blob.materialWeights = materialWeights;
 			blob.hasMaterialEdits = chunk->HasMaterialEdits();
 			// Pull the cached cooked-PhysX blob too, if the chunk has one.
 			// Capturing here means the .hscene save embeds the cook output
 			// alongside the density snapshot - so the next load skips both
 			// SDF generation AND PxCookTriangleMesh.
-			blob.cookedCollisionBlob = chunk->GetCachedCookedCollisionBlob();
+			blob.cookedCollisionBlob = cookedBlob;
 
-			json out;
-			out["coord"] = { coord.x, coord.y, coord.z };
 			std::string payload;
 			if (SerializeEditedChunkBlobBinary(blob, payload))
 			{
+				_payloadCache[coord] = CachedChunkPayload{ hash, payload };
 				out["payload"] = std::move(payload);
 			}
 			else

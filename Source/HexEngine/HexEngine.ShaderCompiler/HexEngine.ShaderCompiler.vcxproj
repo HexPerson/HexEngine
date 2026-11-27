@@ -190,7 +190,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>HEX_CORE_MODULE;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\ShaderConductor\Include\;$(SolutionDir)..\..\ThirdParty\shaderconductor\External\DirectXShaderCompiler\include\;$(SolutionDir)..\..\ThirdParty\cxxopts\include\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\;$(SolutionDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\vcpkg_installed\x64-windows\include\;$(SolutionDir)..\..\ThirdParty\cxxopts\include\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\;$(SolutionDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
@@ -198,9 +198,13 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\;$(SolutionDir)..\..\ThirdParty\shaderconductor\build\External\DirectXShaderCompiler\Debug\lib\;$(HexVendorShaderConductorLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\;$(SolutionDir)..\..\vcpkg_installed\x64-windows\lib\;$(HexVendorShaderConductorLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>HexEngine.Core.lib;dxcompiler.lib;directxtk.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>copy /Y "$(SolutionDir)..\..\vcpkg_installed\x64-windows\bin\dxcompiler.dll" "$(OutDir)" &gt;nul &amp;&amp; copy /Y "$(SolutionDir)..\..\vcpkg_installed\x64-windows\bin\dxil.dll" "$(OutDir)" &gt;nul</Command>
+      <Message>Stage the DXC runtime (dxcompiler.dll + dxil.dll, vcpkg directx-dxc) beside the compiler</Message>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -210,7 +214,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\ShaderConductor\Include\;$(SolutionDir)..\..\ThirdParty\shaderconductor\External\DirectXShaderCompiler\include\;$(SolutionDir)..\..\ThirdParty\cxxopts\include\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\;$(SolutionDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\vcpkg_installed\x64-windows\include\;$(SolutionDir)..\..\ThirdParty\cxxopts\include\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\;$(SolutionDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -221,9 +225,13 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\;$(SolutionDir)..\..\ThirdParty\shaderconductor\build\External\DirectXShaderCompiler\Release\lib\;$(HexVendorShaderConductorLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\;$(SolutionDir)..\..\vcpkg_installed\x64-windows\lib\;$(HexVendorShaderConductorLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>HexEngine.Core.lib;dxcompiler.lib;directxtk.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>copy /Y "$(SolutionDir)..\..\vcpkg_installed\x64-windows\bin\dxcompiler.dll" "$(OutDir)" &gt;nul &amp;&amp; copy /Y "$(SolutionDir)..\..\vcpkg_installed\x64-windows\bin\dxil.dll" "$(OutDir)" &gt;nul</Command>
+      <Message>Stage the DXC runtime (dxcompiler.dll + dxil.dll, vcpkg directx-dxc) beside the compiler</Message>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release_DEBUG|x64'">
     <ClCompile>

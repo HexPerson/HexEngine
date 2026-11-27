@@ -54,12 +54,16 @@
 	// untouched.
 	Texture2D g_positionTex : register(t0); // GBuffer position copy
 	Texture2D g_normalTex   : register(t1); // GBuffer normal (RT - safe to read here since the auto-puddle pass doesn't write to it)
-	// Shelter/rain occlusion map (Phase 3 slice 2) - single-tap local copy
-	// of PBRutils::SampleRainShelter (this pass includes only Global).
+	// Shelter/rain occlusion map (Phase 3 slice 2) - local copy of
+	// PBRutils::SampleRainWetShelter (this pass includes only Global).
 	Texture2D<float> g_rainShelterTex : register(t2);
 
 	SamplerState g_pointSampler : register(s2);
 
+	// Same wide ONE-SIDED fade as the surface wetness (PBRutils::
+	// SampleRainWetShelter): dry under cover, puddles ease in over 0.6 m
+	// outside the cover edge. It used to be a single binary point tap, which
+	// cut puddles off along a hard, texel-stepped line at every awning.
 	float PuddleShelter(float3 worldPos)
 	{
 		if (g_rainOcclusionParams.x < 0.5f)
@@ -68,8 +72,30 @@
 		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
 		if (any(uv < 0.0f) || any(uv > 1.0f) || clip.z < 0.0f || clip.z > 1.0f)
 			return 1.0f;
-		const float mapDepth = g_rainShelterTex.SampleLevel(g_pointSampler, uv, 0);
-		return (clip.z <= mapDepth + g_rainOcclusionParams.y) ? 1.0f : 0.0f;
+
+		const float bias = g_rainOcclusionParams.y;
+		const float kSoftBand = 0.3f / 160.0f;
+		const float kWetFadeM = 0.6f;
+		const float uvPerMetre = 0.5f * length(float3(g_rainOcclusionVP._11, g_rainOcclusionVP._21, g_rainOcclusionVP._31));
+		const float radiusUv = kWetFadeM * uvPerMetre;
+
+		const float centre = 1.0f - smoothstep(bias, bias + kSoftBand,
+			clip.z - g_rainShelterTex.SampleLevel(g_pointSampler, uv, 0));
+		if (centre <= 0.001f)
+			return 0.0f;
+
+		float exposed = 0.0f;
+		[unroll]
+		for (int i = 0; i < 16; ++i)
+		{
+			const float r = sqrt((i + 0.5f) / 16.0f);
+			const float a = i * 2.39996323f;
+			const float2 o = float2(cos(a), sin(a)) * (r * radiusUv);
+			exposed += 1.0f - smoothstep(bias, bias + kSoftBand,
+				clip.z - g_rainShelterTex.SampleLevel(g_pointSampler, uv + o, 0));
+		}
+		exposed *= (1.0f / 16.0f);
+		return centre * smoothstep(0.5f, 1.0f, exposed);
 	}
 
 	cbuffer AutoPuddleConstants : register(b4)

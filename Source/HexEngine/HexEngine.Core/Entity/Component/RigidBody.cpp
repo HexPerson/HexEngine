@@ -1,5 +1,6 @@
 
 
+#include <atomic>
 #include "RigidBody.hpp"
 #include "../../HexEngine.hpp"
 
@@ -7,6 +8,8 @@
 
 namespace HexEngine
 {
+	static std::atomic<int32_t> g_asyncCooksInFlight{ 0 };
+
 	namespace
 	{
 		dx::BoundingBox GetScaledEntityAABB(Entity* entity)
@@ -71,6 +74,8 @@ namespace HexEngine
 	void RigidBody::Destroy()
 	{
 		LOG_DEBUG("Destroring rigid body");
+
+		ReleaseAsyncCook(true);
 
 		if (_rigidBody)
 		{
@@ -312,7 +317,13 @@ namespace HexEngine
 		_colliderShape = IRigidBody::ColliderShape::TriangleMesh;
 		_exclusive = exclusive;
 
-		return _rigidBody->BeginAddTriangleMeshColliderAsync(vertices, indices, faceCount, exclusive);
+		const bool queued = _rigidBody->BeginAddTriangleMeshColliderAsync(vertices, indices, faceCount, exclusive);
+		if (queued && !_asyncCookCounted)
+		{
+			_asyncCookCounted = true;
+			++g_asyncCooksInFlight;
+		}
+		return queued;
 	}
 
 	bool RigidBody::BeginAddTriangleMeshColliderAsync(Mesh* meshIn, bool exclusive)
@@ -326,7 +337,26 @@ namespace HexEngine
 
 	bool RigidBody::TryFinishAsyncCollider()
 	{
-		return _rigidBody != nullptr && _rigidBody->TryFinishAsyncCollider();
+		const bool finished = _rigidBody != nullptr && _rigidBody->TryFinishAsyncCollider();
+		if (finished)
+			ReleaseAsyncCook(true);
+		return finished;
+	}
+
+	int32_t RigidBody::GetAsyncCooksInFlight()
+	{
+		return g_asyncCooksInFlight.load();
+	}
+
+	void RigidBody::ReleaseAsyncCook(bool force)
+	{
+		if (!_asyncCookCounted)
+			return;
+		// Not forced: only release once the backend no longer has the cook.
+		if (!force && _rigidBody != nullptr && _rigidBody->HasAsyncColliderInFlight())
+			return;
+		_asyncCookCounted = false;
+		--g_asyncCooksInFlight;
 	}
 
 	bool RigidBody::HasAsyncColliderInFlight() const
@@ -412,6 +442,57 @@ namespace HexEngine
 	void RigidBody::EnableForcePoseUpdates(bool enable)
 	{
 		_forcePoseEnabled = enable;
+	}
+
+	void RigidBody::TeleportToTransform()
+	{
+		auto rb = GetIRigidBody();
+		if (rb == nullptr || rb->IsCharacterController())
+			return;
+
+		if (rb->GetBodyType() == IRigidBody::BodyType::Static)
+		{
+			// Static actors follow their transform through Entity::ForcePosition /
+			// ForceRotation, which a scripted mover (DoorComponent's swing) drives
+			// in play. A silent transform restore left the actor where play put
+			// it: a door swung open in play looked shut after stop but its
+			// collider stayed open. Only move actors that actually disagree with
+			// the transform - re-posing every static (thousands) through the
+			// notifying setters would churn PVS/GI for nothing.
+			if (auto* tf = GetEntity()->GetComponent<Transform>(); tf != nullptr)
+				tf->SnapInterpolation();
+			const math::Vector3 worldPosition = GetEntity()->GetWorldTM().Translation();
+			math::Quaternion worldRotation = GetEntity()->GetRotation();
+			for (auto* parent = GetEntity()->GetParent(); parent != nullptr; parent = parent->GetParent())
+			{
+				worldRotation = worldRotation * parent->GetRotation();
+				worldRotation.Normalize();
+			}
+			const math::Vector3 physicsPosition = rb->GetPhysicsPosition();
+			const math::Quaternion physicsRotation = rb->GetPhysicsRotation();
+			const bool moved = math::Vector3::DistanceSquared(physicsPosition, worldPosition) > 1e-6f;
+			const bool turned = std::fabs(physicsRotation.Dot(worldRotation)) < 0.99999f;
+			if (moved)
+				rb->UpdatePosePosition(worldPosition);
+			if (turned)
+				rb->UpdatePoseRotation(worldRotation);
+			return;
+		}
+
+		// GetWorldTM (read by ForceUpdatePose) returns the INTERPOLATED pose,
+		// which lags a transform that was just rewritten.
+		if (auto* tf = GetEntity()->GetComponent<Transform>(); tf != nullptr)
+			tf->SnapInterpolation();
+
+		ForceUpdatePose();
+
+		// No velocity setter on IRigidBody: disabling gravity with
+		// resetVelocity zeroes linear + angular velocity, then restore it.
+		if (rb->GetBodyType() == IRigidBody::BodyType::Dynamic)
+		{
+			rb->SetGravityEnabled(false, true);
+			rb->SetGravityEnabled(_isGravityApplied, false);
+		}
 	}
 
 	void RigidBody::ForceUpdatePose()
@@ -624,7 +705,54 @@ namespace HexEngine
 		if(_rigidBody)
 			_rigidBody->RemoveCollider();
 
+		ReleaseAsyncCook(false);
+
 		_colliderShape = IRigidBody::ColliderShape::None;
+	}
+
+	bool RigidBody::RebuildColliderFromMesh()
+	{
+		const IRigidBody::ColliderShape shape = _colliderShape;
+		if (shape != IRigidBody::ColliderShape::TriangleMesh &&
+			shape != IRigidBody::ColliderShape::Box)
+			return false;
+
+		auto* smc = GetEntity() != nullptr ? GetEntity()->GetComponent<StaticMeshComponent>() : nullptr;
+		auto mesh = smc != nullptr ? smc->GetMesh() : nullptr;
+		if (mesh == nullptr)
+			return false;
+
+		const bool exclusive = _exclusive;
+		RemoveCollider();
+		_colliderData.meshes.clear();
+
+		switch (shape)
+		{
+		case IRigidBody::ColliderShape::TriangleMesh:
+			AddTriangleMeshCollider(mesh.get(), exclusive);
+			if (_rigidBody)
+				_rigidBody->UpdateTriangleMeshScale(GetEntity()->GetAbsoluteScale());
+			break;
+		default:
+			AddBoxCollider(GetScaledEntityAABB(GetEntity()));
+			break;
+		}
+
+		// ForceUpdatePose skips STATIC bodies, but the caller usually moved the
+		// entity too (recenter compensation) - put every non-CCT body back on
+		// the entity's current world pose explicitly.
+		if (auto* rb = GetIRigidBody(); rb != nullptr && !rb->IsCharacterController())
+		{
+			math::Quaternion worldRotation = GetEntity()->GetRotation();
+			for (auto* parent = GetEntity()->GetParent(); parent != nullptr; parent = parent->GetParent())
+			{
+				worldRotation = worldRotation * parent->GetRotation();
+				worldRotation.Normalize();
+			}
+			rb->UpdatePosePosition(GetEntity()->GetWorldTM().Translation());
+			rb->UpdatePoseRotation(worldRotation);
+		}
+		return true;
 	}
 
 	IRigidBody::ColliderShape RigidBody::GetColliderShape() const

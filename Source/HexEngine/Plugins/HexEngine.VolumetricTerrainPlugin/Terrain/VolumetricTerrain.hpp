@@ -80,6 +80,11 @@ public:
 	private:
 		Entity* _owner = nullptr;
 		Entity* _rootEntity = nullptr;
+		// Generation-checked id of _rootEntity. Scene teardown (and the play-mode
+		// stop restore) can free the DoNotSave chunk root before this terrain is
+		// destroyed; LiveRootEntity() refuses a pointer whose id no longer matches.
+		EntityId _rootEntityId;
+		Entity* LiveRootEntity() const;
 		math::Vector3 _lastOwnerPosition = math::Vector3::Zero;
 		SdfTerrainGenerationParams _params;
 		BrushSettings _brush;
@@ -94,6 +99,13 @@ public:
 		// (no entries) when the scene was authored without a snapshot - in
 		// which case BuildChunks runs the original SDF generation flow.
 		std::unordered_map<ChunkCoord, EditedChunkBlob, ChunkCoordHash> _bakedChunks;
+
+		// Serialize cache: the compressed+base64 payload of each chunk, keyed by
+		// a hash of the data that went into it. Re-compressing every chunk on
+		// every save/snapshot cost ~6.5 s for 418 chunks (editor play AND stop
+		// pay it); unchanged chunks now reuse their last payload.
+		struct CachedChunkPayload { uint64_t hash = 0; std::string payload; };
+		std::unordered_map<ChunkCoord, CachedChunkPayload, ChunkCoordHash> _payloadCache;
 		TerrainStats _stats;
 		bool _gpuVisualsEnabled = false;
 		// Non-D3D11 backends: the GPU-surface extract dispatches must run on
@@ -106,7 +118,15 @@ public:
 		float _collisionStepAccumulator = 0.0f;
 		bool _pendingCollisionRefresh = false;
 		bool _collisionRefreshStarted = false;
+		// Mirrors _pendingCollisionRefresh into SceneManager's world-settle
+		// blockers, so physics stays held after a load until the chunks have
+		// collision (bodies resting on the terrain no longer fall through).
+		bool _settleBlockerRaised = false;
+		void SyncSettleBlocker(bool forceRelease = false);
 		bool _pendingPvsRefresh = false;
 		bool _sculptingActive = false;
+		// TerrainCutout sync (polled a few times a second from Tick).
+		void SyncCutouts(float deltaTime);
+		float _cutoutPollTimer = 0.0f;
 	};
 }

@@ -255,6 +255,7 @@ namespace HexEngine
 				ReadValue(emitterJson, "softParticles", emitter.softParticles);
 				ReadValue(emitterJson, "overrideReceiveLightingEnabled", emitter.overrideReceiveLightingEnabled);
 				ReadValue(emitterJson, "overrideReceiveLighting", emitter.overrideReceiveLighting);
+				ReadValue(emitterJson, "shelterOccluded", emitter.shelterOccluded);
 
 				if (auto emissionIt = emitterJson.find("emission"); emissionIt != emitterJson.end() && emissionIt->is_object())
 				{
@@ -355,6 +356,7 @@ namespace HexEngine
 			WriteValue(emitterJson, "softParticles", emitter.softParticles);
 			WriteValue(emitterJson, "overrideReceiveLightingEnabled", emitter.overrideReceiveLightingEnabled);
 			WriteValue(emitterJson, "overrideReceiveLighting", emitter.overrideReceiveLighting);
+			WriteValue(emitterJson, "shelterOccluded", emitter.shelterOccluded);
 
 			auto& emissionJson = emitterJson["emission"];
 			WriteValue(emissionJson, "enabled", emitter.emission.enabled);

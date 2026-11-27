@@ -277,7 +277,12 @@
 
 		float3 lightPos = input.tangent;
 		float lightRange = input.texcoord.x;
-		float lightIntensity = input.colour.a;
+		// Intensity = the strength SceneRenderer sends in uvScale.y: strength x
+		// multiplier, lumens -> candela when r_physicalLightUnits - exactly what
+		// the clustered gather uses, so a light switching paths (gaining or losing
+		// a shadow, an atlas tile) keeps its brightness. It used to read colour.a
+		// (alpha x raw strength): ~4pi too bright for points, no multiplier.
+		float lightIntensity = input.texcoord.y;
 		float3 lightDir = normalize(g_shadowCasterLightDir);
 
 		float volumetricScattering = CalculateVolumetricScattering(

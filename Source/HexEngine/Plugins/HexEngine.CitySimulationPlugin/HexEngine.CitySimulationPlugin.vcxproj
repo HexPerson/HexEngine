@@ -169,6 +169,8 @@
     <ClInclude Include="CitySimulationInterface.hpp" />
     <ClInclude Include="ITaskTravelService.hpp" />
     <ClInclude Include="PlaceOfWorkComponent.hpp" />
+    <ClInclude Include="TrafficSignalComponent.hpp" />
+    <ClInclude Include="TrafficSignalControllerComponent.hpp" />
     <ClInclude Include="Plugin.hpp" />
     <ClInclude Include="ResidenceComponent.hpp" />
     <ClInclude Include="LanePathSmoothing.hpp" />
@@ -179,6 +181,18 @@
     <ClInclude Include="TrafficManagerComponent.hpp" />
     <ClInclude Include="TrafficSpawnerComponent.hpp" />
     <ClInclude Include="TrafficVehicleComponent.hpp" />
+    <ClInclude Include="AmbientSoundscapeComponent.hpp" />
+    <ClInclude Include="AmbientZoneComponent.hpp" />
+    <ClInclude Include="AmbientEmitterComponent.hpp" />
+    <ClInclude Include="PathMoverComponent.hpp" />
+    <ClInclude Include="SeatComponent.hpp" />
+    <ClInclude Include="ParkingLotComponent.hpp" />
+    <ClInclude Include="DistrictGateComponent.hpp" />
+    <ClInclude Include="TransitStopComponent.hpp" />
+    <ClInclude Include="TransitLineComponent.hpp" />
+    <ClInclude Include="TransitVehicleComponent.hpp" />
+    <ClInclude Include="TransitPortalComponent.hpp" />
+    <ClInclude Include="BuildingLightsComponent.hpp" />
     <ClInclude Include="VehicleComponent.hpp" />
   </ItemGroup>
   <ItemGroup>
@@ -187,6 +201,8 @@
     <ClCompile Include="CityRoutineSystemComponent.cpp" />
     <ClCompile Include="CitySimulationInterface.cpp" />
     <ClCompile Include="PlaceOfWorkComponent.cpp" />
+    <ClCompile Include="TrafficSignalComponent.cpp" />
+    <ClCompile Include="TrafficSignalControllerComponent.cpp" />
     <ClCompile Include="Plugin.cpp" />
     <ClCompile Include="ResidenceComponent.cpp" />
     <ClCompile Include="RoadComponent.cpp" />
@@ -196,6 +212,19 @@
     <ClCompile Include="TrafficManagerComponent.cpp" />
     <ClCompile Include="TrafficSpawnerComponent.cpp" />
     <ClCompile Include="TrafficVehicleComponent.cpp" />
+    <ClCompile Include="AmbientSoundscapeComponent.cpp" />
+    <ClCompile Include="AmbientZoneComponent.cpp" />
+    <ClCompile Include="AmbientEmitterComponent.cpp" />
+    <ClCompile Include="PathMoverComponent.cpp" />
+    <ClCompile Include="SeatComponent.cpp" />
+    <ClCompile Include="ParkingLotComponent.cpp" />
+    <ClCompile Include="DistrictGateComponent.cpp" />
+    <ClCompile Include="CityKerbTool.cpp" />
+    <ClCompile Include="TransitStopComponent.cpp" />
+    <ClCompile Include="TransitLineComponent.cpp" />
+    <ClCompile Include="TransitVehicleComponent.cpp" />
+    <ClCompile Include="TransitPortalComponent.cpp" />
+    <ClCompile Include="BuildingLightsComponent.cpp" />
     <ClCompile Include="VehicleComponent.cpp" />
   </ItemGroup>
 </Project>

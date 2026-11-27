@@ -99,8 +99,18 @@ namespace HexEditor
 
 	bool ProjectManager::OnBrowseFolderPath()
 	{
+		// Start the picker somewhere a user can actually write: an installed build
+		// lives in read-only Program Files, so projects must never default there.
+		std::wstring initialDirectory = HexEngine::g_pEnv->GetFileSystem().GetBaseDirectory().wstring();
+		if (HexEngine::FileSystem::IsInstalledBuild())
+		{
+			PWSTR documents = nullptr;
+			if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Documents, KF_FLAG_CREATE, nullptr, &documents)) && documents != nullptr)
+				initialDirectory = documents;
+			CoTaskMemFree(documents);
+		}
 		wchar_t baseDirectory[MAX_PATH];
-		wcscpy_s(baseDirectory, HexEngine::g_pEnv->GetFileSystem().GetBaseDirectory().wstring().c_str());
+		wcscpy_s(baseDirectory, initialDirectory.c_str());
 
 		BROWSEINFO bi = { 0 };
 		bi.lpszTitle = L"Browse for folder...";
@@ -142,7 +152,7 @@ namespace HexEditor
 
 	void ProjectManager::ReadProjectList()
 	{
-		HexEngine::DiskFile file(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json"), std::ios::in);
+		HexEngine::DiskFile file(HexEngine::FileSystem::GetUserDataRoot() / L"Projects.json", std::ios::in);
 
 		if (file.Open())
 		{
@@ -187,7 +197,7 @@ namespace HexEditor
 		_projectListData["projects"].push_back(path);
 
 		// update the project file on disk
-		HexEngine::DiskFile file(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json"), std::ios::out | std::ios::trunc);
+		HexEngine::DiskFile file(HexEngine::FileSystem::GetUserDataRoot() / L"Projects.json", std::ios::out | std::ios::trunc);
 
 		if (file.Open())
 		{

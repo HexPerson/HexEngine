@@ -2,6 +2,7 @@
 #include "SkeletalAnimationComponent.hpp"
 #include "StaticMeshComponent.hpp"
 #include "../Entity.hpp"
+#include "../Messaging/Message.hpp"
 #include "../../Environment/TimeManager.hpp"
 #include "../../Math/FloatMath.hpp"
 #include "../../Scene/AnimatedMesh.hpp"
@@ -10,9 +11,81 @@
 #include "../../GUI/Elements/Checkbox.hpp"
 #include "../../GUI/Elements/DragInt.hpp"
 #include "../../GUI/Elements/ContextMenu.hpp"
+#include "../../HexEngine.hpp"
+#include <chrono>
 
 namespace HexEngine
 {
+	HVar anim_stats("anim_stats", "Log skeletal animation CPU cost (pose evaluation + per-draw bone uploads)", false, false, true);
+	HVar anim_statsFrames("anim_statsFrames", "How many frames anim_stats averages over between log lines", 120, 10, 2000);
+
+	namespace
+	{
+		struct AnimTelemetry
+		{
+			int64_t frame = -1;
+			uint32_t frames = 0;
+			double poseMs = 0.0;
+			uint32_t poses = 0;
+			double uploadMs = 0.0;
+			uint32_t uploads = 0;
+			double skinMs = 0.0;
+			uint32_t skins = 0;
+		};
+
+		AnimTelemetry g_animTelemetry;
+
+		// Called before accumulating: on the first sample of a new frame, log and
+		// reset once the averaging window is full.
+		void AdvanceTelemetryFrame()
+		{
+			AnimTelemetry& t = g_animTelemetry;
+			const int64_t frame = (g_pEnv && g_pEnv->_timeManager) ? g_pEnv->_timeManager->_frameCount : 0;
+			if (frame == t.frame)
+				return;
+
+			t.frame = frame;
+			if (t.frames >= (uint32_t)std::max(1, anim_statsFrames._val.i32))
+			{
+				const double n = (double)t.frames;
+				LOG_INFO("anim_stats (%u frames): pose eval %.3f ms/frame (%.1f poses/frame, %.1f us each) | GPU skin dispatch %.3f ms/frame (%.1f/frame) | VS-skinning bone uploads %.3f ms/frame (%.1f/frame)",
+					t.frames,
+					t.poseMs / n, t.poses / n, t.poses ? (t.poseMs * 1000.0 / t.poses) : 0.0,
+					t.skinMs / n, t.skins / n,
+					t.uploadMs / n, t.uploads / n);
+				t = AnimTelemetry{};
+				t.frame = frame;
+			}
+			++t.frames;
+		}
+
+		void RecordGpuSkin(float milliseconds)
+		{
+			AdvanceTelemetryFrame();
+			g_animTelemetry.skinMs += milliseconds;
+			++g_animTelemetry.skins;
+		}
+
+		void RecordPose(float milliseconds)
+		{
+			AdvanceTelemetryFrame();
+			g_animTelemetry.poseMs += milliseconds;
+			++g_animTelemetry.poses;
+		}
+	}
+
+	bool SkeletalAnimationComponent::IsTelemetryEnabled()
+	{
+		return anim_stats._val.b;
+	}
+
+	void SkeletalAnimationComponent::RecordBoneUpload(float milliseconds)
+	{
+		AdvanceTelemetryFrame();
+		g_animTelemetry.uploadMs += milliseconds;
+		++g_animTelemetry.uploads;
+	}
+
 	SkeletalAnimationComponent::SkeletalAnimationComponent(Entity* entity) :
 		UpdateComponent(entity)
 	{
@@ -21,13 +94,32 @@ namespace HexEngine
 	SkeletalAnimationComponent::SkeletalAnimationComponent(Entity* entity, SkeletalAnimationComponent* copy) :
 		UpdateComponent(entity, copy)
 	{
+		// Carry the authored (serialised) settings across a clone. Without this a
+		// duplicated / prefab-spawned character played clip 0 (the bind-pose take)
+		// instead of its configured idle. Runtime state (bound mesh, compiled
+		// clips, pose) is rebuilt lazily by TryAutoBindFromEntityMesh.
+		if (copy != nullptr)
+		{
+			_animIndex = copy->_animIndex;
+			_rootMotion = copy->_rootMotion;
+		}
 	}
+
+	SkeletalAnimationComponent::~SkeletalAnimationComponent() = default;
 
 	void SkeletalAnimationComponent::SetAnimationData(std::shared_ptr<AnimatedMesh> mesh, std::shared_ptr<AnimationData> animData)
 	{
+		if (mesh != _mesh)
+		{
+			// A different body: the compute-skinned vertex buffers and last frame's
+			// palette belong to the old mesh / skeleton.
+			_gpuSkin.reset();
+			_prevPoseValid = false;
+		}
 		_mesh = mesh;
 		_animData = animData;
 		_boneInfo = mesh->GetAllBoneInfo();
+		_compiledClips.clear();	// bone indices are per mesh
 
 		// offset the time slightly because animations starting at the same time will be perfectly in sync which looks weird
 		_animationStartTime = g_pEnv->_timeManager->_currentTime + GetRandomFloat(0.5f, 1.0f);
@@ -35,32 +127,35 @@ namespace HexEngine
 
 	bool SkeletalAnimationComponent::TryAutoBindFromEntityMesh()
 	{
-		if (_animData)
-			return true; // already bound
-
 		Entity* owner = GetEntity();
 		if (owner == nullptr)
-			return false;
+			return _animData != nullptr;
 
 		// StaticMeshComponent owns the loaded Mesh; if it's an AnimatedMesh
 		// (skinned) it carries the AnimationData we need. Async mesh load
 		// is possible - bail quietly when the component isn't ready yet,
 		// the next caller (Update or CreateWidget on next open) retries.
+		// Also rebinds when the entity's mesh was swapped for another skinned body
+		// (set_component_field / inspector): the old skeleton's bone layout would
+		// otherwise drive the new mesh's vertices.
 		auto* smc = owner->GetComponent<StaticMeshComponent>();
 		if (smc == nullptr)
-			return false;
+			return _animData != nullptr;
 
 		auto mesh = smc->GetMesh();
+		if (_animData && mesh.get() == _mesh.get())
+			return true; // already bound to this mesh
+
 		if (mesh == nullptr || !mesh->HasAnimations())
-			return false;
+			return _animData != nullptr;
 
 		auto animatedMesh = std::dynamic_pointer_cast<AnimatedMesh>(mesh);
 		if (animatedMesh == nullptr)
-			return false;
+			return _animData != nullptr;
 
 		auto animData = animatedMesh->GetAnimationData();
 		if (animData == nullptr)
-			return false;
+			return _animData != nullptr;
 
 		SetAnimationData(animatedMesh, animData);
 		return true;
@@ -103,42 +198,69 @@ namespace HexEngine
 		UpdateComponent::Update(frameTime);
 
 		// Prefab deserialization doesn't wire up the StaticMesh -> Skeletal
-		// link, so catch the bind here once the mesh has finished loading.
-		// No-op when _animData is already populated.
-		if (!_animData)
-			TryAutoBindFromEntityMesh();
+		// link, so catch the bind here once the mesh has finished loading, and
+		// rebind if the mesh was swapped. Cheap no-op when already bound.
+		TryAutoBindFromEntityMesh();
 
-		if (_animData && _animData->_animations.size() > 0 && _animIndex != -1)
+		if (_mesh && _animData && _animData->_animations.size() > 0 && _animIndex != -1)
 		{
-			// Snapshot the pose this frame is reprojecting FROM, before overwriting it.
-			// Guarded on the frame counter because Update() can run more than once per
-			// rendered frame - snapshotting on every entry would make prev == current and
-			// zero out the deformation velocity that the whole point of this is to provide.
-			const uint32_t frame = g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u;
-			if (!_prevPoseValid || frame != _prevPoseFrame)
+			const bool telemetry = IsTelemetryEnabled();
+			const auto poseStart = telemetry ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
+
+			SnapshotPrevPose();
+
+			if (_editorMode)
 			{
-				_transformsPrev = _transforms;
-				_prevPoseFrame = frame;
-				_prevPoseValid = true;
+				EvaluateNow();
+				if (telemetry)
+					RecordPose(std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - poseStart).count());
+				return;
 			}
 
-			Animation& anim = _animData->_animations.at(std::min((uint32_t)_animData->_animations.size() - 1, _animIndex));
+			const uint32_t lastClip = (uint32_t)_animData->_animations.size() - 1;
+			// A ragdoll holds the clip still (see SetPhysicsPose).
+			const float clipSeconds = !_physicsPose.empty() ? _physicsFreezeSeconds
+				: g_pEnv->_timeManager->_currentTime - _animationStartTime;
+			const auto clipTicks = [&](uint32_t clip)
+			{
+				const Animation& anim = _animData->_animations[clip];
+				if (clip == _oneShotClip && _physicsPose.empty())
+				{
+					// One-shot: its own clock from 0, held on the last frame.
+					const float t = std::max(0.0f, g_pEnv->_timeManager->_currentTime - _oneShotStart) * AnimationUtils::GetTicksPerSecond(anim);
+					return anim.duration > 0.0f ? std::min(t, anim.duration * 0.999f) : 0.0f;
+				}
+				return anim.duration > 0.0f ? fmod(clipSeconds * AnimationUtils::GetTicksPerSecond(anim), anim.duration) : 0.0f;
+			};
 
-			UpdateBoneTransform(&anim, g_pEnv->_timeManager->_currentTime - _animationStartTime, _transforms);
+			const uint32_t clip = std::min(lastClip, _animIndex);
+			EvaluateClip(clip, clipTicks(clip), _transforms, false);
+
+			// Clip events fire from the clip that dominates the pose (the incoming one
+			// past the crossfade's midpoint), so a blend never doubles them up.
+			{
+				const uint32_t dominant = (_nextAnimIndex != -1 && _blendFactor >= 0.5f)
+					? std::min(lastClip, _nextAnimIndex) : clip;
+				FireClipEvents(dominant, clipTicks(dominant));
+			}
 
 			if (_nextAnimIndex != -1)
 			{
-				Animation& anim2 = _animData->_animations.at(std::min((uint32_t)_animData->_animations.size() - 1, _nextAnimIndex));
-
 				std::array<math::Matrix, MAX_BONES> blendTransforms;
-				UpdateBoneTransform(&anim2, g_pEnv->_timeManager->_currentTime - _animationStartTime, blendTransforms);
+				const uint32_t nextClip = std::min(lastClip, _nextAnimIndex);
+				EvaluateClip(nextClip, clipTicks(nextClip), blendTransforms, false);
 
+				// Final matrices are lerped (not per-bone TRS) because sibling-merged
+				// clips can each carry a different root transform - see
+				// Animation::_globalInverseTransform - so their local poses aren't
+				// directly comparable. The crossfade is ~80 ms, short enough that
+				// the slight shrink of a matrix lerp isn't visible.
 				for (uint32_t i = 0; i < blendTransforms.size(); ++i)
 				{
 					_transforms[i] = math::Matrix::Lerp(_transforms[i], blendTransforms[i], _blendFactor);
 				}
 
-				_blendFactor += g_pEnv->_timeManager->_frameTime * 12.3f;
+				_blendFactor += g_pEnv->_timeManager->GetGameFrameTime() * 12.3f;
 
 				if (_blendFactor >= 1.0f)
 				{
@@ -148,347 +270,430 @@ namespace HexEngine
 				}
 			}
 
-			//memcpy(_animationBuffer->_boneTransforms, (uint8_t*)_transforms.data(), _transforms.size() * sizeof(math::Matrix));
+			++_poseVersion;
+
+			if (telemetry)
+				RecordPose(std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - poseStart).count());
 		}
 	}
 
-	void SkeletalAnimationComponent::UpdateBoneTransform(Animation* animation, float TimeInSeconds, std::array<math::Matrix, MAX_BONES>& Transforms)
+	void SkeletalAnimationComponent::FireClipEvents(uint32_t clipIndex, float ticks)
 	{
-		math::Matrix Identity;
+		const Animation& anim = _animData->_animations[clipIndex];
 
-		//TimeInSeconds -= animation->time;
-
-		//TimeInSeconds *= animation->speed;
-
-		float TicksPerSecond = animation->ticksPerSecond != 0 ? animation->ticksPerSecond : 25.0f;
-
-		float TimeInTicks = TimeInSeconds * TicksPerSecond;
-		float AnimationTime = fmod(TimeInTicks, animation->duration);
-
-		//if (abs(AnimationTime - animation->duration) < 0.5f)
-		//	animation->speed *= -1.0f;
-
-		ReadNodeHierarchy(animation, animation->_rootNode, AnimationTime, Identity);
-
-		//Transforms.resize(_boneInfo.size());
-
-		for (uint32_t i = 0; i < _boneInfo.size(); i++)
+		// A different clip, or the same clip restarted: start tracking from here
+		// without firing (the time jumped, nothing was "passed").
+		if (clipIndex != _eventClip || _animationStartTime != _eventStartTime)
 		{
-			Transforms[i] = _boneInfo[i].FinalTransformation;// .Invert().Transpose();
-			//Transforms[i] = Transforms[i].Invert().Transpose(); // this is to fix normals where animated meshes have been scaled non uniformly
-		}
-	}
-
-	void SkeletalAnimationComponent::ReadNodeHierarchy(const Animation* owningAnim, AnimChannel* animation, float AnimationTime, math::Matrix& ParentTransform)
-	{
-		auto transform = animation->nodeTransform;
-
-		// Synthetic / static channels (added by the importer to cover scene
-		// nodes that the source FBX didn't keyframe) carry no keys - the
-		// runtime is meant to fall back to the bone's bind-pose transform
-		// (nodeTransform) which the importer copied from the source scene
-		// graph. Without this branch, FBX clips that only animate a subset
-		// of joints (Mixamo idle = spine only) cause every un-keyframed
-		// bone to read past the end of empty key vectors and either crash
-		// or collapse to origin, which is what manifests as "the rig has
-		// only spine bones left" after a sibling-merged import.
-		const bool hasKeys = !animation->positionKeys.empty()
-			|| !animation->rotationKeys.empty()
-			|| !animation->scaleKeys.empty();
-
-		if (!hasKeys)
-		{
-			// nodeTransform was loaded from Assimp without an explicit
-			// transpose at the call site (see ProcessNode); the keyed-path
-			// rebuild applies a transpose at the end of its TRS compose
-			// step, so we leave nodeTransform as-is here to land both
-			// paths in the same matrix convention.
-			math::Matrix GlobalTransformation = ParentTransform * transform;
-
-			const auto& boneMap = _mesh->GetBoneMap();
-			if (auto it = boneMap.find(animation->nodeName); it != boneMap.end())
-			{
-				uint32_t BoneIndex = it->second;
-				auto& bi = _boneInfo[BoneIndex];
-
-				const math::Matrix& git =
-					(owningAnim && owningAnim->_globalInverseTransform != math::Matrix::Identity)
-						? owningAnim->_globalInverseTransform
-						: _animData->_globalInverseTransform;
-
-				bi.FinalTransformation = git * GlobalTransformation * bi.BoneOffset;
-
-				auto transposeGlobalTransform = GlobalTransformation.Transpose();
-				bi.Position = transposeGlobalTransform.Translation();
-				bi.Rotation = math::Quaternion::CreateFromRotationMatrix(transposeGlobalTransform);
-			}
-
-			for (uint32_t i = 0; i < animation->children.size(); i++)
-				ReadNodeHierarchy(owningAnim, animation->children.at(i), AnimationTime, GlobalTransformation);
-
+			_eventClip = clipIndex;
+			_eventStartTime = _animationStartTime;
+			_eventPrevTicks = ticks;
 			return;
 		}
 
-		// Interpolate scaling and generate scaling transformation matrix
-		math::Vector3 Scaling;
-		CalcInterpolatedScaling(Scaling, AnimationTime, animation);
-		math::Matrix ScalingM = math::Matrix::CreateScale(Scaling.x, Scaling.y, Scaling.z);
+		const float prev = _eventPrevTicks;
+		_eventPrevTicks = ticks;
+		if (anim.events.empty() || ticks == prev || GetEntity() == nullptr)
+			return;
 
-		// Interpolate rotation and generate rotation transformation matrix
-		math::Quaternion RotationQ;
-		CalcInterpolatedRotation(RotationQ, AnimationTime, animation);
-		math::Matrix RotationM = math::Matrix::CreateFromQuaternion(RotationQ);
-
-		// Interpolate translation and generate translation transformation matrix
-		math::Vector3 Translation;
-		CalcInterpolatedPosition(Translation, AnimationTime, animation);
-
-		// Root motion: when enabled, intercept the root bone's translation,
-		// accumulate the per-frame delta in entity-local space, and zero the
-		// translation that goes into the bone so the skeleton stays put
-		// relative to the entity origin. Game/script code drains the delta
-		// via ConsumeRootMotionDelta() and applies it to the entity transform.
-		//
-		// The "root bone" is whichever bone we resolve to a valid bone-map
-		// entry FIRST while descending the channel tree. We cache its name so
-		// blended animations and re-played animations consistently strip the
-		// same node (animation files can share root bone names but vary in
-		// scene-graph parents above it).
-		bool isRootBone = false;
-		if (_rootMotion && _mesh)
+		// (prev, ticks], or across the loop: (prev, duration] then [0, ticks].
+		const bool wrapped = ticks < prev;
+		for (const AnimationEvent& ev : anim.events)
 		{
-			const auto& boneMap = _mesh->GetBoneMap();
-			const bool nodeIsInBoneMap = (boneMap.find(animation->nodeName) != boneMap.end());
-			if (nodeIsInBoneMap)
-			{
-				if (_rootBoneName.empty())
-					_rootBoneName = animation->nodeName;
-				if (animation->nodeName == _rootBoneName)
-					isRootBone = true;
-			}
+			const bool passed = wrapped
+				? (ev.time > prev || ev.time <= ticks)
+				: (ev.time > prev && ev.time <= ticks);
+			if (!passed)
+				continue;
+			AnimationEventMessage msg(ev.name, clipIndex, ev.time);
+			GetEntity()->OnMessage(&msg, this);
+		}
+	}
+
+	GpuSkinInstance* SkeletalAnimationComponent::PrepareGpuSkin(AnimatedMesh* mesh)
+	{
+		// Only the mesh this component evaluates poses for, and only once a pose exists
+		// (before that the vertex-shader path draws the bind pose, as it always has).
+		if (mesh == nullptr || mesh != _mesh.get() || _poseVersion == 0 || !GpuSkinning::IsAvailable())
+			return nullptr;
+
+		if (_gpuSkin == nullptr)
+			_gpuSkin = std::make_unique<GpuSkinInstance>();
+
+		// Skin once per new pose: every later pass this frame (shadow cascades, main,
+		// outline...) draws the same output.
+		if (_gpuSkin->_skinnedPoseVersion != _poseVersion)
+		{
+			const bool telemetry = IsTelemetryEnabled();
+			const auto skinStart = telemetry ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
+
+			if (!_gpuSkin->Skin(*mesh, _transforms.data(), GetBoneTransformArrayPrev().data()))
+				return nullptr;
+
+			_gpuSkin->_skinnedPoseVersion = _poseVersion;
+
+			if (telemetry)
+				RecordGpuSkin(std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - skinStart).count());
 		}
 
-		if (isRootBone)
-		{
-			const math::Vector3 currentPos = Translation;
-			if (_hasLastRootBonePosition)
-			{
-				// Planar root motion: accumulate horizontal (XZ) delta only.
-				// Y delta stays in the bone so the animation's vertical
-				// component (jumps, crouches, vertical-stance variation
-				// between clips) still drives the rig - the entity isn't
-				// asked to track those. The latched-first-sample anchor
-				// approach (used in a previous revision) failed here
-				// because _animationStartTime carries a random offset
-				// (SetAnimationData seeds it to avoid lockstep on shared
-				// clips), so the first ReadNodeHierarchy visit landed
-				// partway through the loop and latched a mid-animation
-				// pose as the "bind" position - the rig then rendered
-				// permanently offset from the entity.
-				_rootMotionDelta.x += currentPos.x - _lastRootBonePosition.x;
-				_rootMotionDelta.z += currentPos.z - _lastRootBonePosition.z;
-			}
-			_lastRootBonePosition = currentPos;
-			_hasLastRootBonePosition = true;
+		return _gpuSkin.get();
+	}
 
-			// Strip horizontal translation from the bone; let Y pass through.
-			// This keeps the rig's hip height driven by the animation (so
-			// the feet stay on the floor at the bind-pose Y, and jumps
-			// animate properly) while XZ motion is delegated to the
-			// entity via ConsumeRootMotionDelta.
-			Translation.x = 0.0f;
-			Translation.z = 0.0f;
+	SkeletalAnimationComponent::CompiledClip& SkeletalAnimationComponent::GetCompiledClip(uint32_t clipIndex)
+	{
+		// Edited data (animation editor) bumps the revision: channels or keys may have
+		// moved, so every cached layout is stale.
+		if (_compiledClips.size() != _animData->_animations.size() || _compiledRevision != _animData->_revision)
+		{
+			_compiledClips.clear();
+			_compiledClips.resize(_animData->_animations.size());
+			_compiledRevision = _animData->_revision;
 		}
 
-		math::Matrix TranslationM = math::Matrix::CreateTranslation(Translation);
+		CompiledClip& clip = _compiledClips[clipIndex];
+		const Animation* anim = &_animData->_animations[clipIndex];
 
-		// Combine the above transformations
-		transform = ScalingM * RotationM * TranslationM;
-		transform = transform.Transpose();
+		// Also catches the animation vector having been reallocated or swapped.
+		if (clip.anim != anim)
+			CompileClip(clip, anim);
 
-		math::Matrix GlobalTransformation = ParentTransform * transform;
+		return clip;
+	}
+
+	void SkeletalAnimationComponent::CompileClip(CompiledClip& clip, const Animation* anim)
+	{
+		clip.anim = anim;
+		clip.nodes.clear();
+		clip.cursors.clear();
+		clip.rootMotionNode = -2;
+
+		if (anim->_rootNode == nullptr)
+			return;
 
 		const auto& boneMap = _mesh->GetBoneMap();
 
-		if (auto it = boneMap.find(animation->nodeName); it != boneMap.end())
+		// Iterative pre-order walk in the same child order the old recursive
+		// ReadNodeHierarchy used, so "first bone visited" (root motion) is unchanged.
+		std::vector<std::pair<const AnimChannel*, int32_t>> stack;
+		stack.emplace_back(anim->_rootNode, -1);
+
+		while (!stack.empty())
 		{
-			uint32_t BoneIndex = it->second;
+			const auto [channel, parent] = stack.back();
+			stack.pop_back();
 
-			auto& bi = _boneInfo[BoneIndex];
+			const int32_t index = (int32_t)clip.nodes.size();
+			PoseNode& node = clip.nodes.emplace_back();
+			node.channel = channel;
+			node.parent = parent;
+			node.hasKeys = !channel->positionKeys.empty() || !channel->rotationKeys.empty() || !channel->scaleKeys.empty();
 
-			// Prefer the owning animation's per-clip root transform - sibling-
-			// merged FBX animations stamp their own here. Fall back to the
-			// AnimationData's shared value for legacy / pre-merge .hmesh
-			// files where Animation::_globalInverseTransform is the default
-			// identity. Using Matrix::Identity directly as the sentinel is
-			// safe: a true identity root transform has no effect either way.
-			const math::Matrix& git =
-				(owningAnim && owningAnim->_globalInverseTransform != math::Matrix::Identity)
-					? owningAnim->_globalInverseTransform
-					: _animData->_globalInverseTransform;
+			if (auto it = boneMap.find(channel->nodeName); it != boneMap.end() && it->second < (uint32_t)MAX_BONES)
+				node.bone = (int32_t)it->second;
 
-			bi.FinalTransformation = git * GlobalTransformation * bi.BoneOffset;
-
-			auto transposeGlobalTransform = GlobalTransformation.Transpose();
-
-			bi.Position = transposeGlobalTransform.Translation();
-			bi.Rotation = math::Quaternion::CreateFromRotationMatrix(transposeGlobalTransform);
+			for (auto child = channel->children.rbegin(); child != channel->children.rend(); ++child)
+				stack.emplace_back(*child, index);
 		}
 
-		for (uint32_t i = 0; i < animation->children.size(); i++)
+		clip.cursors.resize(clip.nodes.size());
+	}
+
+	int32_t SkeletalAnimationComponent::ResolveRootMotionNode(CompiledClip& clip)
+	{
+		if (clip.rootMotionNode != -2)
+			return clip.rootMotionNode;
+
+		// The root bone is the first keyed bone met while descending the channel
+		// tree. Its name is cached on the component so every clip strips the same
+		// joint even when their scene-graph parents above it differ.
+		if (_rootBoneName.empty())
 		{
-			ReadNodeHierarchy(owningAnim, animation->children.at(i), AnimationTime, GlobalTransformation);
-		}
-	}
-
-	const AnimChannel* SkeletalAnimationComponent::FindNodeAnim(const AnimChannel* pAnimation, const std::string& NodeName)
-	{
-		/*for (auto it = pAnimation->nodeToAnimMap.begin(); it != pAnimation->nodeToAnimMap.end(); it++)
-		{
-			if (it->first == NodeName)
-				return it->second;
-		}*/
-
-		if (pAnimation->nodeName == NodeName)
-			return pAnimation;
-
-		for (auto& child : pAnimation->children)
-		{
-			auto res = FindNodeAnim(child, NodeName);
-
-			if (res != nullptr)
-				return res;
-		}
-
-		return nullptr;
-	}
-
-	void SkeletalAnimationComponent::CalcInterpolatedScaling(math::Vector3& Out, float AnimationTime, const AnimChannel* pNodeAnim)
-	{
-		// After the importer's CoalesceSyntheticPivotChannels pass, a channel
-		// only carries the TRS slots whose synthetic-pivot source actually
-		// existed in the FBX. Bones with only a "_$AssimpFbx$_Rotation"
-		// synthetic end up here with empty scaleKeys; previously FindScaling
-		// would index past the end and crash. Default to identity scale and
-		// return early.
-		if (pNodeAnim->scaleKeys.empty()) {
-			Out = math::Vector3(1.0f, 1.0f, 1.0f);
-			return;
-		}
-		if (pNodeAnim->scaleKeys.size() == 1) {
-			Out = pNodeAnim->scaleKeys[0].second;
-			return;
-		}
-
-		uint32_t ScalingIndex = FindScaling(AnimationTime, pNodeAnim);
-		uint32_t NextScalingIndex = (ScalingIndex + 1);
-		//assert(NextScalingIndex < pNodeAnim->scaleKeys.size());
-		float t1 = (float)pNodeAnim->scaleKeys[ScalingIndex].first - (float)pNodeAnim->scaleKeys[0].first;
-		float t2 = (float)pNodeAnim->scaleKeys[NextScalingIndex].first - (float)pNodeAnim->scaleKeys[0].first;
-		float DeltaTime = t2 - t1;
-		float Factor = std::clamp((AnimationTime - (float)t1) / DeltaTime, 0.0f, 1.0f);
-		//assert(Factor >= 0.0f && Factor <= 1.0f);
-		const math::Vector3& Start = pNodeAnim->scaleKeys[ScalingIndex].second;
-		const math::Vector3& End = pNodeAnim->scaleKeys[NextScalingIndex].second;
-		math::Vector3 Delta = End - Start;
-		Out = Start + Factor * Delta;
-	}
-
-	void SkeletalAnimationComponent::CalcInterpolatedPosition(math::Vector3& Out, float AnimationTime, const AnimChannel* pNodeAnim)
-	{
-		// Same empty-slot handling as CalcInterpolatedScaling - bones that
-		// only have rotation synthetics (typical for forearm twist joints
-		// in Mixamo rigs) leave positionKeys empty.
-		if (pNodeAnim->positionKeys.empty()) {
-			Out = math::Vector3::Zero;
-			return;
-		}
-		if (pNodeAnim->positionKeys.size() == 1) {
-			Out = pNodeAnim->positionKeys[0].second;
-			return;
-		}
-
-		uint32_t PositionIndex = FindPosition(AnimationTime, pNodeAnim);
-		uint32_t NextPositionIndex = (PositionIndex + 1);
-		//assert(NextPositionIndex < pNodeAnim->positionKeys.size());
-		float t1 = (float)pNodeAnim->positionKeys[PositionIndex].first - (float)pNodeAnim->positionKeys[0].first;
-		float t2 = (float)pNodeAnim->positionKeys[NextPositionIndex].first - (float)pNodeAnim->positionKeys[0].first;
-		float DeltaTime = t2 - t1;
-		float Factor = std::clamp((AnimationTime - (float)t1) / DeltaTime, 0.0f, 1.0f);
-		//assert(Factor >= 0.0f && Factor <= 1.0f);
-		const math::Vector3& Start = pNodeAnim->positionKeys[PositionIndex].second;
-		const math::Vector3& End = pNodeAnim->positionKeys[NextPositionIndex].second;
-		math::Vector3 Delta = End - Start;
-		Out = Start + Factor * Delta;
-	}
-
-
-	void SkeletalAnimationComponent::CalcInterpolatedRotation(math::Quaternion& Out, float AnimationTime, const AnimChannel* pNodeAnim)
-	{
-		// Same empty-slot handling as the other two interpolators.
-		if (pNodeAnim->rotationKeys.empty()) {
-			Out = math::Quaternion::Identity;
-			return;
-		}
-		// we need at least two values to interpolate...
-		if (pNodeAnim->rotationKeys.size() == 1) {
-			Out = pNodeAnim->rotationKeys[0].second;
-			return;
-		}
-
-		uint32_t RotationIndex = FindRotation(AnimationTime, pNodeAnim);
-		uint32_t NextRotationIndex = (RotationIndex + 1);
-		//assert(NextRotationIndex < pNodeAnim->rotationKeys.size());
-		float t1 = (float)pNodeAnim->rotationKeys[RotationIndex].first - (float)pNodeAnim->rotationKeys[0].first;
-		float t2 = (float)pNodeAnim->rotationKeys[NextRotationIndex].first - (float)pNodeAnim->rotationKeys[0].first;
-		float DeltaTime = t2 - t1;
-		float Factor = std::clamp((AnimationTime - (float)t1) / DeltaTime, 0.0f, 1.0f);
-		//assert(Factor >= 0.0f && Factor <= 1.0f);
-		const math::Quaternion& StartRotationQ = pNodeAnim->rotationKeys[RotationIndex].second;
-		const math::Quaternion& EndRotationQ = pNodeAnim->rotationKeys[NextRotationIndex].second;
-
-		math::Quaternion::Lerp(StartRotationQ, EndRotationQ, Factor, Out);
-		//Out.Normalize();
-	}
-
-	uint32_t SkeletalAnimationComponent::FindScaling(float AnimationTime, const AnimChannel* pNodeAnim)
-	{
-		//assert(pNodeAnim->scaleKeys.size() > 0);
-
-		for (uint32_t i = 0; i < pNodeAnim->scaleKeys.size() - 1; i++) {
-			float t = (float)pNodeAnim->scaleKeys[i + 1].first - (float)pNodeAnim->scaleKeys[0].first;
-			if (AnimationTime <= t) {
-				return i;
+			for (const PoseNode& node : clip.nodes)
+			{
+				if (node.hasKeys && node.bone >= 0)
+				{
+					_rootBoneName = node.channel->nodeName;
+					break;
+				}
 			}
 		}
 
-		return (uint32_t)pNodeAnim->scaleKeys.size() - 2;
-	}
-
-	uint32_t SkeletalAnimationComponent::FindPosition(float AnimationTime, const AnimChannel* pNodeAnim)
-	{
-		for (uint32_t i = 0; i < pNodeAnim->positionKeys.size() - 1; i++) {
-			float t = (float)pNodeAnim->positionKeys[i + 1].first - (float)pNodeAnim->positionKeys[0].first;
-			if (AnimationTime <= t) {
-				return i;
+		clip.rootMotionNode = -1;
+		for (int32_t i = 0; i < (int32_t)clip.nodes.size(); ++i)
+		{
+			const PoseNode& node = clip.nodes[i];
+			if (node.hasKeys && node.bone >= 0 && node.channel->nodeName == _rootBoneName)
+			{
+				clip.rootMotionNode = i;
+				break;
 			}
 		}
 
-		return (uint32_t)pNodeAnim->positionKeys.size() - 2;
+		return clip.rootMotionNode;
 	}
 
-	uint32_t SkeletalAnimationComponent::FindRotation(float AnimationTime, const AnimChannel* pNodeAnim)
+	namespace
 	{
-		assert(pNodeAnim->rotationKeys.size() > 0);
+		// Index i of the key pair [i, i+1] to interpolate at `time`: the smallest i
+		// with time <= key[i+1] (absolute clip time in ticks), or the last pair - the
+		// same answer as AnimationUtils::FindKeyPair, but resuming from `cursor`, so
+		// steady playback costs one or two comparisons. Requires keys.size() >= 2.
+		template<typename T>
+		uint32_t FindKeyIndex(const std::vector<std::pair<float, T>>& keys, float time, uint32_t& cursor)
+		{
+			const uint32_t lastPair = (uint32_t)keys.size() - 2;
 
-		for (uint32_t i = 0; i < pNodeAnim->rotationKeys.size() - 1; i++) {
-			float t = (float)pNodeAnim->rotationKeys[i + 1].first - (float)pNodeAnim->rotationKeys[0].first;
-			if (AnimationTime <= t) {
-				return i;
+			uint32_t i = std::min(cursor, lastPair);
+
+			// Time went backwards (clip looped, or a clip switch): rescan from the start.
+			if (i > 0 && time <= keys[i].first)
+				i = 0;
+
+			while (i < lastPair && time > keys[i + 1].first)
+				++i;
+
+			cursor = i;
+			return i;
+		}
+
+		math::Vector3 SampleVector(const std::vector<std::pair<float, math::Vector3>>& keys, float time, uint32_t& cursor, const math::Vector3& fallback)
+		{
+			// Channels only carry the TRS slots their FBX source animated (bones
+			// with only a rotation synthetic have no position/scale keys).
+			if (keys.empty())
+				return fallback;
+			if (keys.size() == 1)
+				return keys[0].second;
+
+			const uint32_t i = FindKeyIndex(keys, time, cursor);
+			const math::Vector3& start = keys[i].second;
+			return start + AnimationUtils::KeyFactor(keys, i, time) * (keys[i + 1].second - start);
+		}
+
+		math::Quaternion SampleRotation(const std::vector<std::pair<float, math::Quaternion>>& keys, float time, uint32_t& cursor)
+		{
+			if (keys.empty())
+				return math::Quaternion::Identity;
+			if (keys.size() == 1)
+				return keys[0].second;
+
+			const uint32_t i = FindKeyIndex(keys, time, cursor);
+			math::Quaternion out;
+			math::Quaternion::Lerp(keys[i].second, keys[i + 1].second, AnimationUtils::KeyFactor(keys, i, time), out);
+			return out;
+		}
+	}
+
+	void SkeletalAnimationComponent::EvaluateClip(uint32_t clipIndex, float ticks, std::array<math::Matrix, MAX_BONES>& transforms, bool editorPose)
+	{
+		CompiledClip& clip = GetCompiledClip(clipIndex);
+		const Animation& anim = *clip.anim;
+		const float animTime = ticks;
+		const bool overrides = editorPose && !_poseOverrides.empty();
+
+		// Prefer the clip's own root transform - sibling-merged FBX animations stamp
+		// their own here. Fall back to the AnimationData's shared value for legacy /
+		// pre-merge .hmesh files where it is the default identity.
+		const math::Matrix& git = anim._globalInverseTransform != math::Matrix::Identity
+			? anim._globalInverseTransform
+			: _animData->_globalInverseTransform;
+
+		// The editor shows the clip's real data, so root motion is never stripped there.
+		const int32_t rootMotionNode = (_rootMotion && !editorPose) ? ResolveRootMotionNode(clip) : -1;
+
+		_nodeGlobals.resize(clip.nodes.size());
+		_lastEvalClip = (int32_t)clipIndex;
+		_lastEvalRoot = git;
+		const bool physics = !_physicsPose.empty() && !editorPose;
+		const math::Matrix gitInverse = physics ? git.Invert() : math::Matrix::Identity;
+
+		for (int32_t i = 0; i < (int32_t)clip.nodes.size(); ++i)
+		{
+			const PoseNode& node = clip.nodes[i];
+			const AnimChannel* channel = node.channel;
+
+			math::Matrix local;
+			const auto overrideIt = overrides ? _poseOverrides.find(channel->nodeName) : _poseOverrides.end();
+			if (overrideIt != _poseOverrides.end())
+			{
+				local = AnimationUtils::ComposeLocal(overrideIt->second);
+			}
+			else if (!node.hasKeys)
+			{
+				// Synthetic / static channels (the importer adds them for scene nodes the
+				// FBX didn't keyframe) fall back to the bind-pose nodeTransform. It is
+				// already in the composed convention, so no transpose here.
+				local = channel->nodeTransform;
+			}
+			else
+			{
+				KeyCursor& cursor = clip.cursors[i];
+				const math::Vector3 scale = SampleVector(channel->scaleKeys, animTime, cursor.scl, math::Vector3::One);
+				const math::Quaternion rotation = SampleRotation(channel->rotationKeys, animTime, cursor.rot);
+				math::Vector3 translation = SampleVector(channel->positionKeys, animTime, cursor.pos, math::Vector3::Zero);
+
+				if (i == rootMotionNode)
+				{
+					// Planar root motion: accumulate the horizontal (XZ) delta for the
+					// entity (ConsumeRootMotionDelta) and strip it from the bone. Y stays
+					// in the bone so hip height, crouches and jumps still animate.
+					if (_hasLastRootBonePosition)
+					{
+						_rootMotionDelta.x += translation.x - _lastRootBonePosition.x;
+						_rootMotionDelta.z += translation.z - _lastRootBonePosition.z;
+					}
+					_lastRootBonePosition = translation;
+					_hasLastRootBonePosition = true;
+
+					translation.x = 0.0f;
+					translation.z = 0.0f;
+				}
+
+				local = AnimationUtils::ComposeLocal({ translation, rotation, scale });
+			}
+
+			math::Matrix& global = _nodeGlobals[i];
+			global = node.parent >= 0 ? _nodeGlobals[node.parent] * local : local;
+
+			if (physics)
+			{
+				// Entity-local row frame -> this loop's convention: git * global = frame^T.
+				if (auto it = _physicsPose.find(channel->nodeName); it != _physicsPose.end())
+				{
+					const math::Matrix driven = gitInverse * it->second.Transpose();
+					global = _physicsWeight >= 0.999f ? driven : math::Matrix::Lerp(global, driven, _physicsWeight);
+				}
+			}
+
+			if (node.bone >= 0)
+			{
+				BoneInfo& bi = _boneInfo[node.bone];
+				bi.FinalTransformation = git * global * bi.BoneOffset;
+
+				if (_attachmentBones.test(node.bone))
+				{
+					const math::Matrix transposed = global.Transpose();
+					bi.Position = transposed.Translation();
+					bi.Rotation = math::Quaternion::CreateFromRotationMatrix(transposed);
+				}
 			}
 		}
 
-		return (uint32_t)pNodeAnim->rotationKeys.size() - 2;
+		for (uint32_t i = 0; i < _boneInfo.size(); i++)
+		{
+			transforms[i] = _boneInfo[i].FinalTransformation;
+		}
+
+		if (editorPose)
+		{
+			_evaluatedNodes = clip.nodes;
+			_evaluatedClipRoot = git;
+		}
+	}
+
+	bool SkeletalAnimationComponent::GetNodeEntityFrame(const std::string& nodeName, math::Matrix& out) const
+	{
+		if (_lastEvalClip < 0 || _lastEvalClip >= (int32_t)_compiledClips.size())
+			return false;
+		const CompiledClip& clip = _compiledClips[_lastEvalClip];
+		for (size_t i = 0; i < clip.nodes.size() && i < _nodeGlobals.size(); ++i)
+		{
+			if (clip.nodes[i].channel != nullptr && clip.nodes[i].channel->nodeName == nodeName)
+			{
+				out = (_lastEvalRoot * _nodeGlobals[i]).Transpose();
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void SkeletalAnimationComponent::SetPhysicsPose(const std::unordered_map<std::string, math::Matrix>& frames, float weight)
+	{
+		if (frames.empty())
+		{
+			ClearPhysicsPose();
+			return;
+		}
+		if (_physicsPose.empty() && g_pEnv != nullptr && g_pEnv->_timeManager != nullptr)
+			_physicsFreezeSeconds = g_pEnv->_timeManager->_currentTime - _animationStartTime;
+		_physicsPose = frames;
+		_physicsWeight = std::clamp(weight, 0.0f, 1.0f);
+	}
+
+	void SkeletalAnimationComponent::ClearPhysicsPose()
+	{
+		if (!_physicsPose.empty() && g_pEnv != nullptr && g_pEnv->_timeManager != nullptr)
+		{
+			// Resume the clip where it was frozen, not with a jump.
+			_animationStartTime = g_pEnv->_timeManager->_currentTime - _physicsFreezeSeconds;
+		}
+		_physicsPose.clear();
+		_physicsWeight = 0.0f;
+	}
+
+	void SkeletalAnimationComponent::SnapshotPrevPose()
+	{
+		// Snapshot the pose this frame is reprojecting FROM, before overwriting it.
+		// Guarded on the frame counter because Update() can run more than once per
+		// rendered frame - snapshotting on every entry would make prev == current and
+		// zero out the deformation velocity that the whole point of this is to provide.
+		const uint32_t frame = g_pEnv->_timeManager ? (uint32_t)g_pEnv->_timeManager->_frameCount : 0u;
+		if (!_prevPoseValid || frame != _prevPoseFrame)
+		{
+			_transformsPrev = _transforms;
+			_prevPoseFrame = frame;
+			_prevPoseValid = true;
+		}
+	}
+
+	void SkeletalAnimationComponent::SetEditorMode(bool enabled)
+	{
+		_editorMode = enabled;
+		if (!enabled)
+		{
+			_poseOverrides.clear();
+			_evaluatedNodes.clear();
+		}
+	}
+
+	void SkeletalAnimationComponent::SetPoseOverride(const std::string& nodeName, const AnimationUtils::NodePose& pose)
+	{
+		_poseOverrides[nodeName] = pose;
+	}
+
+	void SkeletalAnimationComponent::ClearPoseOverride(const std::string& nodeName)
+	{
+		_poseOverrides.erase(nodeName);
+	}
+
+	void SkeletalAnimationComponent::ClearPoseOverrides()
+	{
+		_poseOverrides.clear();
+	}
+
+	const AnimationUtils::NodePose* SkeletalAnimationComponent::GetPoseOverride(const std::string& nodeName) const
+	{
+		const auto it = _poseOverrides.find(nodeName);
+		return it != _poseOverrides.end() ? &it->second : nullptr;
+	}
+
+	void SkeletalAnimationComponent::EvaluateNow()
+	{
+		if (!_animData)
+			TryAutoBindFromEntityMesh();
+
+		if (!_mesh || !_animData || _animData->_animations.empty())
+		{
+			_evaluatedNodes.clear();
+			_nodeGlobals.clear();
+			return;
+		}
+
+		SnapshotPrevPose();
+
+		const uint32_t clip = std::min((uint32_t)_animData->_animations.size() - 1, _animIndex);
+		EvaluateClip(clip, _editorTicks, _transforms, true);
+		++_poseVersion;
 	}
 
 	void SkeletalAnimationComponent::StopAnimating()
@@ -505,6 +710,34 @@ namespace HexEngine
 
 		// TODO move this to anim component
 		//_animData->_animations.at(idx).time = g_pEnv->_timeManager->_currentTime;
+	}
+
+	void SkeletalAnimationComponent::PlayOneShot(uint32_t idx)
+	{
+		if (!_animData || idx >= _animData->_animations.size())
+			return;
+		_oneShotClip = idx;
+		_oneShotStart = g_pEnv->_timeManager->_currentTime;
+		if (GetTargetAnimationIndex() != idx)
+			BlendToAnimationIndex(idx);
+		else
+			_eventStartTime = -1.0f;	// same clip restarting: re-anchor clip events
+	}
+
+	float SkeletalAnimationComponent::GetOneShotElapsed() const
+	{
+		if (_oneShotClip == (uint32_t)-1)
+			return 0.0f;
+		return std::max(0.0f, g_pEnv->_timeManager->_currentTime - _oneShotStart);
+	}
+
+	float SkeletalAnimationComponent::GetClipLengthSeconds(uint32_t idx) const
+	{
+		if (!_animData || idx >= _animData->_animations.size())
+			return 0.0f;
+		const Animation& anim = _animData->_animations[idx];
+		const float tps = AnimationUtils::GetTicksPerSecond(anim);
+		return tps > 0.0f ? anim.duration / tps : 0.0f;
 	}
 
 	void SkeletalAnimationComponent::BlendToAnimationIndex(uint32_t idx)
@@ -529,6 +762,9 @@ namespace HexEngine
 		if (it == boneMap.end())
 			return nullptr;
 
+		// Callers keep this pointer and read Position / Rotation every frame
+		// (bone attachments), so start refreshing those for this bone.
+		_attachmentBones.set(it->second);
 		return &_boneInfo[it->second];
 	}
 
@@ -618,7 +854,7 @@ namespace HexEngine
 		// When ticked, the root bone's per-frame translation is stripped from
 		// the skeleton and accumulated in _rootMotionDelta. Gameplay code calls
 		// ConsumeRootMotionDelta() to drive the entity's Transform. See
-		// ReadNodeHierarchy() for the strip logic.
+		// EvaluateClip() for the strip logic.
 		new Checkbox(widget, widget->GetNextPos(), Point(fullWidth, 18), L"Root Motion", &_rootMotion);
 
 		// --- Tick rate ----------------------------------------------------------

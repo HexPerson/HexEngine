@@ -5,17 +5,21 @@
 #include "../Entity.hpp"
 #include "Transform.hpp"
 #include "StaticMeshComponent.hpp"
+#include "RigidBody.hpp"
+#include "../../Scene/Mesh.hpp"
 #include "../../Environment/IEnvironment.hpp"
 #include "../../Graphics/DebugRenderer.hpp"
 #include "../../Audio/AudioManager.hpp"
 #include "../../Audio/SoundEffect.hpp"
 #include "../../Math/easing.h"
+#include "../../Math/FloatMath.hpp"
 #include "../../GUI/Elements/ComponentWidget.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
 #include "../../GUI/Elements/Checkbox.hpp"
 #include "../../GUI/Elements/DropDown.hpp"
 #include "../../GUI/Elements/AssetSearch.hpp"
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 
 namespace HexEngine
@@ -57,12 +61,16 @@ namespace HexEngine
 			_isOpen = false;
 			_t = 0.0f;
 			_closedCaptured = false;
+			_colliderFitted = false;
 			return;
 		}
 
 		auto* tf = GetEntity()->GetComponent<Transform>();
 		if (tf == nullptr)
 			return;
+
+		if (!_colliderFitted)
+			_colliderFitted = FitColliderToLeaf();
 
 		if (!_closedCaptured)
 		{
@@ -96,6 +104,72 @@ namespace HexEngine
 			if (std::fabs(_t - target) <= 1e-4f)
 				SetSwingGiExclusion(false); // settled - hand the door back to GI at its final pose
 		}
+	}
+
+	bool DoorComponent::FitColliderToLeaf()
+	{
+		// Doors are usually a frame mesh with the glass split into child meshes that
+		// have no collider, and the door's own collider is a triangle mesh of the
+		// FRAME only. The interaction focus ray is a physics query, so looking at
+		// the glass went straight through and the door couldn't be opened (178 of
+		// 202 Whereabouts doors). For the play session, replace that collider with
+		// a box around the leaf AND its collider-less child meshes. Stop restores the
+		// authored collider through the play/stop scene snapshot.
+		auto* rb = GetEntity()->GetComponent<RigidBody>();
+		if (rb == nullptr || rb->GetColliderShape() != IRigidBody::ColliderShape::TriangleMesh)
+			return true;    // no collider / already a primitive: nothing to do
+		if (rb->HasAsyncColliderInFlight())
+			return false;   // let the async cook land first, retry next tick
+
+		math::Vector3 lo(FLT_MAX, FLT_MAX, FLT_MAX);
+		math::Vector3 hi(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+		bool any = false;
+		auto addBounds = [&](const dx::BoundingBox& b, const math::Matrix* toDoorLocal)
+		{
+			dx::XMFLOAT3 corners[dx::BoundingBox::CORNER_COUNT];
+			b.GetCorners(corners);
+			for (const auto& c : corners)
+			{
+				math::Vector3 p(c.x, c.y, c.z);
+				if (toDoorLocal != nullptr)
+					p = math::Vector3::Transform(p, *toDoorLocal);
+				lo = math::Vector3::Min(lo, p);
+				hi = math::Vector3::Max(hi, p);
+			}
+			any = true;
+		};
+
+		if (auto* smc = GetEntity()->GetComponent<StaticMeshComponent>())
+			if (auto mesh = smc->GetMesh())
+				addBounds(mesh->GetAABB(), nullptr);
+
+		bool hasPane = false;
+		for (Entity* child : GetEntity()->GetChildren())
+		{
+			if (child == nullptr || child->GetComponent<RigidBody>() != nullptr)
+				continue;   // children with their own collider are hittable already
+			auto* csmc = child->GetComponent<StaticMeshComponent>();
+			auto cmesh = csmc != nullptr ? csmc->GetMesh() : nullptr;
+			if (cmesh == nullptr)
+				continue;
+			const math::Matrix childLocal = child->GetLocalTM();
+			addBounds(cmesh->GetAABB(), &childLocal);
+			hasPane = true;
+		}
+
+		// Only doors with collider-less panes need this; plain solid doors keep
+		// their exact triangle-mesh collider.
+		if (!any || !hasPane)
+			return true;
+
+		dx::BoundingBox box;
+		box.Center = (lo + hi) * 0.5f;
+		const math::Vector3 ext = (hi - lo) * 0.5f;
+		box.Extents = math::Vector3(std::max(ext.x, 0.02f), std::max(ext.y, 0.02f), std::max(ext.z, 0.02f));
+
+		rb->RemoveCollider();
+		rb->AddBoxCollider(box);
+		return true;
 	}
 
 	void DoorComponent::ApplyAngle()
@@ -162,7 +236,10 @@ namespace HexEngine
 		if (_isOpen)
 			return;
 		_isOpen = true;
-		PlayDoorSound(_openSoundPath, _openSound);
+		if (!_openSoundPath.empty())
+			PlayDoorSound(_openSoundPath, _openSound, _soundVolume);
+		else
+			PlayDoorSound(_fallbackOpenPath, _fallbackOpenSound, _fallbackVolume);
 	}
 
 	void DoorComponent::Close()
@@ -170,7 +247,10 @@ namespace HexEngine
 		if (!_isOpen)
 			return;
 		_isOpen = false;
-		PlayDoorSound(_closeSoundPath, _closeSound);
+		if (!_closeSoundPath.empty())
+			PlayDoorSound(_closeSoundPath, _closeSound, _soundVolume);
+		else
+			PlayDoorSound(_fallbackClosePath, _fallbackCloseSound, _fallbackVolume);
 	}
 
 	void DoorComponent::Toggle()
@@ -181,7 +261,7 @@ namespace HexEngine
 			Open();
 	}
 
-	void DoorComponent::PlayDoorSound(const std::string& path, std::shared_ptr<SoundEffect>& master)
+	void DoorComponent::PlayDoorSound(const std::string& path, std::shared_ptr<SoundEffect>& master, float volume)
 	{
 		if (path.empty() || g_pEnv == nullptr || g_pEnv->_audioManager == nullptr)
 			return;
@@ -193,21 +273,51 @@ namespace HexEngine
 				[](const std::shared_ptr<SoundEffect>& s) { return s == nullptr || !s->IsPlaying(); }),
 			_activeSounds.end());
 
-		if (master == nullptr)
-			master = SoundEffect::Create(path);
-		if (master == nullptr)
+		// A comma-separated list is a set of takes: pick one per swing (with a
+		// touch of pitch spread) so a door used all day doesn't sound canned.
+		// SoundEffect::Create goes through the resource cache, so per-take
+		// lookups are cheap; `master` only caches the single-path case.
+		std::shared_ptr<SoundEffect> source;
+		if (path.find(',') != std::string::npos)
+		{
+			std::vector<std::string> takes;
+			size_t start = 0;
+			while (start <= path.size())
+			{
+				size_t end = path.find(',', start);
+				if (end == std::string::npos)
+					end = path.size();
+				std::string t = path.substr(start, end - start);
+				t.erase(0, t.find_first_not_of(" \t"));
+				t.erase(t.find_last_not_of(" \t") + 1);
+				if (!t.empty())
+					takes.push_back(std::move(t));
+				start = end + 1;
+			}
+			if (takes.empty())
+				return;
+			source = SoundEffect::Create(takes[(size_t)GetRandomInt(0, (int32_t)takes.size() - 1)]);
+		}
+		else
+		{
+			if (master == nullptr)
+				master = SoundEffect::Create(path);
+			source = master;
+		}
+		if (source == nullptr)
 			return;
 
-		auto clone = master->CreatePlaybackClone();
+		auto clone = source->CreatePlaybackClone();
 		if (clone == nullptr)
 			return;
-		clone->SetVolume(_soundVolume);
+		clone->SetVolume(volume);
+		clone->SetPitch(GetRandomFloat(-0.05f, 0.05f));
+		clone->SetRadius(16.0f);
 
 		// Positional (3D) playback at the door so it attenuates with distance.
-		if (auto* tf = GetEntity()->GetComponent<Transform>(); tf != nullptr)
-			g_pEnv->_audioManager->Play(clone, tf->GetPosition());
-		else
-			g_pEnv->_audioManager->Play(clone);
+		// World position: doors are parented into their building, so the
+		// Transform's own position is building-local.
+		g_pEnv->_audioManager->Play(clone, GetEntity()->GetWorldTM().Translation());
 
 		_activeSounds.push_back(std::move(clone));
 	}

@@ -90,18 +90,55 @@ namespace HexEngine
 
 		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON)
 		{
-			if (OnClickItem && _hoverIdx != -1)
+			// Hit-test the actual click position rather than trusting _hoverIdx:
+			// _hoverIdx is only refreshed when the cached canvas re-captures, and
+			// the canvas stops redrawing once the mouse leaves the listbox, so it
+			// can hold a stale index from the last frame the cursor was inside.
+			const int32_t clickIdx = HitTestItem(data->MouseDown.xpos, data->MouseDown.ypos);
+
+			if (OnClickItem && clickIdx != -1)
 			{
-				if (OnClickItem(this, &_items.at(_hoverIdx)))
+				if (OnClickItem(this, &_items.at(clickIdx)))
 					return true;
 			}
 		}
-		else if (event == InputEvent::MouseMove && IsMouseOver(true))
+		else if (event == InputEvent::MouseMove)
 		{
-			_canvas.Redraw();
-			return true;
+			if (IsMouseOver(true))
+			{
+				_canvas.Redraw();
+				return true;
+			}
+
+			// Mouse left the listbox: drop the stale hover and re-capture once
+			// so the highlight row clears instead of staying baked into the canvas.
+			if (_hoverIdx != -1)
+			{
+				_hoverIdx = -1;
+				_canvas.Redraw();
+			}
 		}
 
 		return false;
+	}
+
+	int32_t ListBox::HitTestItem(int32_t mx, int32_t my) const
+	{
+		const auto position = GetAbsolutePosition();
+
+		if (mx < position.x || mx >= position.x + _size.x || my < position.y || my >= position.y + _size.y)
+			return -1;
+
+		if (IsMousePointClipped(mx, my))
+			return -1;
+
+		const int32_t lineHeight = 20;
+		const float contentY = (float)(my - position.y) + GetScrollOffset();
+		const int32_t idx = (int32_t)std::floor(contentY / (float)lineHeight);
+
+		if (idx < 0 || idx >= (int32_t)_items.size())
+			return -1;
+
+		return idx;
 	}
 }

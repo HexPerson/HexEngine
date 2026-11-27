@@ -27,6 +27,8 @@
 #include "../Tools/HexEngine.McpServer/StaticTools.hpp"
 #include "../Tools/HexEngine.McpServer/BridgeClient.hpp"
 #include "../HexEngine.Core/Scene/OceanWaveModel.hpp"
+#include "../HexEngine.Core/Physics/RayMath.hpp"
+#include "../HexEngine.Core/Entity/Component/ComponentSignature.hpp"
 
 using namespace HexEngine;
 
@@ -579,6 +581,93 @@ static void TestBridgeProtocol()
 	CHECK(authed(R"({"id":1,"method":"m"})")["error"]["code"] == "Unauthorized");                 // missing
 	CHECK(authed(R"({"id":1,"method":"m","token":"wrong"})")["error"]["code"] == "Unauthorized");  // wrong
 	CHECK(authed(R"({"id":1,"method":"m","token":"sekret"})")["ok"] == true);                      // right
+
+	// --- v2: entity references ---
+	{
+		using J = EditorBridge::json;
+		EntityRef ref; std::string er;
+		CHECK(ParseEntityRefValue(J("Crate"), ref, er) && ref.kind == EntityRef::Kind::Name && ref.name == "Crate");
+		CHECK(ParseEntityRefValue(J(42), ref, er) && ref.kind == EntityRef::Kind::Index && ref.index == 42);
+		CHECK(ParseEntityRefValue(J::parse(R"({"index":7,"generation":3})"), ref, er) && ref.kind == EntityRef::Kind::Id && ref.index == 7 && ref.generation == 3);
+		CHECK(ParseEntityRefValue(J::parse(R"({"index":7})"), ref, er) && ref.kind == EntityRef::Kind::Index && ref.index == 7);
+		CHECK(!ParseEntityRefValue(J(""), ref, er));                                   // empty name
+		CHECK(!ParseEntityRefValue(J(-1), ref, er));                                   // negative index
+		CHECK(!ParseEntityRefValue(J(true), ref, er));                                 // wrong type
+		CHECK(!ParseEntityRefValue(J::parse(R"({"index":7,"generation":-1})"), ref, er));
+		CHECK(!ParseEntityRefValue(J::parse(R"({"name":"x"})"), ref, er));           // object without index
+
+		// Primary key wins; legacy keys only when allowed.
+		CHECK(GetEntityRef(J::parse(R"({"entity":"A","name":"B"})"), "entity", true, ref, er) && ref.name == "A");
+		CHECK(GetEntityRef(J::parse(R"({"name":"B"})"), "entity", true, ref, er) && ref.name == "B");
+		CHECK(GetEntityRef(J::parse(R"({"index":5})"), "entity", true, ref, er) && ref.kind == EntityRef::Kind::Index);
+		CHECK(GetEntityRef(J::parse(R"({"id":{"index":5,"generation":1}})"), "entity", true, ref, er) && ref.kind == EntityRef::Kind::Id);
+		CHECK(!GetEntityRef(J::parse(R"({"name":"B"})"), "entity", false, ref, er));  // legacy disabled
+		CHECK(!GetEntityRef(J::object(), "entity", true, ref, er));                    // nothing present
+	}
+
+	// --- v2: batch $ref resolution ---
+	{
+		using J = EditorBridge::json;
+		std::vector<J> results = {
+			J::parse(R"({"id":{"index":10,"generation":2},"name":"House"})"),
+			J(nullptr),                                                   // op 1 failed
+			J::parse(R"({"entities":[{"name":"a"},{"name":"b"}]})"),
+		};
+		BatchLabels labels{ {"house", 0}, {"broken", 1} };
+		std::string er;
+
+		J p = J::parse(R"({"entity":{"$ref":"0.id"},"parent":{"$ref":"house.name"},"deep":[{"$ref":"2.entities.1.name"}]})");
+		CHECK(ResolveBatchRefs(p, results, 3, labels, er));
+		CHECK(p["entity"]["index"] == 10 && p["entity"]["generation"] == 2);
+		CHECK(p["parent"] == "House");
+		CHECK(p["deep"][0] == "b");
+
+		J whole = J::parse(R"({"x":{"$ref":"0"}})");
+		CHECK(ResolveBatchRefs(whole, results, 3, labels, er) && whole["x"]["name"] == "House");
+
+		J notARef = J::parse(R"({"x":{"$ref":"0.id","extra":1}})");             // 2 keys -> left alone
+		CHECK(ResolveBatchRefs(notARef, results, 3, labels, er) && notARef["x"].contains("extra"));
+
+		J forward = J::parse(R"({"x":{"$ref":"2.entities"}})");
+		CHECK(!ResolveBatchRefs(forward, results, 2, labels, er));             // op 2 is not earlier than op 2
+		J failed = J::parse(R"({"x":{"$ref":"broken.id"}})");
+		CHECK(!ResolveBatchRefs(failed, results, 3, labels, er));              // references a failed op
+		J missing = J::parse(R"({"x":{"$ref":"0.nope"}})");
+		CHECK(!ResolveBatchRefs(missing, results, 3, labels, er));
+		J badIdx = J::parse(R"({"x":{"$ref":"2.entities.9"}})");
+		CHECK(!ResolveBatchRefs(badIdx, results, 3, labels, er));
+		J unknownLabel = J::parse(R"({"x":{"$ref":"nope.id"}})");
+		CHECK(!ResolveBatchRefs(unknownLabel, results, 3, labels, er));
+		J nonString = J::parse(R"({"x":{"$ref":5}})");
+		CHECK(!ResolveBatchRefs(nonString, results, 3, labels, er));
+	}
+
+	// --- Phase B: component field shape checks ---
+	{
+		using J = EditorBridge::json;
+		std::string er;
+		CHECK(JsonFieldType(J(true)) == "bool" && JsonFieldType(J(3)) == "int" && JsonFieldType(J(2.5)) == "float");
+		CHECK(JsonFieldType(J::parse("[1,2,3]")) == "vec3" && JsonFieldType(J::parse("[1,2,3,4]")) == "vec4");
+		CHECK(JsonFieldType(J::parse("[1,2,3,4,5]")) == "array" && JsonFieldType(J::parse("[\"a\"]")) == "array");
+		CHECK(JsonFieldType(J::parse("{}")) == "object" && JsonFieldType(J("s")) == "string");
+
+		CHECK(CheckFieldShape(J(1.0), J(2), "f", er));                       // int into float is fine
+		CHECK(CheckFieldShape(J(1), J(4.0), "i", er));                       // integral float into int is fine
+		CHECK(!CheckFieldShape(J(1), J(4.5), "i", er));                      // fractional into int
+		CHECK(!CheckFieldShape(J(1.0), J("x"), "f", er));                    // string into number
+		CHECK(!CheckFieldShape(J(1.0), J(true), "f", er));                   // bool into number
+		CHECK(!CheckFieldShape(J(true), J(1), "b", er));                     // number into bool
+		CHECK(CheckFieldShape(J::parse("[0,0,0]"), J::parse("[1,2,3]"), "v", er));
+		CHECK(!CheckFieldShape(J::parse("[0,0,0]"), J::parse("[1,2]"), "v", er));      // vec3 keeps its length
+		CHECK(!CheckFieldShape(J::parse("[0,0,0]"), J::parse("[1,\"a\",3]"), "v", er));
+		CHECK(CheckFieldShape(J::parse("[]"), J::parse("[1,2,3,4,5,6]"), "list", er)); // variable lists may resize
+		CHECK(!CheckFieldShape(J(1.0), J(nullptr), "f", er));                // no nulls
+		CHECK(CheckFieldShape(J(nullptr), J("anything"), "n", er));          // unknown current shape -> allowed
+		CHECK(CheckFieldShape(J::parse(R"({"box":{"aabb":1}})"), J::parse(R"({"sphere":{"radius":2}})"), "shapeData", er)); // new nested key ok
+		CHECK(!CheckFieldShape(J::parse(R"({"box":{"aabb":1}})"), J::parse(R"({"box":{"aabb":"x"}})"), "shapeData", er));  // nested type checked
+		CHECK(er.find("shapeData.box.aabb") != std::string::npos);           // error names the nested path
+		CHECK(CheckFieldShape(J::parse(R"({"a.hmesh":{"materials":[]}})"), J::parse(R"({"a.hmesh":null,"b.hmesh":{"materials":[]}})"), "mesh", er)); // null member = remove key
+	}
 }
 
 // --- MCP static tools + discovery ------------------------------------------
@@ -713,6 +802,327 @@ static void TestOceanWaveModel()
 	}
 }
 
+// PhysUtils::RayCast maths (Physics/RayMath.hpp). The old raycast returned the
+// FIRST triangle it found (not the nearest), averaged OBJECT-space vertex
+// normals, and transformed every vertex per test; these pin the replacement.
+static void TestRayMath()
+{
+	using namespace HexEngine::RayMath;
+	auto Approx = [](float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps; };
+	auto ApproxV = [&](const Vec3& a, const Vec3& b, float eps = 1e-4f) { return Approx(a.x, b.x, eps) && Approx(a.y, b.y, eps) && Approx(a.z, b.z, eps); };
+
+	struct TriList
+	{
+		std::vector<Vec3> pos;
+		std::vector<uint32_t> idx;
+		void Add(const Vec3& a, const Vec3& b, const Vec3& c)
+		{
+			const uint32_t base = (uint32_t)pos.size();
+			pos.push_back(a); pos.push_back(b); pos.push_back(c);
+			idx.push_back(base); idx.push_back(base + 1); idx.push_back(base + 2);
+		}
+		// Up-facing ((b-a)x(c-a) = +Y) triangle covering the origin at height y.
+		void AddFloor(float y) { Add(Vec3(-1, y, -1), Vec3(-1, y, 3), Vec3(3, y, -1)); }
+		TriangleHit Cast(const ObjectRay& r, float maxT = 1e9f) const
+		{
+			return NearestTriangle(r, idx.size() / 3, [&](size_t i) { return idx[i]; }, pos.size(),
+				[&](uint32_t v) { return pos[v]; }, maxT);
+		}
+	};
+
+	// Front face convention: (b-a)x(c-a).
+	CHECK(ApproxV(FaceNormal(Vec3(0, 0, 0), Vec3(0, 0, 1), Vec3(1, 0, 0)), Vec3(0, 1, 0)));
+
+	// 1. Nearest of many, regardless of list order (old code: first found).
+	{
+		TriList t;
+		t.AddFloor(1.0f); // far
+		t.AddFloor(5.0f); // NEAREST from y=10 going down
+		t.AddFloor(3.0f);
+		const ObjectRay down{ Vec3(0, 10, 0), Vec3(0, -1, 0) };
+		const TriangleHit h = t.Cast(down);
+		CHECK(h.hit);
+		CHECK(h.triangle == 1);
+		CHECK(Approx(h.t, 5.0f));
+		// maxT clips: nothing nearer than 4 units.
+		CHECK(!t.Cast(down, 4.0f).hit);
+		// Barycentrics reproduce the hit point.
+		const Vec3 p = t.pos[3] * (1.0f - h.u - h.v) + t.pos[4] * h.u + t.pos[5] * h.v;
+		CHECK(ApproxV(p, Vec3(0, 5, 0)));
+		// Miss to the side; ray pointing away.
+		CHECK(!t.Cast(ObjectRay{ Vec3(10, 10, 10), Vec3(0, -1, 0) }).hit);
+		CHECK(!t.Cast(ObjectRay{ Vec3(0, 10, 0), Vec3(0, 1, 0) }).hit);
+	}
+
+	// 2. Back face: both sides hit; the side is reported, not filtered.
+	{
+		TriList t;
+		t.AddFloor(0.0f);
+		const ObjectRay up{ Vec3(0, -2, 0), Vec3(0, 1, 0) };
+		const TriangleHit h = t.Cast(up);
+		CHECK(h.hit && Approx(h.t, 2.0f));
+		const Vec3 n = FaceNormal(t.pos[0], t.pos[1], t.pos[2]);
+		CHECK(IsBackFace(n, up.direction));
+		CHECK(!IsBackFace(n, Vec3(0, -1, 0)));
+	}
+
+	// 3. Pass-through: a steep wall in front of a floor is skipped by the slope
+	//    veto and the floor BEHIND it still wins.
+	{
+		TriList t;
+		// Wall in the plane x = 1, facing -X (towards the ray origin).
+		t.Add(Vec3(1, -5, -5), Vec3(1, -5, 5), Vec3(1, 5, -5));
+		t.Add(Vec3(-10, -3, -10), Vec3(-10, -3, 30), Vec3(30, -3, -10)); // floor y=-3, +Y
+		CHECK(ApproxV(FaceNormal(t.pos[0], t.pos[1], t.pos[2]) / 100.0f, Vec3(-1, 0, 0)));
+		// Diagonal ray down-right: wall at x=1 (t=sqrt2), floor at y=-3 (t=3*sqrt2).
+		const Vec3 dir = Vec3(1, -1, 0) / std::sqrt(2.0f);
+		const ObjectRay r{ Vec3(0, 0, 0), dir };
+		const TriangleHit wall = t.Cast(r);
+		CHECK(wall.hit && wall.triangle == 0 && Approx(wall.t, std::sqrt(2.0f)));
+		const float minNormalY = 0.5f;
+		const TriangleHit floor = NearestTriangle(r, 2, [&](size_t i) { return t.idx[i]; }, t.pos.size(),
+			[&](uint32_t v) { return t.pos[v]; }, 1e9f,
+			[&](uint32_t, float, const Vec3& a, const Vec3& b, const Vec3& c)
+			{
+				Vec3 n = FaceNormal(a, b, c); n.Normalize();
+				return !RejectsSlope(n, minNormalY);
+			});
+		CHECK(floor.hit && floor.triangle == 1 && Approx(floor.t, 3.0f * std::sqrt(2.0f)));
+		CHECK(!RejectsSlope(Vec3(-1, 0, 0), -2.0f)); // disabled
+		CHECK(RejectsSlope(Vec3(-1, 0, 0), 0.5f));
+		CHECK(!RejectsSlope(Vec3(0, 1, 0), 0.5f));
+	}
+
+	// 4. Full object-space pipeline under rotation + NON-UNIFORM scale +
+	//    translation: hit distance is the world distance, and the normal is
+	//    the world surface normal (old code: untransformed object normal).
+	{
+		TriList t;
+		t.Add(Vec3(0, 0, 0), Vec3(0, 0, 1), Vec3(1, 1, 0)); // slanted, faces (-1, 1, 0)
+		const Mat4 world = Mat4::CreateScale(2.0f, 1.0f, 3.0f) *
+			Mat4::CreateRotationZ(DirectX::XM_PIDIV2 * 0.5f) * Mat4::CreateRotationY(0.7f) *
+			Mat4::CreateTranslation(3.0f, 4.0f, 5.0f);
+		Mat4 inv;
+		CHECK(InvertWorld(world, inv));
+
+		// Reference normal: the cross product of the WORLD-space triangle.
+		const Vec3 wa = Vec3::Transform(t.pos[0], world), wb = Vec3::Transform(t.pos[1], world), wc = Vec3::Transform(t.pos[2], world);
+		Vec3 expectedN = FaceNormal(wa, wb, wc); expectedN.Normalize();
+		const Vec3 n = NormalToWorld(FaceNormal(t.pos[0], t.pos[1], t.pos[2]), inv);
+		CHECK(ApproxV(n, expectedN));
+		CHECK(Approx(n.Length(), 1.0f));
+		// The naive transform (no inverse-transpose) is wrong under this scale.
+		Vec3 naive = Vec3::TransformNormal(FaceNormal(t.pos[0], t.pos[1], t.pos[2]), world); naive.Normalize();
+		CHECK(!ApproxV(naive, expectedN, 1e-2f));
+
+		// Shoot at a known surface point from 7 world units along the normal.
+		const Vec3 surface = Vec3::Transform(Vec3(0.25f, 0.25f, 0.25f), world); // u = v = 0.25
+		const Vec3 origin = surface + expectedN * 7.0f;
+		const Vec3 dir = -expectedN;
+		const ObjectRay local = ToObjectSpace(origin, dir, inv);
+		const TriangleHit h = t.Cast(local);
+		CHECK(h.hit);
+		CHECK(Approx(h.t, 7.0f, 1e-3f));                 // t is the WORLD distance
+		CHECK(ApproxV(origin + dir * h.t, surface, 1e-3f));
+		CHECK(!IsBackFace(n, dir));
+		CHECK(IsBackFace(n, -dir));
+		// maxT is in world units too.
+		CHECK(!t.Cast(local, 6.9f).hit);
+	}
+
+	// 5. Pure rotation: a floor rotated 90 degrees about Z becomes a wall
+	//    facing -X (right-handed).
+	{
+		Mat4 inv;
+		CHECK(InvertWorld(Mat4::CreateRotationZ(DirectX::XM_PIDIV2), inv));
+		CHECK(ApproxV(NormalToWorld(Vec3(0, 1, 0), inv), Vec3(-1, 0, 0)));
+	}
+
+	// 6. Mirroring keeps the outward side outward; zero scale is rejected.
+	{
+		Mat4 inv;
+		CHECK(InvertWorld(Mat4::CreateScale(-1.0f, 1.0f, 1.0f), inv));
+		CHECK(ApproxV(NormalToWorld(Vec3(0, 1, 0), inv), Vec3(0, 1, 0)));
+		CHECK(ApproxV(NormalToWorld(Vec3(1, 0, 0), inv), Vec3(-1, 0, 0)));
+		CHECK(!InvertWorld(Mat4::CreateScale(1.0f, 0.0f, 1.0f), inv));
+		CHECK(ApproxV(NormalToWorld(Vec3(0, 0, 0), Mat4()), Vec3(0, 0, 0))); // degenerate -> zero
+	}
+
+	// 7. Degenerate triangle and parallel ray never hit; out-of-range indices skip.
+	{
+		float tt, u, v;
+		CHECK(!IntersectTriangle(Vec3(0, 1, 0), Vec3(0, -1, 0), Vec3(0, 0, 0), Vec3(1, 0, 0), Vec3(2, 0, 0), tt, u, v));
+		CHECK(!IntersectTriangle(Vec3(-5, 0, 0.2f), Vec3(1, 0, 0), Vec3(0, 0, 0), Vec3(0, 0, 1), Vec3(1, 0, 0), tt, u, v));
+		TriList t;
+		t.AddFloor(0.0f);
+		t.idx[2] = 99;
+		CHECK(!t.Cast(ObjectRay{ Vec3(0, 1, 0), Vec3(0, -1, 0) }).hit);
+	}
+}
+
+// TriangleBVH (Physics/RayMath.hpp): per-mesh acceleration for big meshes
+// (terrain). It must return EXACTLY what the brute-force NearestTriangle
+// returns - same t, same triangle (up to exact ties) - for any ray.
+static void TestTriangleBVH()
+{
+	using namespace HexEngine::RayMath;
+
+	// Deterministic LCG so failures reproduce.
+	uint32_t seed = 12345u;
+	auto rnd = [&]() { seed = seed * 1664525u + 1013904223u; return (seed >> 8) * (1.0f / 16777216.0f); };
+	auto rr = [&](float a, float b) { return a + (b - a) * rnd(); };
+
+	// 1. Random triangle soup + a bumpy heightfield, many random rays.
+	std::vector<Vec3> pos;
+	std::vector<uint32_t> idx;
+	for (int i = 0; i < 1500; ++i)
+	{
+		const Vec3 c(rr(-50, 50), rr(-50, 50), rr(-50, 50));
+		const uint32_t b = (uint32_t)pos.size();
+		for (int k = 0; k < 3; ++k)
+			pos.push_back(c + Vec3(rr(-4, 4), rr(-4, 4), rr(-4, 4)));
+		idx.push_back(b); idx.push_back(b + 1); idx.push_back(b + 2);
+	}
+	const int N = 40;
+	const uint32_t gridBase = (uint32_t)pos.size();
+	for (int z = 0; z <= N; ++z)
+		for (int x = 0; x <= N; ++x)
+			pos.push_back(Vec3(-60.0f + x * 3.0f, -55.0f + std::sin(x * 0.7f) * std::cos(z * 0.5f) * 3.0f, -60.0f + z * 3.0f));
+	for (int z = 0; z < N; ++z)
+		for (int x = 0; x < N; ++x)
+		{
+			const uint32_t a = gridBase + z * (N + 1) + x, b = a + 1, c = a + (N + 1), d = c + 1;
+			idx.push_back(a); idx.push_back(c); idx.push_back(b); // +Y facing
+			idx.push_back(b); idx.push_back(c); idx.push_back(d);
+		}
+	idx.push_back(0); idx.push_back(1); idx.push_back(999999); // out-of-range: skipped by both
+
+	const size_t triCount = idx.size() / 3;
+	auto index = [&](size_t i) { return idx[i]; };
+	auto position = [&](uint32_t v) { return pos[v]; };
+
+	TriangleBVH bvh;
+	bvh.Build(triCount, index, pos.size(), position);
+	CHECK(!bvh.Empty());
+	CHECK(bvh.TriangleCount() == triCount - 1);
+
+	int mismatches = 0, hits = 0;
+	for (int r = 0; r < 3000; ++r)
+	{
+		ObjectRay ray;
+		if (r % 3 == 0)
+		{
+			ray.origin = Vec3(rr(-60, 60), 80.0f, rr(-60, 60));  // straight down (ground probe)
+			ray.direction = Vec3(0, -1, 0);
+		}
+		else
+		{
+			ray.origin = Vec3(rr(-70, 70), rr(-70, 70), rr(-70, 70));
+			ray.direction = Vec3(rr(-1, 1), rr(-1, 1), rr(-1, 1)) * rr(0.2f, 3.0f); // un-normalised, as in object space
+		}
+		const float maxT = (r % 5 == 0) ? rr(1.0f, 60.0f) : 1e9f;
+		const TriangleHit a = NearestTriangle(ray, triCount, index, pos.size(), position, maxT);
+		const TriangleHit b = bvh.Intersect(ray, maxT);
+		if (a.hit != b.hit || (a.hit && (a.t != b.t || (a.triangle != b.triangle && a.t != b.t))))
+			++mismatches;
+		if (a.hit)
+			++hits;
+	}
+	CHECK(mismatches == 0);
+	CHECK(hits > 1000); // the comparison actually exercised hits
+
+	// 2. Slope veto passes through inside the BVH too: from above the
+	//    heightfield, rejecting everything with normal.y < 0.999 must agree
+	//    with brute force.
+	{
+		auto steep = [&](uint32_t, float, const Vec3& a, const Vec3& b, const Vec3& c)
+		{
+			Vec3 n = FaceNormal(a, b, c); n.Normalize();
+			return !RejectsSlope(n, 0.999f);
+		};
+		int diff = 0;
+		for (int r = 0; r < 500; ++r)
+		{
+			const ObjectRay ray{ Vec3(rr(-60, 60), 80.0f, rr(-60, 60)), Vec3(rr(-0.3f, 0.3f), -1.0f, rr(-0.3f, 0.3f)) };
+			const TriangleHit a = NearestTriangle(ray, triCount, index, pos.size(), position, 1e9f, steep);
+			const TriangleHit b = bvh.Intersect(ray, 1e9f, steep);
+			if (a.hit != b.hit || (a.hit && a.t != b.t))
+				++diff;
+		}
+		CHECK(diff == 0);
+	}
+
+	// 3. Degenerate inputs: all centroids coincident (forces the median
+	//    fallback), an empty list, and a lone triangle.
+	{
+		std::vector<Vec3> p2;
+		std::vector<uint32_t> i2;
+		for (int i = 0; i < 300; ++i)
+		{
+			const float s = 1.0f + i * 0.01f; // nested, same centroid
+			const uint32_t b = (uint32_t)p2.size();
+			p2.push_back(Vec3(-s, 0, -s)); p2.push_back(Vec3(-s, 0, 2 * s)); p2.push_back(Vec3(2 * s, 0, -s));
+			i2.push_back(b); i2.push_back(b + 1); i2.push_back(b + 2);
+		}
+		TriangleBVH d;
+		d.Build(i2.size() / 3, [&](size_t i) { return i2[i]; }, p2.size(), [&](uint32_t v) { return p2[v]; });
+		const TriangleHit h = d.Intersect(ObjectRay{ Vec3(0.1f, 5, 0.1f), Vec3(0, -1, 0) }, 1e9f);
+		CHECK(h.hit && std::fabs(h.t - 5.0f) < 1e-5f);
+
+		TriangleBVH e;
+		e.Build(0, [&](size_t i) { return i2[i]; }, p2.size(), [&](uint32_t v) { return p2[v]; });
+		CHECK(e.Empty());
+		CHECK(!e.Intersect(ObjectRay{ Vec3(0, 5, 0), Vec3(0, -1, 0) }, 1e9f).hit);
+
+		TriangleBVH one;
+		one.Build(1, [&](size_t i) { return i2[i]; }, p2.size(), [&](uint32_t v) { return p2[v]; });
+		CHECK(one.Intersect(ObjectRay{ Vec3(0, 5, 0), Vec3(0, -1, 0) }, 1e9f).hit);
+		CHECK(!one.Intersect(ObjectRay{ Vec3(0, 5, 0), Vec3(0, -1, 0) }, 4.0f).hit); // maxT respected
+	}
+}
+
+// Component signatures: one bit per type id. The old uint64_t wrapped for ids >= 64
+// ((uint64_t)1 << 67 == bit 3 on x64), so later components aliased early ones.
+static void TestComponentSignature()
+{
+	static_assert(MAX_COMPONENTS >= 128, "room for the engine + plugins + a game");
+
+	const ComponentSignature b3 = ComponentSignature::Bit(3);
+	const ComponentSignature b67 = ComponentSignature::Bit(67);
+	CHECK(b67.Has(67));
+	CHECK(!b67.Has(3));					// the old aliasing
+	CHECK(!b3.Has(67));
+	CHECK(!b3.Intersects(b67));
+	CHECK(b67.SingleBitIndex() == 67);
+	CHECK(b3.SingleBitIndex() == 3);
+	CHECK(ComponentSignature::Bit(127).SingleBitIndex() == 127);
+	CHECK(!ComponentSignature::Bit(MAX_COMPONENTS).Any());	// out of range: no bit
+
+	ComponentSignature s;
+	CHECK(!s.Any());
+	CHECK(s.SingleBitIndex() == -1);
+	s.Set(3);
+	s.Set(67);
+	s.Set(127);
+	CHECK(s.Has(3) && s.Has(67) && s.Has(127) && !s.Has(4) && !s.Has(66));
+	CHECK(s.SingleBitIndex() == -1);		// several bits
+	CHECK(s.Intersects(b67));
+	CHECK((s & b67) == b67);
+	CHECK((b3 | b67).Has(3) && (b3 | b67).Has(67));
+	CHECK(!(s & ~b67).Has(67) && (s & ~b67).Has(3));
+	s.Clear(67);
+	CHECK(!s.Has(67) && s.Has(3) && s.Has(127));
+	ComponentSignature t = b3;
+	t |= b67;
+	t &= b67;
+	CHECK(t == b67 && t != b3);
+
+	// Strict weak order for the scene's std::map<ComponentSignature, ...>.
+	CHECK(b3 < b67 && !(b67 < b3));
+	CHECK(!(b67 < b67));
+	CHECK(ComponentSignature() < b3);
+}
+
 int main()
 {
 	std::printf("HexEngine.Tests\n");
@@ -732,6 +1142,9 @@ int main()
 	TestBridgeProtocol();
 	TestMcpStaticTools();
 	TestOceanWaveModel();
+	TestRayMath();
+	TestTriangleBVH();
+	TestComponentSignature();
 	std::printf("\n%d/%d checks passed.\n", g_total - g_fail, g_total);
 	std::printf(g_fail == 0 ? "RESULT: OK\n" : "RESULT: FAILED\n");
 	return g_fail == 0 ? 0 : 1;

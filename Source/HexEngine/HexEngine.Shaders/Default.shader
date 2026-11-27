@@ -22,7 +22,7 @@
 }
 "VertexShader"
 {
-	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)
+	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID, uint vertexID : SV_VertexID)
 	{
 		MeshPixelInput output;
 		
@@ -70,6 +70,15 @@
 			output.positionWS = output.position;
 		}
 
+		// SV_CullDistance MUST be written on every path. `output` is not
+		// zero-initialised, so with only the guarded write the value is
+		// undefined when g_cullDistance == 0 (nearly every material) - and FXC
+		// at OPTIMIZATION_LEVEL3 legally folds the guard away, emitting
+		// `dist >= g_cullDistance ? -1 : 1` unconditionally: dist >= 0 is always
+		// true, so every triangle got cull distance -1 and was dropped. Release
+		// shader builds made every Default.hcs mesh (all vehicles + bikes)
+		// invisible while their shadows (ShadowMapGeometry) still drew.
+		output.cullDistance = 1.0f;
 		if(g_cullDistance > 0.0f)
 		{
 			output.cullDistance = length(output.positionWS.xyz - g_eyePos.xyz) >= g_cullDistance ? -1.0f : 1.0f;
@@ -79,7 +88,8 @@
 
 		// Calculate velocity
 		float4x4 prevFrame_modelMatrix = worldPrev;
-		float4 prevFrame_worldPos = mul(input.position, prevFrame_modelMatrix);
+		// Skinned meshes drawn from GpuSkinning's output read last frame's pose here.
+		float4 prevFrame_worldPos = mul(PreviousLocalPosition(input.position, vertexID), prevFrame_modelMatrix);
 		// Previous-frame sway: same function at g_timePrev against the
 		// previous world transform (static vegetation: identical matrix, the
 		// TIME term is the whole delta). Current wind is used for both - wind

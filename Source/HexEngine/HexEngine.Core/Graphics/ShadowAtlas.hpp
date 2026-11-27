@@ -40,10 +40,16 @@ namespace HexEngine
 		// capacity, 4x the texels per light. Keep the shader-side constants
 		// in ClusterLightApply.shader and VolumetricScatterDensity.shader in
 		// sync with these.
+		// These are the SPOT atlas defaults. The point-light atlas is a second
+		// instance created with smaller tiles (kPointAtlasSize / kPointTileSize):
+		// a point needs six faces, so at 2048 only two would fit.
 		static constexpr int32_t kAtlasSize = 8192;
 		static constexpr int32_t kTileSize = 2048;
 		static constexpr int32_t kTilesPerRow = kAtlasSize / kTileSize;
 		static constexpr int32_t kTileCount = kTilesPerRow * kTilesPerRow;
+		static constexpr int32_t kPointAtlasSize = 8192;
+		static constexpr int32_t kPointTileSize = 1024;
+		static constexpr int32_t kPointTileCount = (kPointAtlasSize / kPointTileSize) * (kPointAtlasSize / kPointTileSize);
 
 		struct FaceKey
 		{
@@ -66,6 +72,7 @@ namespace HexEngine
 			FaceKey owner;                 // owner.light == nullptr -> free
 			uint64_t lastUsedFrame = 0;    // LRU age
 			uint64_t contentHash = 0;      // what the tile currently holds (0 = never rendered)
+			uint64_t dirtySeq = 0;         // scene shadow-journal seq the content is known valid through
 			bool renderedThisFrame = false;
 			// View-proj CAPTURED WHEN THE TILE WAS RENDERED - never the
 			// light's current matrices. A moved light whose re-render missed
@@ -84,8 +91,13 @@ namespace HexEngine
 			bool needsRender = false;   // false = cached content is still valid
 		};
 
-		bool Create();
+		bool Create(int32_t atlasSize = kAtlasSize, int32_t tileSize = kTileSize);
 		void Destroy();
+
+		int32_t GetAtlasSize() const { return _atlasSize; }
+		int32_t GetTileSize() const { return _tileSize; }
+		int32_t GetTilesPerRow() const { return _tilesPerRow; }
+		int32_t GetTileCount() const { return _tileCount; }
 
 		/**
 		 * Assign atlas tiles for this frame's shadow-casting lights.
@@ -97,13 +109,16 @@ namespace HexEngine
 		 * @param renderBudget Max faces marked needsRender this frame; faces
 		 *                     whose content hash matches their tile keep cached
 		 *                     depth for free and do not count against it.
+		 * @param scene        Source of the shadow-invalidation journal: a face
+		 *                     also re-renders when geometry moved/changed inside
+		 *                     its light's volume since the tile was last checked.
 		 * @return the frame's assignments, priority order.
 		 */
 		const std::vector<FaceAssignment>& AssignTiles(
 			const std::vector<Light*>& casters,
 			const Camera* camera,
 			int32_t renderBudget,
-			uint64_t sceneGeometryRevision);
+			Scene* scene);
 
 		/** Viewport (x, y, w, h) of a tile in atlas texels. */
 		void GetTileViewport(int32_t tileIndex, int32_t& x, int32_t& y, int32_t& w, int32_t& h) const;
@@ -126,15 +141,18 @@ namespace HexEngine
 		uint64_t GetFrameIndex() const { return _frame; }
 
 	private:
-		uint64_t ComputeFaceContentHash(const Light* light, uint8_t face, uint64_t sceneGeometryRevision) const;
+		uint64_t ComputeFaceContentHash(const Light* light, uint8_t face) const;
 
 		ID3D11Texture2D* _atlas = nullptr;
 		ID3D11ShaderResourceView* _atlasSrv = nullptr;
-		// One DSV per tile so a face renders with a plain viewport+DSV bind and
-		// no scissor bookkeeping in the mesh path.
-		ID3D11DepthStencilView* _tileDsvs[kTileCount] = {};
+		// ONE DSV over the whole atlas; tiles are carved with viewports.
+		ID3D11DepthStencilView* _dsv = nullptr;
 
-		Tile _tiles[kTileCount];
+		int32_t _atlasSize = kAtlasSize;
+		int32_t _tileSize = kTileSize;
+		int32_t _tilesPerRow = kTilesPerRow;
+		int32_t _tileCount = kTileCount;
+		std::vector<Tile> _tiles;
 		std::vector<FaceAssignment> _assignments;
 		uint64_t _frame = 0;
 	};

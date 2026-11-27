@@ -552,11 +552,29 @@ namespace HexEngine
 		/** @brief Resets cached graphics state to backend defaults. */
 		virtual void ResetState() = 0;
 
+		/**
+		 * @brief LOD bias for the material texture sampler (s0).
+		 *
+		 * Temporal upscalers render below display resolution; a negative bias keeps
+		 * surface textures at display-resolution sharpness (the upscaler's jitter
+		 * resolves the extra detail). Takes effect immediately and persists across
+		 * frames. Backends without a configurable sampler ignore it.
+		 */
+		virtual void SetTextureMipBias(float bias) { (void)bias; }
+
 		/** @brief Returns preferred swapchain/backbuffer format for this backend. */
 		virtual TextureFormat GetDesiredBackBufferFormat() const
 		{
 			return TextureFormat::R16G16B16A16_FLOAT;
 		}
+
+		/** @brief One-shot capture of the FINAL frame (scene + game UI + editor UI)
+		 * from the back buffer, written as PNG just before the next Present.
+		 * Returns false when the backend can't. Poll GetBackBufferCaptureState:
+		 * 0 = pending/none, 1 = written, -1 = failed. (Declared after every other
+		 * virtual so the existing vtable layout is unchanged.) */
+		virtual bool RequestBackBufferCapture(const std::wstring& absolutePath) { (void)absolutePath; return false; }
+		virtual int32_t GetBackBufferCaptureState() const { return -1; }
 
 		/** @brief True when the swapchain is the scRGB float format (HDR output
 		 * active). Display-output shader selection keys on this; one definition

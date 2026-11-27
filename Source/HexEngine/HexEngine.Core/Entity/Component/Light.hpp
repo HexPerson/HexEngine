@@ -50,6 +50,12 @@ namespace HexEngine
 
 		virtual void SetDoesCastShadows(bool enabled);
 
+		// Dedicated (legacy-path) shadow maps are allocated on demand: the
+		// renderer calls this before drawing them, and the atlas path never
+		// needs them. Release frees them again (spot with atlas content).
+		virtual void EnsureShadowMaps() {}
+		virtual void ReleaseDedicatedShadowMaps() {}
+
 
 		virtual const math::Matrix& GetViewMatrix(uint32_t index = 0) const = 0;
 

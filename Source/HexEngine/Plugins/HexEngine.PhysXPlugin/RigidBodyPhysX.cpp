@@ -8,11 +8,51 @@
 #include <HexEngine.Core/Entity/Component/RigidBody.hpp>
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 namespace
 {
 	constexpr float kMinTriangleMeshScale = 0.001f;
 	constexpr float kTriangleMeshWeldTolerance = 0.001f;
+
+	// Cooked triangle meshes shared by content. A level is mostly instances of
+	// the same kit meshes (wall modules, floors, props), and each instance used
+	// to re-cook its mesh at load - a quarter of the late scene-load time, all
+	// of it inside the scene write lock. The cooked mesh is in mesh-local space
+	// (instance scale lives on the shape's geometry), so one cook serves every
+	// instance. The cache owns one reference per mesh; shapes add their own.
+	struct TriMeshCacheEntry
+	{
+		physx::PxTriangleMesh* mesh = nullptr;
+		size_t vertexCount = 0;
+		uint32_t faceCount = 0;
+	};
+	std::mutex g_triMeshCacheLock;
+	std::unordered_map<uint64_t, TriMeshCacheEntry> g_triMeshCache;
+
+	uint64_t HashTriMeshInput(const std::vector<math::Vector3>& vertices, const std::vector<HexEngine::MeshIndexFormat>& indices, uint32_t faceCount)
+	{
+		uint64_t h = 1469598103934665603ull;
+		const auto mixBytes = [&h](const void* data, size_t bytes)
+		{
+			const uint8_t* p = static_cast<const uint8_t*>(data);
+			size_t i = 0;
+			for (; i + 8 <= bytes; i += 8)
+			{
+				uint64_t w;
+				std::memcpy(&w, p + i, 8);
+				h = (h ^ w) * 1099511628211ull;
+			}
+			for (; i < bytes; ++i)
+				h = (h ^ p[i]) * 1099511628211ull;
+		};
+		mixBytes(vertices.data(), vertices.size() * sizeof(math::Vector3));
+		mixBytes(indices.data(), static_cast<size_t>(faceCount) * 3 * sizeof(HexEngine::MeshIndexFormat));
+		mixBytes(&faceCount, sizeof(faceCount));
+		return h;
+	}
 
 	float SanitizeTriangleMeshScaleAxis(float value)
 	{
@@ -113,6 +153,10 @@ void RigidBodyPhysX::SetBodyType(BodyType type)
 					//auto localPose = _shape->getLocalPose();
 					//_shape->setLocalPose(physx::PxTransform());
 					_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 				}
 
 				actor->userData = this;// _transform->GetEntity();
@@ -176,6 +220,30 @@ void RigidBodyPhysX::UpdateTriangleMeshScale(const math::Vector3& scale)
 		}
 	}
 	g_pPhysx->GetScene()->unlockWrite();
+}
+
+void RigidBodyPhysX::SetLinearVelocity(const math::Vector3& velocity)
+{
+	if (_body == nullptr)
+		return;
+	if (auto* dyn = _body->is<physx::PxRigidDynamic>(); dyn != nullptr && !(dyn->getRigidBodyFlags() & physx::PxRigidBodyFlag::eKINEMATIC))
+	{
+		g_pPhysx->GetScene()->lockWrite();
+		dyn->setLinearVelocity(physx::PxVec3(velocity.x, velocity.y, velocity.z));
+		g_pPhysx->GetScene()->unlockWrite();
+	}
+}
+
+void RigidBodyPhysX::SetAngularVelocity(const math::Vector3& velocity)
+{
+	if (_body == nullptr)
+		return;
+	if (auto* dyn = _body->is<physx::PxRigidDynamic>(); dyn != nullptr && !(dyn->getRigidBodyFlags() & physx::PxRigidBodyFlag::eKINEMATIC))
+	{
+		g_pPhysx->GetScene()->lockWrite();
+		dyn->setAngularVelocity(physx::PxVec3(velocity.x, velocity.y, velocity.z));
+		g_pPhysx->GetScene()->unlockWrite();
+	}
 }
 
 void RigidBodyPhysX::UpdatePosePosition(const math::Vector3& position)
@@ -292,6 +360,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddSphereCollider(HexEngine::Transform* tr
 	_shape = g_pPhysx->GetPhysics()->createShape(*(physx::PxSphereGeometry*)_geometry, *g_pPhysx->GetDefaultMaterial());
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 
 	_shape->release();
 
@@ -331,6 +403,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddCapsuleCollider(HexEngine::Transform* t
 	_shape->setLocalPose(physx::PxTransform(physx::PxVec3(offset.x, offset.y, offset.z), rot));
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 
 	_shape->release();
 
@@ -434,15 +510,27 @@ HexEngine::ICollider* RigidBodyPhysX::AddHeightFieldCollider(const int32_t colum
 
 HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<math::Vector3>& vertices, const std::vector<HexEngine::MeshIndexFormat>& indices, uint32_t faceCount, bool exclusive)
 {
-	g_pPhysx->GetScene()->lockWrite();
-
 	if (vertices.empty() || faceCount == 0 || indices.size() < static_cast<size_t>(faceCount) * 3)
 	{
 		LOG_CRIT("Invalid triangle mesh collider input: vertices=%zu indices=%zu faceCount=%u", vertices.size(), indices.size(), faceCount);
-		g_pPhysx->GetScene()->unlockWrite();
 		return nullptr;
 	}
 
+	// Reuse an identical mesh's cook (see g_triMeshCache). Cooking itself
+	// doesn't touch the scene, so it runs outside the scene write lock.
+	const uint64_t meshKey = HashTriMeshInput(vertices, indices, faceCount);
+	physx::PxTriangleMesh* mesh = nullptr;
+	{
+		std::lock_guard cacheLock(g_triMeshCacheLock);
+		if (auto it = g_triMeshCache.find(meshKey); it != g_triMeshCache.end() &&
+			it->second.vertexCount == vertices.size() && it->second.faceCount == faceCount)
+		{
+			mesh = it->second.mesh;
+		}
+	}
+
+	if (mesh == nullptr)
+	{
 	physx::PxTriangleMeshDesc meshDesc;
 	meshDesc.points.count = (uint32_t)vertices.size();
 	meshDesc.points.stride = sizeof(physx::PxVec3);
@@ -494,21 +582,39 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 	if (!PxCookTriangleMesh(params, meshDesc, buf, &result))
 	{
 		LOG_CRIT("PxCookTriangleMesh failed for collider mesh (result=%u, vertices=%zu, faces=%u)", static_cast<uint32_t>(result), vertices.size(), faceCount);
-		g_pPhysx->GetScene()->unlockWrite();
 		return nullptr;
 	}
 
 	physx::PxDefaultMemoryInputData input(buf.getData(), buf.getSize());
-	physx::PxTriangleMesh* mesh = g_pPhysx->GetPhysics()->createTriangleMesh(input);
+	mesh = g_pPhysx->GetPhysics()->createTriangleMesh(input);
 	if (mesh == nullptr)
 	{
 		LOG_CRIT("createTriangleMesh() returned null after successful cooking");
-		g_pPhysx->GetScene()->unlockWrite();
 		return nullptr;
 	}
 
 	//auto mesh = g_pPhysx->GetCooking()->createTriangleMesh(meshDesc, g_pPhysx->GetPhysics()->getPhysicsInsertionCallback());
 #endif
+		{
+			std::lock_guard cacheLock(g_triMeshCacheLock);
+			auto& entry = g_triMeshCache[meshKey];
+			if (entry.mesh == nullptr)
+			{
+				entry.mesh = mesh;   // the cache keeps createTriangleMesh's reference
+				entry.vertexCount = vertices.size();
+				entry.faceCount = faceCount;
+			}
+			else
+			{
+				// Another thread cooked the same mesh meanwhile: use theirs.
+				mesh->release();
+				mesh = entry.mesh;
+			}
+		}
+	}
+
+	g_pPhysx->GetScene()->lockWrite();
+
 	_geometry = new physx::PxTriangleMeshGeometry;
 
 	physx::PxTriangleMeshGeometry* triGeom = (physx::PxTriangleMeshGeometry*)_geometry;
@@ -530,6 +636,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 	}
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 	_shape->release();
 
 	/*_shape = physx::PxRigidActorExt::createExclusiveShape(
@@ -654,6 +764,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshColliderFromCookedBuffer(co
 	}
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 	_shape->release();
 
 	_collider = new ColliderPhysX(_shape, this);
@@ -726,6 +840,10 @@ bool RigidBodyPhysX::TryFinishAsyncCollider()
 	}
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 	_shape->release();
 
 	_collider = new ColliderPhysX(_shape, this);
@@ -802,6 +920,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddConvexMeshCollider(const std::vector<ma
 
 	_shape = g_pPhysx->GetPhysics()->createShape(*triGeom, *g_pPhysx->GetDefaultMaterial(), exclusive);
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 	_shape->release();
 
 	// we don't want to handle scene queries with physx
@@ -829,6 +951,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddBoxCollider(const dx::BoundingBox& box,
 	_shape->setLocalPose(physx::PxTransform(physx::PxVec3(box.Center.x, box.Center.y, box.Center.z)));
 
 	_body->attachShape(*_shape);
+	// A shape swapped on a body already in the scene (terrain collision re-cooked
+	// around a TerrainCutout, say) is invisible to raycasts/CCTs until the query
+	// structures are flushed - in the editor nothing simulates to do it.
+	if (auto* scene = _body->getScene()) scene->flushQueryUpdates();
 
 	_shape->release();
 

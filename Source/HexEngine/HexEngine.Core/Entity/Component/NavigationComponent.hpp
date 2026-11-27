@@ -47,8 +47,25 @@ namespace HexEngine
 		void GoToTarget();
 		void ClearPath();
 		bool HasPath() const { return !_result.path.empty(); }
+		// The last FindPath could not reach its target (it stops at the nearest reachable point).
+		bool IsPathPartial() const { return _result.partial; }
 		const std::vector<math::Vector3>& GetPathPoints() const { return _result.path; }
 		uint32_t GetPathIndex() const { return _pathIndex; }
+
+		// Optional global movement gate, installed by a gameplay plugin (e.g. a
+		// pedestrian crossing held by a traffic signal). Asked before an agent
+		// walks from its position toward the next path node; returning false
+		// holds the agent where it is this frame. A plain function pointer (not
+		// std::function) so nothing in Core ever runs plugin-owned destructors.
+		using SegmentGateFn = bool (*)(const math::Vector3& from, const math::Vector3& to);
+		static void SetSegmentGate(SegmentGateFn gate);
+		// True while the gate is holding this agent (it wants to move but waits).
+		bool IsHeldByGate() const { return _heldByGate; }
+
+		// Freeze the agent on its path without dropping it (e.g. while the player
+		// talks to it). The path and progress are kept; Update just doesn't step.
+		void SetPaused(bool paused) { _paused = paused; }
+		bool IsPaused() const { return _paused; }
 
 		//void SetReachedDestinationFn(std::function<ReachedDestinationFn> fn) { _reachedDestinationFn = fn; }
 
@@ -88,6 +105,8 @@ namespace HexEngine
 		bool    _hasCachedGroundY   = false;
 
 		bool _awaitingPick = false; // armed by BeginPickTarget(); next scene click sets the target
+		bool _heldByGate = false;   // runtime: the segment gate refused this frame's step
+		bool _paused = false;       // runtime: SetPaused (not serialised)
 
 		//std::function<ReachedDestinationFn> _reachedDestinationFn;
 	};

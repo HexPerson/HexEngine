@@ -73,7 +73,18 @@ namespace HexEngine
 		// frame as the ray hits the ghost slightly closer to the camera than the terrain
 		// below it. Honored by EditorUI::RayCastWorld via a retry loop that adds flagged
 		// hits to the ignore list and re-casts until a non-flagged surface is found.
-		DoNotPickInEditor		= HEX_BITSET(8)
+		DoNotPickInEditor		= HEX_BITSET(8),
+		// Excluded from every shadow-caster PVS (sun cascades, spot/point shadow
+		// maps). Inherited by descendants (GetCastsShadows walks the parents), so
+		// set it on a prefab root / road wrapper to opt the whole thing out. Saved
+		// with the entity flags; replaces the old unsaved _canCastShadows bool.
+		DoNotCastShadows		= HEX_BITSET(9),
+		// Set by the editor's HLOD generator on every source mesh it baked into an
+		// HLOD_ proxy. Runtime HLOD only hides FLAGGED sources past the switch
+		// distance, so anything the generator skipped (small props, movers, meshes
+		// added after the bake) keeps drawing. Stripped on clone and prefab load:
+		// a copy was never baked.
+		RepresentedByHLOD		= HEX_BITSET(10)
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(EntityFlags);
 
@@ -112,7 +123,7 @@ namespace HexEngine
 		template <typename T>
 		bool HasA()
 		{
-			return (GetComponentSignature() & ((ComponentSignature)1 << T::_GetComponentId())) != 0;
+			return GetComponentSignature().Has(T::_GetComponentId());
 		}
 
 		// Components
@@ -315,6 +326,13 @@ namespace HexEngine
 		void SetPrefabOverridePatches(const std::vector<PrefabOverridePatch>& patches);
 		const std::vector<PrefabOverridePatch>& GetPrefabOverridePatches() const;
 
+		// Content hash of the prefab asset this instance was last built / synced
+		// from (PrefabLoader::ComputePrefabRevision). Kept on instance roots; the
+		// editor compares it with the asset's current hash to flag out-of-date
+		// instances. Empty = unknown (instances saved before revisions existed).
+		void SetPrefabRevision(const std::string& revision) { _prefabRevision = revision; }
+		const std::string& GetPrefabRevision() const { return _prefabRevision; }
+
 	private:
 		struct EntityGuidComponent
 		{
@@ -322,7 +340,7 @@ namespace HexEngine
 			BaseComponent* component;
 		};
 		std::vector<EntityGuidComponent> _components;
-		ComponentSignature _componentsSignature = 0;	
+		ComponentSignature _componentsSignature;	
 		EntityId _entityId = InvalidEntityId;
 
 		friend class Scene;
@@ -366,6 +384,11 @@ namespace HexEngine
 		bool _hasCachedWorldOBB = false;
 		bool _hasCachedWorldBoundingSphere = false;
 		bool _hasCachedWorldOcclusionVolume = true;
+		// Bounds last recorded in the scene's shadow-invalidation journal, so a
+		// move dirties shadow tiles around where the entity WAS as well as where
+		// it is (Scene::RecordShadowDirty).
+		dx::BoundingSphere _lastShadowBounds;
+		bool _hasLastShadowBounds = false;
 		uint64_t _transformVersion = 1;
 		// Frame number that last refreshed _cachedWorldTMPrev. Used by GetWorldTM() to
 		// advance prev<-current at the first call of each new frame even when the world TM
@@ -376,13 +399,14 @@ namespace HexEngine
 		uint64_t _prevTMFrame = 0;
 		Transform* _cachedTransform = nullptr;
 		StaticMeshComponent* _cachedMeshRenderer = nullptr;
-		bool _canCastShadows = true;
+		void OnCastShadowsChanged();
 		fs::path _prefabSourcePath;
 		std::string _prefabRootEntityName;
 		bool _isPrefabInstanceRoot = false;
 		std::string _prefabNodeId;
 		std::unordered_set<std::string> _prefabPropertyOverrides;
 		std::vector<PrefabOverridePatch> _prefabOverridePatches;
+		std::string _prefabRevision;
 		
 	};
 }

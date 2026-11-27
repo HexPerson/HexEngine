@@ -20,6 +20,7 @@ namespace HexEngine
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 		virtual bool CreateWidget(ComponentWidget* widget) override;
 		float GetCurrentTimeHours() const { return _currentTimeHours; }
+		float GetHoursPerDay() const { return _hoursPerDay; }
 
 	private:
 		void AdvanceTime(float frameTime);
@@ -63,5 +64,11 @@ namespace HexEngine
 		void CaptureBaseline();
 		math::Color _dayAmbientLight = math::Color(0.14f, 0.14f, 0.145f, 1.0f);
 		math::Color _nightAmbientLight = math::Color(9.0f / 255.0f, 14.0f / 255.0f, 44.0f / 255.0f, 1.0f);
+		// Tilt of the sun's daily arc about its sunrise-sunset axis (a latitude
+		// stand-in). 0 = the old path straight through the zenith: at noon every
+		// shadow sat directly under its caster and no wall received direct sun,
+		// so midday read flat and shadowless. 30 peaks the sun at 60 degrees.
+		float _sunTiltDegrees = 30.0f;
+		float _prevSunTilt = -1000.0f;
 	};
 }

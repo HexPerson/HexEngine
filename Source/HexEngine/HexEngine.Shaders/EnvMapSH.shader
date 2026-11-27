@@ -52,38 +52,35 @@
 		// Which coefficient is this row?
 		const int coeffIndex = clamp((int)floor(input.texcoord.y * ENVMAP_SH_COEFFS), 0, 8);
 
+		// Equal-area directions (spherical Fibonacci). The previous loop walked
+		// a 64x64 grid of OCTAHEDRAL texels and weighted every one 4PI/4096,
+		// but the octahedral map is not equal-area - texels near the folds
+		// and the axes cover different solid angles - so the projected
+		// irradiance was biased toward the over-sampled directions. Fibonacci
+		// points are equal-area, so 4PI/N per sample is exact.
 		float3 accum = 0.0f.xxx;
 		float weightSum = 0.0f;
-
+		const int sampleCount = kSideSamples * kSideSamples;
+		const float kGolden = 1.61803398875f;
 		[loop]
-		for (int y = 0; y < kSideSamples; ++y)
+		for (int i = 0; i < sampleCount; ++i)
 		{
-			for (int x = 0; x < kSideSamples; ++x)
-			{
-				// Uniform sample over the octahedral square, which maps to a
-				// near-uniform distribution over the sphere.
-				const float2 uv = (float2((float)x, (float)y) + 0.5f) / (float)kSideSamples;
-				const float3 dir = OctDecodeDir(uv);
+			const float phi = 6.28318530718f * frac((float)i / kGolden);
+			const float cosTheta = 1.0f - (2.0f * (float)i + 1.0f) / (float)sampleCount;
+			const float sinTheta = sqrt(saturate(1.0f - cosTheta * cosTheta));
+			const float3 dir = float3(cos(phi) * sinTheta, cosTheta, sin(phi) * sinTheta);
 
-				// Mirror row only - rows 1+ are already GGX-blurred and would
-				// double-filter the irradiance. Sample through the same inset
-				// the atlas is written with, so this reads the radiance actually
-				// stored for `dir` (the octahedral content lives in the inner
-				// gutter-bordered region now, not the raw [0,1] square).
-				const float2 blk = OctUnitToBlock(uv);
-				const float2 atlasUv = float2(blk.x, blk.y / ENVMAP_ROUGHNESS_ROWS);
-				const float3 radiance = g_envAtlas.SampleLevel(g_linearSampler, atlasUv, 0).rgb;
+			const float2 blk = OctUnitToBlock(OctEncodeDir(dir));
+			const float2 atlasUv = float2(blk.x, blk.y / ENVMAP_ROUGHNESS_ROWS);
+			const float3 radiance = g_envAtlas.SampleLevel(g_linearSampler, atlasUv, 0).rgb;
 
-				float basis[9];
-				ShBasis(dir, basis);
+			float basis[9];
+			ShBasis(dir, basis);
 
-				accum += radiance * basis[coeffIndex];
-				weightSum += 1.0f;
-			}
+			accum += radiance * basis[coeffIndex];
+			weightSum += 1.0f;
 		}
 
-		// 4*PI is the sphere's solid angle; dividing by the sample count turns the
-		// sum into the integral.
 		const float solidAnglePerSample = (4.0f * 3.141593f) / max(weightSum, 1.0f);
 		return float4(accum * solidAnglePerSample, 1.0f);
 	}

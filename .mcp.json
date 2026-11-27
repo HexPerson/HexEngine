@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "hexengine": {
+      "command": "${HEXENGINE_ROOT:-C:/HexEngine}/Bin/x64/Debug/HexEngine.McpServer.exe",
+      "args": ["--root", "${HEXENGINE_ROOT:-C:/HexEngine}"]
+    }
+  }
+}

@@ -26,7 +26,16 @@ public:
 	float GetCornerRadius() const { return _cornerRadius; }
 	bool GetDrawDebug() const { return _drawDebug; }
 
+	// Runtime-only (not serialised): a closed lane is skipped by route planning
+	// (GetLaneGraph), random next-lane choice and anything else walking the lane
+	// graph. DistrictGateComponent closes the lanes into a locked district.
+	bool IsClosed() const { return _closed; }
+	void SetClosed(bool closed);
+	// Bumped whenever any lane opens or closes, so cached lane graphs rebuild.
+	static uint32_t GetTopologyRevision();
+
 private:
+	bool _closed = false;
 	bool _loop = true;
 	float _speedLimit = 30.0f;
 	// Fillet radius vehicles use when turning through this node. 0 = hard

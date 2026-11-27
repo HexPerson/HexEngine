@@ -3,6 +3,8 @@
 #include "InputSystem.hpp"
 #include "../Entity/Component/Transform.hpp"
 #include "../HexEngine.hpp"
+#include <Xinput.h>
+#pragma comment(lib, "Xinput9_1_0.lib")
 
 namespace HexEngine
 {
@@ -11,6 +13,62 @@ namespace HexEngine
 	HVar in_mouseSmoothing("in_mouseSmoothing", "Enable or disable mouse smoothing", true, false, true);
 	HVar in_mouseSmoothingWeight("in_mouseSmoothingWeight", "The weighted mouse smoothing value, a higher value will result in smoother but less responsive movement. A lower value will result in snappier movements but less smooth", 0.6f, 0.001f, 1.0f);
 	HVar in_mouseSmoothingSamples("in_mouseSmoothingSamples", "The number of samples to use for mouse smoothing", 32, 2, 64);
+	HVar in_gamepad("in_gamepad", "Read XInput pad 0 as keyboard + mouse-look input while the game runs", true, false, true);
+	HVar in_gamepadLookSpeed("in_gamepadLookSpeed", "Right-stick look speed (mouse pixels per second at full tilt)", 900.0f, 50.0f, 4000.0f);
+
+	namespace
+	{
+		struct GamepadState
+		{
+			bool connected = false;
+			float retryTimer = 0.0f;     // XInputGetState on an empty slot is slow: poll those ~1/s
+			bool held[24] = {};          // per mapped virtual key (see kPadKeys)
+			float rumbleLeft = 0.0f;     // seconds of rumble still to play
+			float rumbleLow = 0.0f, rumbleHigh = 0.0f;
+			bool rumbling = false;
+		};
+		GamepadState g_pad;
+
+		// Virtual keys the pad can press (index into GamepadState::held).
+		const int32_t kPadKeys[] = { 'W', 'A', 'S', 'D', VK_SPACE, 'E', 'M', VK_ESCAPE, VK_TAB, '1', '2', 'H', 'P', VK_UP, VK_DOWN };
+		constexpr int32_t kPadKeyCount = (int32_t)(sizeof(kPadKeys) / sizeof(kPadKeys[0]));
+
+		float StickAxis(SHORT v, SHORT deadZone)
+		{
+			const float f = (float)v;
+			const float dz = (float)deadZone;
+			if (f > dz) return std::min(1.0f, (f - dz) / (32767.0f - dz));
+			if (f < -dz) return std::max(-1.0f, (f + dz) / (32768.0f - dz));
+			return 0.0f;
+		}
+
+		void ApplyRumble()
+		{
+			XINPUT_VIBRATION vib = {};
+			if (g_pad.rumbleLeft > 0.0f)
+			{
+				vib.wLeftMotorSpeed = (WORD)(std::clamp(g_pad.rumbleLow, 0.0f, 1.0f) * 65535.0f);
+				vib.wRightMotorSpeed = (WORD)(std::clamp(g_pad.rumbleHigh, 0.0f, 1.0f) * 65535.0f);
+			}
+			XInputSetState(0, &vib);
+			g_pad.rumbling = g_pad.rumbleLeft > 0.0f;
+		}
+	}
+
+	void SetGamepadRumble(float lowFrequency, float highFrequency, float seconds)
+	{
+		if (!g_pad.connected || seconds <= 0.0f)
+			return;
+		g_pad.rumbleLow = lowFrequency;
+		g_pad.rumbleHigh = highFrequency;
+		g_pad.rumbleLeft = std::max(g_pad.rumbleLeft, seconds);
+		ApplyRumble();
+	}
+
+	bool IsGamepadConnected()
+	{
+		return g_pad.connected;
+	}
 
 	void InputSystem::Create(HWND handle)
 	{
@@ -459,7 +517,8 @@ namespace HexEngine
 	void InputSystem::OnMouseMove(float x, float y, bool absolute)
 	{
 		// no need to send if we have no movement (this can happen with smoothed mouse input)
-		if (x != 0.0f && y != 0.0f)
+		// (Was &&: a purely horizontal or vertical move was silently dropped.)
+		if (x != 0.0f || y != 0.0f)
 		{
 			InputData data;
 			data.MouseMove.x = x;
@@ -808,6 +867,8 @@ namespace HexEngine
 		if(_mouseLockMode == MouseLockMode::Locked)
 			ProcessMouseMovement(frameTime);
 
+		UpdateGamepad(frameTime);
+
 		//auto keyboardState = _keyboard->GetState();
 
 		uint32_t width, height;
@@ -819,6 +880,111 @@ namespace HexEngine
 
 			_mouseX = width / 2;
 			_mouseY = height / 2;
+		}
+	}
+
+	void InputSystem::UpdateGamepad(float frameTime)
+	{
+		const bool active = in_gamepad._val.b && g_pEnv != nullptr && g_pEnv->IsGameRunning() && g_pEnv->GetHasFocus();
+		auto releaseAll = [this]()
+		{
+			for (int32_t i = 0; i < kPadKeyCount; ++i)
+				if (g_pad.held[i])
+				{
+					g_pad.held[i] = false;
+					OnKeyUp(kPadKeys[i]);
+				}
+		};
+		if (!active)
+		{
+			releaseAll();
+			if (g_pad.rumbling)
+			{
+				g_pad.rumbleLeft = 0.0f;
+				ApplyRumble();
+			}
+			return;
+		}
+
+		if (!g_pad.connected)
+		{
+			g_pad.retryTimer -= frameTime;
+			if (g_pad.retryTimer > 0.0f)
+				return;
+			g_pad.retryTimer = 1.0f;
+		}
+		XINPUT_STATE st = {};
+		const bool connected = XInputGetState(0, &st) == ERROR_SUCCESS;
+		if (connected != g_pad.connected)
+		{
+			LOG_INFO("Input: gamepad %s", connected ? "connected" : "disconnected");
+			g_pad.connected = connected;
+			if (!connected)
+			{
+				releaseAll();
+				return;
+			}
+		}
+		if (!connected)
+			return;
+
+		const XINPUT_GAMEPAD& gp = st.Gamepad;
+		const float lx = StickAxis(gp.sThumbLX, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+		const float ly = StickAxis(gp.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE);
+		const float rx = StickAxis(gp.sThumbRX, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
+		const float ry = StickAxis(gp.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
+		const bool rt = gp.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+		const bool lt = gp.bLeftTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+		const WORD b = gp.wButtons;
+		auto btn = [b](WORD mask) { return (b & mask) != 0; };
+
+		// Digital keys with a little hysteresis on the stick (0.5 on, 0.35 off).
+		auto stick = [](float v, bool was) { return was ? v > 0.35f : v > 0.5f; };
+		bool want[kPadKeyCount] = {};
+		want[0] = rt || btn(XINPUT_GAMEPAD_DPAD_UP) || stick(ly, g_pad.held[0]);          // W
+		want[1] = btn(XINPUT_GAMEPAD_DPAD_LEFT) || stick(-lx, g_pad.held[1]);             // A
+		want[2] = lt || btn(XINPUT_GAMEPAD_DPAD_DOWN) || stick(-ly, g_pad.held[2]);       // S
+		want[3] = btn(XINPUT_GAMEPAD_DPAD_RIGHT) || stick(lx, g_pad.held[3]);             // D
+		want[4] = btn(XINPUT_GAMEPAD_A);                                                  // Space
+		want[5] = btn(XINPUT_GAMEPAD_X);                                                  // E
+		want[6] = btn(XINPUT_GAMEPAD_Y);                                                  // M
+		want[7] = btn(XINPUT_GAMEPAD_B) || btn(XINPUT_GAMEPAD_START);                     // Esc
+		want[8] = btn(XINPUT_GAMEPAD_BACK);                                               // Tab
+		want[9] = btn(XINPUT_GAMEPAD_LEFT_SHOULDER);                                      // 1
+		want[10] = btn(XINPUT_GAMEPAD_RIGHT_SHOULDER);                                    // 2
+		want[11] = btn(XINPUT_GAMEPAD_LEFT_THUMB);                                        // H
+		want[12] = btn(XINPUT_GAMEPAD_RIGHT_THUMB);                                       // P
+		want[13] = btn(XINPUT_GAMEPAD_DPAD_UP);                                           // Up (menus)
+		want[14] = btn(XINPUT_GAMEPAD_DPAD_DOWN);                                         // Down (menus)
+		for (int32_t i = 0; i < kPadKeyCount; ++i)
+		{
+			if (want[i] == g_pad.held[i])
+				continue;
+			g_pad.held[i] = want[i];
+			if (want[i])
+				OnKeyDown(kPadKeys[i]);
+			else
+				OnKeyUp(kPadKeys[i]);
+		}
+
+		// Right stick -> relative mouse look (only while the game owns the mouse).
+		if (_mouseLockMode == MouseLockMode::Locked && (rx != 0.0f || ry != 0.0f))
+		{
+			const float speed = in_gamepadLookSpeed._val.f32 * std::min(frameTime, 0.1f);
+			// Squared response: fine aim near the centre, fast turns at full tilt.
+			const float sx = rx * std::fabs(rx) * speed;
+			const float sy = -ry * std::fabs(ry) * speed;
+			OnMouseMove(sx, sy, false);
+		}
+
+		if (g_pad.rumbleLeft > 0.0f)
+		{
+			g_pad.rumbleLeft -= frameTime;
+			if (g_pad.rumbleLeft <= 0.0f)
+			{
+				g_pad.rumbleLeft = 0.0f;
+				ApplyRumble();
+			}
 		}
 	}
 

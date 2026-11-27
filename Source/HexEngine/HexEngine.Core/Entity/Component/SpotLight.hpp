@@ -43,6 +43,8 @@ namespace HexEngine
 		virtual void Destroy() override;
 
 		virtual void SetDoesCastShadows(bool enabled) override;
+		virtual void EnsureShadowMaps() override;
+		virtual void ReleaseDedicatedShadowMaps() override;
 
 		virtual ShadowMap* GetShadowMap(int32_t index = 0) const override;
 

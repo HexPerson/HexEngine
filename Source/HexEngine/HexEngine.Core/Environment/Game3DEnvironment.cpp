@@ -8,7 +8,9 @@
 #include "../FileSystem/ICompressionProvider.hpp"
 #include "../FileSystem/AssetPackageManager.hpp"
 #include "../Graphics/ShaderSystem.hpp"
+#include "../Graphics/OffscreenRenderHooks.hpp"
 #include "../Graphics/MaterialLoader.hpp"
+#include "../Entity/Component/RigidBody.hpp"
 #include "../Scene/SceneManager.hpp"
 #include "../Input/InputSystem.hpp"
 #include "../Graphics/AtmosphereLUTs.hpp"
@@ -37,6 +39,7 @@
 namespace HexEngine
 {
 	HVar cl_simulationRate("cl_simulationRate", "The speed at which physics is simulated in hz", 120.0f, 1.0f, 240.0f);
+	HVar phys_loadSettleSeconds("phys_loadSettleSeconds", "After a scene load / play-mode restore, keep physics held up to this long while async collider cooks (volumetric terrain) are in flight", 10.0f, 0.0f, 60.0f);
 	HVar cl_showfps("cl_showfps", "Draw the current frames per-second on the screen", false, false, true);
 	HVar cl_forcelagframe("cl_forcelagframe", "Forcefully delay each frame by this amount (in milliseconds)", 0, 0, 1000);
 	HVar r_debugFrameInfo("r_debugFrameInfo", "Draws per-frame renderer diagnostics (weather, HDR, SSR/TAA state, camera) as text overlay", false, false, true);
@@ -93,10 +96,34 @@ namespace HexEngine
 
 		env->_assetPackageManager = new AssetPackageManager;
 
-		if (options.mountEngineAssetPackage && fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
+		// Where EngineAssets.pkg lives: the working directory (the editor's run
+		// layout), else beside the executable. A shipped game started from
+		// anywhere else - a shortcut, a debugger with another working directory,
+		// a command prompt - used to miss the package and fall back to loose
+		// files that aren't there (no shaders).
+		fs::path engineAssetsRoot;
+		std::wstring engineAssetsSearched;
+		if (options.mountEngineAssetPackage)
+		{
+			std::error_code ec;
+			const fs::path roots[] = { fs::current_path(ec), FileSystem::GetExecutableDirectory() };
+			for (const fs::path& root : roots)
+			{
+				if (root.empty())
+					continue;
+				engineAssetsSearched += (engineAssetsSearched.empty() ? L"" : L" ; ") + root.wstring();
+				if (fs::exists(root / L"Data" / L"AssetPackages" / L"EngineAssets.pkg", ec))
+				{
+					engineAssetsRoot = root;
+					break;
+				}
+			}
+		}
+
+		if (!engineAssetsRoot.empty())
 		{
 			FileSystem tempFs(L"EngineDataBootStrap");
-			tempFs.SetBaseDirectory(fs::current_path());
+			tempFs.SetBaseDirectory(engineAssetsRoot);
 			env->_resourceSystem->AddFileSystem(&tempFs);
 
 			LOG_INFO("Loading standard asset package");
@@ -112,8 +139,9 @@ namespace HexEngine
 			// until the AddFileSystem dedup was added; the dedup catches it
 			// now but the second call was still pointless).
 		}
-		else
+		if (env->_fileSystem == nullptr)
 		{
+			// No package (or it failed to load): loose Data/ in the working directory.
 			env->_fileSystem = new FileSystem(L"EngineData");
 			env->_fileSystem->SetBaseDirectory(fs::current_path());
 			// Disk-based fallback was never registered with ResourceSystem
@@ -124,6 +152,17 @@ namespace HexEngine
 		// Create the log file
 		//
 		env->CreateLogFile(options);
+
+		// (The package was mounted before the log existed - report it now.)
+		if (env->_standardAssets)
+		{
+			LOG_INFO("Engine assets: mounted '%S'", (engineAssetsRoot / L"Data" / L"AssetPackages" / L"EngineAssets.pkg").wstring().c_str());
+		}
+		else if (options.mountEngineAssetPackage)
+		{
+			LOG_WARN("Engine assets: EngineAssets.pkg not found or failed to load (looked in: %S). Using loose Data/ in the working directory.",
+				engineAssetsSearched.c_str());
+		}
 
 		LOG_INFO("Creating HexEngine using Game3DEnvironment configuration");		
 
@@ -208,8 +247,15 @@ namespace HexEngine
 		env->_navMeshProvider = (INavMeshProvider*)env->_pluginSystem->CreateInterface(INavMeshProvider::InterfaceName);
 		env->_navMeshProvider->Create();
 
-		//env->_scriptEngine = (IScriptEngine*)env->_pluginSystem->CreateInterface(IScriptEngine::InterfaceName);
-		//env->_scriptEngine->Create();
+		// Gameplay scripting - optional (HexEngine.ScriptingPlugin). Without it
+		// ScriptComponents stay inert; with it they run in play mode.
+		env->_scriptEngine = (IScriptEngine*)env->_pluginSystem->TryCreateInterface(IScriptEngine::InterfaceName);
+		if (env->_scriptEngine != nullptr && !env->_scriptEngine->Create())
+		{
+			env->_scriptEngine->Destroy();
+			delete env->_scriptEngine;
+			env->_scriptEngine = nullptr;
+		}
 
 		env->_meshPrimitives = new MeshPrimitives;
 
@@ -294,6 +340,15 @@ namespace HexEngine
 			{
 				env->_giAOProvider = new DiffuseGIAOProvider(nullptr);
 				env->_giAOProvider->Create();
+			}
+
+			// Temporal upscaler (FSR plugin) - optional, owned by its plugin. Its GPU
+			// state is created lazily on first use, after the renderer exists.
+			env->_upscalerProvider = (IUpscalerProvider*)env->_pluginSystem->TryCreateInterface(IUpscalerProvider::InterfaceName);
+			if (env->_upscalerProvider != nullptr && !env->_upscalerProvider->Create())
+			{
+				env->_upscalerProvider->Destroy();
+				env->_upscalerProvider = nullptr;
 			}
 		}
 
@@ -446,13 +501,28 @@ namespace HexEngine
 
 		SAFE_DELETE(_debugGui);
 		
-		SAFE_DELETE(_fileSystem);		
+		// With EngineAssets.pkg mounted, _fileSystem is the package itself, which
+		// _standardAssets (a shared_ptr) owns - deleting it here freed it twice
+		// (crash on quit in every packaged build). Only the loose-Data fallback
+		// FileSystem is ours to delete.
+		if (_fileSystem != nullptr && _fileSystem == _standardAssets.get())
+			_fileSystem = nullptr;
+		else
+			SAFE_DELETE(_fileSystem);
 
 		_modelImporter->Destroy();
 		SAFE_DELETE(_modelImporter);
 
 		_ssaoProvider->Destroy();
 		SAFE_DELETE(_ssaoProvider);
+
+		// Release the upscaler's GPU objects while the device is still alive; the
+		// object itself belongs to its plugin.
+		if (_upscalerProvider != nullptr)
+		{
+			_upscalerProvider->Destroy();
+			_upscalerProvider = nullptr;
+		}
 
 		// Sibling r_useGIAO provider is only allocated when a plugin SSAO
 		// was loaded at Create() time, so null in the fallback config.
@@ -501,8 +571,14 @@ namespace HexEngine
 		_navMeshProvider->Destroy();
 		SAFE_DELETE(_navMeshProvider);
 
-		//_scriptEngine->Destroy();
-		//SAFE_DELETE(_scriptEngine);
+		// After the scene manager (above): components release their script
+		// instances while the engine is still alive. Destroy() detaches any
+		// instance that outlived its scene.
+		if (_scriptEngine != nullptr)
+		{
+			_scriptEngine->Destroy();
+			SAFE_DELETE(_scriptEngine);
+		}
 
 		SAFE_DELETE(_debugRenderer);
 		SAFE_DELETE(_timeManager);
@@ -560,14 +636,32 @@ namespace HexEngine
 		return _running;
 	}
 
+	// The scene-load hold, extended past the load itself while async collider
+	// cooks it triggered are still in flight: volumetric terrain recooks its
+	// chunk colliders asynchronously on every (re)load - including the editor's
+	// play-mode restore - so a dynamic body resting on it (the bikes) fell
+	// through before its ground arrived. Bounded by phys_loadSettleSeconds so
+	// gameplay-time terrain streaming never freezes physics.
+	bool Game3DEnvironment::IsWorldSettling() const
+	{
+		if (_sceneManager->IsLoadingScene())
+			return true;
+		const bool groundPending = _sceneManager->GetWorldSettleBlockers() > 0 || RigidBody::GetAsyncCooksInFlight() > 0;
+		return groundPending && _sceneManager->SecondsSinceSceneLoad() < (double)phys_loadSettleSeconds._val.f32;
+	}
+
 	void Game3DEnvironment::FixedStep(float dt)
 	{
+		// No physics or fixed update while a scene is still loading - see the main loop.
+		const bool worldLoading = IsWorldSettling();
+
 #if USE_MULTITHREADED_PHYSICS == 0
-		if (IsPhysicsSystemEnabled())
+		if (IsPhysicsSystemEnabled() && !worldLoading)
 			_physicsSystem->Simulate(dt);
 #endif
 
-		_sceneManager->FixedUpdate(dt);
+		if (!worldLoading)
+			_sceneManager->FixedUpdate(dt);
 
 		for (auto& extension : _gameExtensions)
 		{
@@ -632,9 +726,29 @@ namespace HexEngine
 				scene->GetNetworkReplicationSystem()->Pump(_timeManager->_frameTime);
 		}
 
+		// Paused simulation with requested steps: run exactly that many fixed ticks
+		// this frame (any leftover partial tick is discarded so the count is exact),
+		// and let gameplay's variable-rate update see the same span of time.
+		if (_timeManager->_simulationPaused && _timeManager->_pendingSimulationSteps > 0)
+		{
+			const uint32_t steps = std::min<uint32_t>(_timeManager->_pendingSimulationSteps, 120u);
+			_timeManager->_pendingSimulationSteps -= steps;
+			_timeManager->_accumulatedSimulationTime = ((float)steps + 0.5f) * timeStep;
+			_timeManager->_gameFrameTime = (float)steps * timeStep;
+		}
+
 		while (_timeManager->_accumulatedSimulationTime >= timeStep)
 		{
-			_sceneManager->FixedUpdate(timeStep);
+			// A scene that is still deserializing (the editor loads on a worker thread)
+			// is only part of a world: its colliders arrive entity by entity. Stepping
+			// physics - or the fixed update, where components push forces into bodies -
+			// in that window drops every already-created dynamic body through ground
+			// that hasn't loaded yet. Hold both; simulation time still advances, so
+			// there is no catch-up burst when the load completes.
+			const bool worldLoading = IsWorldSettling();
+
+			if (!worldLoading)
+				_sceneManager->FixedUpdate(timeStep);
 
 			for (auto& extension : _gameExtensions)
 			{
@@ -642,7 +756,7 @@ namespace HexEngine
 			}
 
 #if USE_MULTITHREADED_PHYSICS == 0
-			if (IsPhysicsSystemEnabled())
+			if (IsPhysicsSystemEnabled() && !worldLoading)
 			{
 				_physicsSystem->Simulate(timeStep);
 				_physicsSystem->Update(timeStep);
@@ -654,6 +768,14 @@ namespace HexEngine
 
 			hasUpdatedOnce = true;
 		}
+
+		// A game that pauses the simulation before its first fixed tick (a front-end
+		// menu over a frozen world) accumulates no simulation time, so the loop above
+		// never runs and nothing below would ever render - a black screen in a
+		// standalone launch. (The editor hid this: edit mode had already ticked.)
+		// Paused is still a valid world to draw.
+		if (_timeManager->_simulationPaused && IsGameRunning())
+			hasUpdatedOnce = true;
 
 		if(GetHasFocus() == false)
 			std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -672,7 +794,14 @@ namespace HexEngine
 
 				_uiManager->Update(_timeManager->_frameTime);
 
-				_sceneManager->Update(_timeManager->_frameTime);
+				// Script runtime housekeeping (hot reload, input edges) on real
+				// time, before the scene update runs the scripts themselves.
+				if (_scriptEngine != nullptr)
+					_scriptEngine->Tick(_timeManager->_frameTime);
+
+				// Gameplay runs on GAME time (scaled / paused - see TimeManager);
+				// the UI above keeps real time.
+				_sceneManager->Update(_timeManager->_gameFrameTime);
 
 				// Host: broadcast transform snapshots now the scene's transforms are
 				// final for this frame (runs outside the scene update lock).
@@ -686,7 +815,7 @@ namespace HexEngine
 
 				for (auto& extension : _gameExtensions)
 				{
-					extension->OnUpdate(_timeManager->_frameTime);
+					extension->OnUpdate(_timeManager->_gameFrameTime);
 				}
 
 				bool shouldUseDepthBuffer = true;
@@ -695,7 +824,8 @@ namespace HexEngine
 				{
 					if (auto mainCamera = currentScene->GetMainCamera(); mainCamera != nullptr)
 					{
-						shouldUseDepthBuffer = !mainCamera->IsDLSSEnabled();
+						// The gbuffer depth is render-sized while upscaling; the back buffer isn't.
+						shouldUseDepthBuffer = !mainCamera->IsUpscalingEnabled();
 					}
 				}
 
@@ -706,7 +836,14 @@ namespace HexEngine
 						if (_iconService)
 							_iconService->Render();
 
+						// Private preview scenes (e.g. the editor's animation viewport).
+						OffscreenRenderHooks::RunAll();
+
 						_sceneManager->Render();
+
+						// Scene renders may bias material sampling for an upscaler
+						// (SceneRenderer, r_fsrMipBias); UI textures sample unbiased.
+						_graphicsDevice->SetTextureMipBias(0.0f);
 
 						if (_iconService)
 							_iconService->CompletedFrame();
@@ -891,7 +1028,7 @@ namespace HexEngine
 					_graphicsDevice->EndFrame(win);
 				}
 
-				_sceneManager->LateUpdate(_timeManager->_frameTime);
+				_sceneManager->LateUpdate(_timeManager->_gameFrameTime);
 
 				if (cl_forcelagframe._val.i32 > 0)
 					std::this_thread::sleep_for(std::chrono::milliseconds(cl_forcelagframe._val.i32));
@@ -974,13 +1111,16 @@ namespace HexEngine
 
 		// Initialise a new log file instance
 		//
+		// Under the per-user data root: beside the exe for dev/portable builds (as
+		// before), %LOCALAPPDATA%\HexEngine for an installed (read-only) build.
 		std::wstring logName = L"Logs/LogFile_" + options.applicationName + L".txt";
-		_logFile = new LogFile(_fileSystem->GetLocalAbsolutePath(logName), LogOptions::IncludeTime, LogLevel::Crit);
+		_logFile = new LogFile(FileSystem::GetUserDataRoot() / logName, LogOptions::IncludeTime, LogLevel::Crit);
 
 		// Output our standard header
 		//
 		_logFile->WriteLine(LogLevel::Info, "**********************************************************************");
-		_logFile->WriteLine(LogLevel::Info, "**  HexEngine v%d.%d", GET_MAJOR_VERSION(HexEngineVersion), GET_MINOR_VERSION(HexEngineVersion));
+		_logFile->WriteLine(LogLevel::Info, "**  HexEngine %s%s (format v%d.%d)", HEX_VERSION_STRING, HEX_VERSION_IS_DEV ? "-dev" : "",
+			GET_MAJOR_VERSION(HexEngineVersion), GET_MINOR_VERSION(HexEngineVersion));
 		_logFile->WriteLine(LogLevel::Info, "**  Built on %s %s", __DATE__, __TIME__);
 		_logFile->WriteLine(LogLevel::Info, "**********************************************************************");
 	}
@@ -1013,6 +1153,15 @@ namespace HexEngine
 	void Game3DEnvironment::OnResizeWindow(Window* window, uint32_t width, uint32_t height)
 	{
 		LOG_DEBUG("Resizing game window to %dx%d", width, height);
+
+		// Minimised: WM_SIZE reports 0x0. Keep everything at the last real size.
+		// Applying it rebuilt the main camera's projection with a 0/0 aspect (NaN)
+		// and a 0x0 viewport; on restore NRD received that as the previous frame's
+		// matrices and asserted (sqrt of NaN), and the assert dialog's message pump
+		// re-entered a resize mid-frame, failing ResizeBuffers with outstanding
+		// backbuffer refs - the editor died on minimise/restore.
+		if (width == 0 || height == 0)
+			return;
 
 		_windowWidth = width;
 		_windowHeight = height;

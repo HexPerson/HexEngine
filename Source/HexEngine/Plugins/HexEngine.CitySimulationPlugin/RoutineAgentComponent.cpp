@@ -1,4 +1,7 @@
 #include "RoutineAgentComponent.hpp"
+#include "PlaceOfWorkComponent.hpp"
+#include <HexEngine.Core/Utility/CRC32.hpp>
+#include <cmath>
 #include <HexEngine.Core/Entity/Component/NavigationComponent.hpp>
 #include <HexEngine.Core/Entity/Component/Transform.hpp>
 #include <HexEngine.Core/Entity/Entity.hpp>
@@ -7,6 +10,8 @@
 #include <HexEngine.Core/GUI/Elements/EntitySearch.hpp>
 #include <HexEngine.Core/GUI/Elements/LineEdit.hpp>
 #include <HexEngine.Core/GUI/Elements/AssetSearch.hpp>
+#include <HexEngine.Core/GUI/Elements/DragFloat.hpp>
+#include <HexEngine.Core/GUI/Elements/DragInt.hpp>
 #include <algorithm>
 #include <sstream>
 
@@ -26,6 +31,7 @@ RoutineAgentComponent::RoutineAgentComponent(HexEngine::Entity* entity) :
 	UpdateComponent(entity)
 {
 	RebuildRoleTags();
+	RebuildSchedule();
 }
 
 RoutineAgentComponent::RoutineAgentComponent(HexEngine::Entity* entity, RoutineAgentComponent* copy) :
@@ -37,10 +43,16 @@ RoutineAgentComponent::RoutineAgentComponent(HexEngine::Entity* entity, RoutineA
 		_homeEntityName = copy->_homeEntityName;
 		_assignedWorkplaceEntityName = copy->_assignedWorkplaceEntityName;
 		_preferredVehiclePrefabPath = copy->_preferredVehiclePrefabPath;
+		_ownedVehicleEntityName = copy->_ownedVehicleEntityName;
 		_isEmergencyEligible = copy->_isEmergencyEligible;
+		_scheduleCsv = copy->_scheduleCsv;
+		_travelPreference = copy->_travelPreference;
+		_walkSpeed = copy->_walkSpeed;
+		_scheduleJitterHours = copy->_scheduleJitterHours;
 	}
 
 	RebuildRoleTags();
+	RebuildSchedule();
 }
 
 void RoutineAgentComponent::Serialize(json& data, HexEngine::JsonFile* file)
@@ -49,7 +61,12 @@ void RoutineAgentComponent::Serialize(json& data, HexEngine::JsonFile* file)
 	file->Serialize(data, "_homeEntityName", _homeEntityName);
 	file->Serialize(data, "_assignedWorkplaceEntityName", _assignedWorkplaceEntityName);
 	file->Serialize(data, "_preferredVehiclePrefabPath", _preferredVehiclePrefabPath);
+	file->Serialize(data, "_ownedVehicleEntityName", _ownedVehicleEntityName);
 	file->Serialize(data, "_isEmergencyEligible", _isEmergencyEligible);
+	file->Serialize(data, "_scheduleCsv", _scheduleCsv);
+	file->Serialize(data, "_travelPreference", _travelPreference);
+	file->Serialize(data, "_walkSpeed", _walkSpeed);
+	file->Serialize(data, "_scheduleJitterHours", _scheduleJitterHours);
 }
 
 void RoutineAgentComponent::Deserialize(json& data, HexEngine::JsonFile* file, uint32_t mask)
@@ -59,8 +76,17 @@ void RoutineAgentComponent::Deserialize(json& data, HexEngine::JsonFile* file, u
 	file->Deserialize(data, "_homeEntityName", _homeEntityName);
 	file->Deserialize(data, "_assignedWorkplaceEntityName", _assignedWorkplaceEntityName);
 	file->Deserialize(data, "_preferredVehiclePrefabPath", _preferredVehiclePrefabPath);
+	file->Deserialize(data, "_ownedVehicleEntityName", _ownedVehicleEntityName);
 	file->Deserialize(data, "_isEmergencyEligible", _isEmergencyEligible);
+	file->Deserialize(data, "_scheduleCsv", _scheduleCsv);
+	file->Deserialize(data, "_travelPreference", _travelPreference);
+	file->Deserialize(data, "_walkSpeed", _walkSpeed);
+	file->Deserialize(data, "_scheduleJitterHours", _scheduleJitterHours);
 	RebuildRoleTags();
+	RebuildSchedule();
+	_plannedBlockKey = ~0ull;
+	_plannedTargetName.clear();
+	_seedCooldown = 0.0f;
 
 	_isBusy = false;
 	_isOnShift = false;
@@ -72,6 +98,22 @@ void RoutineAgentComponent::Deserialize(json& data, HexEngine::JsonFile* file, u
 	_stateTimer = 0.0f;
 	_retryTimer = 0.0f;
 	_navigationReachedFlag = false;
+	_settledVenueName.clear();
+	_heldAtVenue = false;
+	SetConversationPaused(false);
+}
+
+void RoutineAgentComponent::SetConversationPaused(bool paused)
+{
+	_conversationPaused = paused;
+	// Navigation steps itself every frame, independently of the routine system,
+	// so it has to be frozen directly - skipping the routine tick alone would
+	// leave the NPC walking off mid-sentence.
+	if (auto* entity = GetEntity(); entity != nullptr)
+	{
+		if (auto* nav = entity->GetComponent<HexEngine::NavigationComponent>(); nav != nullptr)
+			nav->SetPaused(paused);
+	}
 }
 
 bool RoutineAgentComponent::CreateWidget(HexEngine::ComponentWidget* widget)
@@ -114,14 +156,42 @@ bool RoutineAgentComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 		});
 	vehiclePrefab->SetValue(std::wstring(_preferredVehiclePrefabPath.begin(), _preferredVehiclePrefabPath.end()));
 
+	auto* ownedVehicle = new HexEngine::EntitySearch(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Owned Vehicle");
+	ownedVehicle->SetValue(std::wstring(_ownedVehicleEntityName.begin(), _ownedVehicleEntityName.end()));
+	ownedVehicle->SetOnInputFn([this](HexEngine::EntitySearch* search, const std::wstring& value)
+		{
+			_ownedVehicleEntityName = ws2s(value);
+		});
+	ownedVehicle->SetOnSelectFn([this](HexEngine::EntitySearch* search, const HexEngine::EntitySearchResult& result)
+		{
+			_ownedVehicleEntityName = result.entityName;
+		});
+	ownedVehicle->SetPrefabOverrideBinding(GetComponentName(), "/_ownedVehicleEntityName");
+
 
 	auto* emergencyEligible = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Emergency Eligible", &_isEmergencyEligible);
+
+	auto* schedule = new HexEngine::LineEdit(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Schedule (start-end:Activity, ...)");
+	schedule->SetValue(std::wstring(_scheduleCsv.begin(), _scheduleCsv.end()));
+	schedule->SetDoesCallbackWaitForReturn(false);
+	schedule->SetOnInputFn([this](HexEngine::LineEdit* edit, const std::wstring& value)
+		{
+			_scheduleCsv = ws2s(value);
+			RebuildSchedule();
+		});
+	auto* travel = new HexEngine::DragInt(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Travel (0 auto, 1 walk, 2 drive)", &_travelPreference, 0, 2, 1);
+	auto* walkSpeed = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Walk Speed", &_walkSpeed, 0.2f, 10.0f, 0.05f, 2);
+	auto* jitter = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Schedule Jitter (h)", &_scheduleJitterHours, 0.0f, 4.0f, 0.05f, 2);
 
 	roleTags->SetPrefabOverrideBinding(GetComponentName(), "/_roleTagsCsv");
 	home->SetPrefabOverrideBinding(GetComponentName(), "/_homeEntityName");
 	workplace->SetPrefabOverrideBinding(GetComponentName(), "/_assignedWorkplaceEntityName");
 	vehiclePrefab->SetPrefabOverrideBinding(GetComponentName(), "/_preferredVehiclePrefabPath");
 	emergencyEligible->SetPrefabOverrideBinding(GetComponentName(), "/_isEmergencyEligible");
+	schedule->SetPrefabOverrideBinding(GetComponentName(), "/_scheduleCsv");
+	travel->SetPrefabOverrideBinding(GetComponentName(), "/_travelPreference");
+	walkSpeed->SetPrefabOverrideBinding(GetComponentName(), "/_walkSpeed");
+	jitter->SetPrefabOverrideBinding(GetComponentName(), "/_scheduleJitterHours");
 
 	return true;
 }
@@ -220,4 +290,91 @@ void RoutineAgentComponent::RebuildRoleTags()
 		if (!token.empty())
 			_roleTags.push_back(token);
 	}
+}
+
+void RoutineAgentComponent::RebuildSchedule()
+{
+	_schedule.clear();
+	std::string normalised = _scheduleCsv;
+	std::replace(normalised.begin(), normalised.end(), ';', ',');
+	std::stringstream stream(normalised);
+	std::string token;
+	while (std::getline(stream, token, ','))
+	{
+		token = Trim(token);
+		const auto colon = token.find(':');
+		const auto dash = token.find('-');
+		if (token.empty() || colon == std::string::npos || dash == std::string::npos || dash > colon)
+			continue;
+
+		try
+		{
+			RoutineScheduleBlock block;
+			block.start = std::stof(Trim(token.substr(0, dash)));
+			block.end = std::stof(Trim(token.substr(dash + 1, colon - dash - 1)));
+			block.activity = Trim(token.substr(colon + 1));
+			if (block.activity.empty())
+				continue;
+			block.start = std::clamp(block.start, 0.0f, 24.0f);
+			block.end = std::clamp(block.end, 0.0f, 24.0f);
+			_schedule.push_back(block);
+		}
+		catch (...)
+		{
+		}
+	}
+
+	_plannedBlockKey = ~0ull;
+	_plannedTargetName.clear();
+}
+
+bool RoutineAgentComponent::IsScheduledAtPost(float hour) const
+{
+	auto* self = GetEntity();
+	auto* scene = self != nullptr ? self->GetScene() : nullptr;
+	if (scene == nullptr)
+		return false;
+	PlaceOfWorkComponent* workplace = nullptr;
+	if (!_assignedWorkplaceEntityName.empty())
+		if (auto* work = scene->GetEntityByName(_assignedWorkplaceEntityName); work != nullptr)
+			workplace = work->GetComponent<PlaceOfWorkComponent>();
+
+	// Mirrors CityRoutineSystemComponent's activity choice for an hour.
+	std::string activity = "Home";
+	if (_schedule.empty())
+	{
+		if (workplace != nullptr && workplace->IsHourInAnyShift(hour))
+			activity = "Work";
+	}
+	else
+	{
+		const uint32_t h = HexEngine::CRC32::HashString((self->GetName() + "#0").c_str());
+		const float offset = ((float)(h & 0xFFFFFF) / (float)0x1000000 - 0.5f) * _scheduleJitterHours;
+		const float t = std::fmod(hour - offset + 48.0f, 24.0f);
+		for (const auto& block : _schedule)
+		{
+			const bool in = block.start <= block.end ? (t >= block.start && t < block.end) : (t >= block.start || t < block.end);
+			if (in)
+			{
+				activity = block.activity;
+				break;
+			}
+		}
+	}
+	if (_stricmp(activity.c_str(), "Work") == 0 && workplace == nullptr)
+		activity = "Home";
+
+	// The post is the workplace, or home for agents without one.
+	return workplace != nullptr ? _stricmp(activity.c_str(), "Work") == 0 : _stricmp(activity.c_str(), "Home") == 0;
+}
+
+bool RoutineAgentComponent::WorkplaceOffersService(const std::string& tag) const
+{
+	auto* self = GetEntity();
+	auto* scene = self != nullptr ? self->GetScene() : nullptr;
+	if (scene == nullptr || _assignedWorkplaceEntityName.empty())
+		return false;
+	auto* work = scene->GetEntityByName(_assignedWorkplaceEntityName);
+	auto* place = work != nullptr ? work->GetComponent<PlaceOfWorkComponent>() : nullptr;
+	return place != nullptr && place->OffersService(tag);
 }

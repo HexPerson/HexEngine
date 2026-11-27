@@ -19,10 +19,17 @@
 #include "../../GUI/Elements/LineEdit.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
 #include "../../GUI/Elements/Checkbox.hpp"
-#include "../../GUI/Elements/ColourPicker.hpp"
+#include "../../Input/HVar.hpp"
 
 namespace HexEngine
 {
+	HVar i_interactRange("i_interactRange", "How close (metres from the eye) the player must be to use any interactable",
+		4.0f, 0.5f, 100.0f);
+	HVar i_glowColour("i_glowColour", "Outline glow + name label colour of the focused interactable (linear r g b; >1 = brighter)",
+		math::Vector3(1.0f, 0.85f, 0.3f), math::Vector3(0.0f, 0.0f, 0.0f), math::Vector3(8.0f, 8.0f, 8.0f));
+	HVar i_glowThickness("i_glowThickness", "Outline glow thickness (pixels) of the focused interactable",
+		3.0f, 0.0f, 16.0f);
+
 	namespace
 	{
 		// Centralised focus state - shared by every InteractionComponent. The
@@ -85,13 +92,16 @@ namespace HexEngine
 			const math::Vector3 origin  = tf->GetPosition() + cam->GetViewOffset();
 			const math::Vector3 forward = tf->GetForward();
 
-			// One ray serves all interactables; per-component range is enforced
-			// on the hit. The cap is generous - the range check rejects far hits.
-			const float maxDist = 1000.0f;
+			// One ray, capped at the global reach: the nearest blocker within it
+			// decides (a wall in front of a door still occludes it).
+			const float maxDist = std::max(0.5f, i_interactRange._val.f32);
 			math::Ray ray(origin, forward);
 			RayHit hit;
+			// The camera usually lives on the player entity, and the ray starts
+			// inside the player's own bounds/collider - never hit ourselves.
+			const std::vector<Entity*> ignore{ cam->GetEntity() };
 			if (!PhysUtils::RayCast(ray, maxDist,
-				LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit))
+				LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit, ignore))
 				return nullptr;
 
 			if (hit.entity == nullptr)
@@ -99,7 +109,12 @@ namespace HexEngine
 
 			// GetComponentDerived so subclasses (DoorComponent, ...) are focusable
 			// too - GetComponent<> matches the exact id and would miss them.
-			auto* ic = hit.entity->GetComponentDerived<InteractionComponent>();
+			// Multi-part objects (a vehicle prefab = an empty root carrying the
+			// component + child mesh parts) are hit on a child: walk up to the
+			// nearest ancestor that has one.
+			InteractionComponent* ic = nullptr;
+			for (Entity* e = hit.entity; e != nullptr && ic == nullptr; e = e->GetParent())
+				ic = e->GetComponentDerived<InteractionComponent>();
 			if (ic == nullptr || !ic->IsEnabled())
 				return nullptr;
 			if (hit.distance > ic->GetInteractionRange())
@@ -123,9 +138,6 @@ namespace HexEngine
 			return;
 		_interactableName = clone->_interactableName;
 		_prompt           = clone->_prompt;
-		_interactionRange = clone->_interactionRange;
-		_highlightColour  = clone->_highlightColour;
-		_outlineThickness = clone->_outlineThickness;
 		_enabled          = clone->_enabled;
 		_interactKey      = clone->_interactKey;
 		_callback         = clone->_callback;
@@ -164,12 +176,27 @@ namespace HexEngine
 	void InteractionComponent::SetEditorFocusOverride(InteractionComponent* ic)
 	{
 		s_editorFocusOverride = ic;
+	}
 
-		if (ic)
-		{
-			ic->_outlineThickness = 16.0f;
-			ic->_highlightColour = math::Color(HEX_RGB_TO_FLOAT3(63, 72, 204));
-		}
+	float InteractionComponent::GetInteractionRange() const
+	{
+		return i_interactRange._val.f32;
+	}
+
+	math::Color InteractionComponent::GetHighlightColour() const
+	{
+		// Editor material drag-hover: a distinct blue, thick outline.
+		if (s_editorFocusOverride == this)
+			return math::Color(HEX_RGB_TO_FLOAT3(63, 72, 204));
+		const math::Vector3& c = i_glowColour._val.v3;
+		return math::Color(c.x, c.y, c.z, 1.0f);
+	}
+
+	float InteractionComponent::GetOutlineThickness() const
+	{
+		if (s_editorFocusOverride == this)
+			return 16.0f;
+		return i_glowThickness._val.f32;
 	}
 
 	void InteractionComponent::OnGUI()
@@ -199,7 +226,7 @@ namespace HexEngine
 		if (!_interactableName.empty())
 		{
 			std::wstring name = ToWide(_interactableName);
-			renderer->PrintText(font, (uint8_t)Style::FontSize::Large, cx, cy, _highlightColour,
+			renderer->PrintText(font, (uint8_t)Style::FontSize::Large, cx, cy, GetHighlightColour(),
 								FontAlign::CentreLR | FontAlign::CentreUD, name);
 		}
 
@@ -227,9 +254,8 @@ namespace HexEngine
 	{
 		SERIALIZE_VALUE(_interactableName);
 		SERIALIZE_VALUE(_prompt);
-		SERIALIZE_VALUE(_interactionRange);
-		SERIALIZE_VALUE(_highlightColour);
-		SERIALIZE_VALUE(_outlineThickness);
+		// Range / glow colour / thickness are global now (i_* cvars); old
+		// per-component keys in scenes and prefabs are ignored on load.
 		SERIALIZE_VALUE(_enabled);
 		SERIALIZE_VALUE(_interactKey);
 	}
@@ -238,9 +264,6 @@ namespace HexEngine
 	{
 		DESERIALIZE_VALUE(_interactableName);
 		DESERIALIZE_VALUE(_prompt);
-		DESERIALIZE_VALUE(_interactionRange);
-		DESERIALIZE_VALUE(_highlightColour);
-		DESERIALIZE_VALUE(_outlineThickness);
 		DESERIALIZE_VALUE(_enabled);
 		DESERIALIZE_VALUE(_interactKey);
 	}
@@ -260,16 +283,6 @@ namespace HexEngine
 		promptEdit->SetDoesCallbackWaitForReturn(true);
 		promptEdit->SetOnInputFn([this](LineEdit*, const std::wstring& text) { _prompt = ToNarrow(text); });
 		promptEdit->SetPrefabOverrideBinding(GetComponentName(), "/_prompt");
-
-		new DragFloat(widget, widget->GetNextPos(), Point(fullWidth, 18), L"Range",
-			&_interactionRange, 0.0f, 1000.0f, 0.5f);
-
-		ColourPicker* picker = new ColourPicker(widget, widget->GetNextPos(),
-			Point(widget->GetSize().x - 140, 18), L"Glow Colour", &_highlightColour);
-		picker->SetPrefabOverrideBinding(GetComponentName(), "/_highlightColour");
-
-		new DragFloat(widget, widget->GetNextPos(), Point(fullWidth, 18), L"Outline Thickness",
-			&_outlineThickness, 0.0f, 16.0f, 0.1f);
 
 		Checkbox* enabled = new Checkbox(widget, widget->GetNextPos(), Point(fullWidth, 18), L"Enabled", &_enabled);
 		enabled->SetPrefabOverrideBinding(GetComponentName(), "/_enabled");

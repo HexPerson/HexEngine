@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <atomic>
+#include <mutex>
 #include <HexEngine.Core/Graphics/IGraphicsDevice.hpp>
 #include "Texture2D.hpp"
 #include "Texture3D.hpp"
@@ -224,6 +226,8 @@ public:
 	virtual void BeginFrame(HexEngine::Window* window, HexEngine::ITexture2D* depthBuffer) override;
 
 	virtual void EndFrame(HexEngine::Window* window) override;
+	virtual bool RequestBackBufferCapture(const std::wstring& absolutePath) override;
+	virtual int32_t GetBackBufferCaptureState() const override { return _bbCaptureState.load(); }
 
 	virtual void SetViewports(const std::vector<HexEngine::Viewport>& viewports) override;
 	virtual void SetViewport(const HexEngine::Viewport& viewport) override;
@@ -244,7 +248,12 @@ public:
 
 	virtual void ResetState() override;
 
+	virtual void SetTextureMipBias(float bias) override;
+
 private:
+	// s0: CommonStates' anisotropic wrap, or a copy with _texMipBias applied.
+	ID3D11SamplerState* GetMaterialSampler() const;
+
 	bool CreateFactory();
 
 	bool CreateInternal();
@@ -337,6 +346,12 @@ private:
 
 	std::unordered_map<HexEngine::Window*, DeviceData> _deviceData;
 
+	// Back-buffer capture (RequestBackBufferCapture): serviced in EndFrame before Present.
+	void ServiceBackBufferCapture(IDXGISwapChain* swapchain);
+	std::mutex _bbCaptureLock;
+	std::wstring _bbCapturePath;
+	std::atomic<int32_t> _bbCaptureState{ 0 };
+
 
 	//ShadowMap* _shadowMap[4];
 	//GBuffer _gbuffer;
@@ -350,6 +365,8 @@ private:
 	//ID3D11SamplerState* _texSamplerWrap = nullptr;
 	ID3D11SamplerState* _texSamplerComparison = nullptr;
 	ID3D11SamplerState* _texSamplerMirrored = nullptr;
+	ID3D11SamplerState* _texSamplerBiased = nullptr;	// anisotropic wrap + _texMipBias (null when the bias is 0)
+	float _texMipBias = 0.0f;
 
 	dx::CommonStates* _states = nullptr;
 	math::Color _clearColour;

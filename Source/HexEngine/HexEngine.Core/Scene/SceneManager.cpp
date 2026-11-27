@@ -23,6 +23,14 @@ namespace HexEngine
 		}
 
 		_scenes.clear();
+		_currentScene.reset();
+
+		{
+			std::lock_guard ownedLock(_ownedScenesLock);
+			for (Scene* scene : _ownedScenes)
+				scene->SetLoader(nullptr);
+			_ownedScenes.clear();
+		}
 
 		g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 	}
@@ -35,6 +43,7 @@ namespace HexEngine
 
 		if (!file.Load())
 		{
+			UnloadScene(scene.get()); // registered above - unregister or it lingers in _scenes
 			scene.reset();
 			LOG_CRIT("Failed to load scene");
 			return nullptr;
@@ -59,15 +68,26 @@ namespace HexEngine
 
 		scene->Destroy();
 
-		_scenes.erase(std::remove_if(_scenes.begin(), _scenes.end(),
-			[scene](std::shared_ptr<Scene> sp) {
-				return sp.get() == scene;
-			}), _scenes.end());
-
-		delete scene;					
+		// Unregister only - do NOT delete. Callers (and _currentScene, prefab
+		// resources, editor stages) hold shared_ptrs; deleting here left every one of
+		// them dangling and their deleter later ran on freed memory. The scene is
+		// freed when the last reference drops (ResourceDeleter -> UnloadResource).
+		// Keep the released references alive until we're done touching the vector so
+		// that final release can't re-enter mid-erase.
+		std::vector<std::shared_ptr<Scene>> released;
+		for (auto it = _scenes.begin(); it != _scenes.end();)
+		{
+			if (it->get() == scene)
+			{
+				released.push_back(std::move(*it));
+				it = _scenes.erase(it);
+			}
+			else
+				++it;
+		}
 
 		if (scene == _currentScene.get())
-			_currentScene = nullptr;
+			released.push_back(std::move(_currentScene));
 	}
 
 	std::shared_ptr<Scene> SceneManager::CreateEmptyScene(bool createSkySphere, IEntityListener* listener, bool registerScene)
@@ -75,6 +95,15 @@ namespace HexEngine
 		std::unique_lock lock(_mutex);
 
 		std::shared_ptr<Scene> scene = std::shared_ptr<Scene>(new Scene, ResourceDeleter());
+
+		// Without a loader the deleter could only log "no associated resource loader"
+		// and leak the scene with all its entities (every prefab load/instantiate,
+		// prefab save and editor temp scene).
+		scene->SetLoader(this);
+		{
+			std::lock_guard ownedLock(_ownedScenesLock);
+			_ownedScenes.insert(scene.get());
+		}
 
 		if (_currentScene == nullptr && registerScene == true)
 			_currentScene = scene;
@@ -255,7 +284,21 @@ namespace HexEngine
 
 	void SceneManager::UnloadResource(IResource* resource)
 	{
-		UnloadScene(reinterpret_cast<Scene*>(resource));
+		// Reached when the last shared_ptr to a scene is released, so it is in neither
+		// _scenes nor _currentScene - don't touch those (this can run from inside their
+		// own erase/reset). Scene derives from IDebugGUICallback first, so the IResource
+		// pointer must be cast, not reinterpreted.
+		Scene* scene = dynamic_cast<Scene*>(resource);
+		if (scene == nullptr)
+			return;
+
+		{
+			std::lock_guard ownedLock(_ownedScenesLock);
+			_ownedScenes.erase(scene);
+		}
+
+		scene->Destroy(); // idempotent; most scenes were never explicitly unloaded
+		delete scene;
 	}
 
 	std::vector<std::string> SceneManager::GetSupportedResourceExtensions()

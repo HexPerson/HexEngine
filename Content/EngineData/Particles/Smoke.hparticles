@@ -1,0 +1,121 @@
+{
+  "emitters": [
+    {
+      "alphaOverLifetime": [
+        1.0,
+        1.0
+      ],
+      "alphaOverLifetimeCurve": [
+        0.0,
+        0.7499998807907104,
+        0.0
+      ],
+      "alphaOverLifetimeCurveMidpoint": 0.15000000596046448,
+      "axisLock": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "blendMode": 3,
+      "constantForce": [
+        0.0,
+        0.6499999761581421,
+        0.0
+      ],
+      "drag": 0.9299998879432678,
+      "emission": {
+        "burst": 0,
+        "duration": 6.0,
+        "enabled": true,
+        "looping": true,
+        "prewarmTime": 1.5,
+        "rate": 2.0
+      },
+      "enabled": true,
+      "endColor": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "facingMode": 0,
+      "flipbook": {
+        "columns": 8,
+        "enabled": true,
+        "framesPerSecond": 30.0,
+        "rows": 8,
+        "stretchToLifetime": true
+      },
+      "gravity": [
+        0.0,
+        -0.05000000074505806,
+        0.0
+      ],
+      "lifetimeRange": [
+        2.5,
+        4.5
+      ],
+      "materialPath": "EngineData.Materials/Billboard.hmat",
+      "maxParticles": 3167,
+      "meshPath": "",
+      "name": "SmokeMain",
+      "noiseAmplitude": 0.41999998688697815,
+      "noiseFrequency": 0.10000000149011612,
+      "orbitalStrength": 1.0,
+      "overrideReceiveLighting": false,
+      "overrideReceiveLightingEnabled": false,
+      "prewarm": true,
+      "renderMode": 0,
+      "rotationSpeedRange": [
+        -30.0,
+        30.0
+      ],
+      "seed": 1212,
+      "shape": {
+        "boxExtents": [
+          0.4000000059604645,
+          0.20000000298023224,
+          0.4000000059604645
+        ],
+        "coneAngleDegrees": 18.0,
+        "enabled": true,
+        "innerRadius": 0.05000000074505806,
+        "lineLength": 0.5,
+        "radius": 0.44999998807907104,
+        "randomDirection": false,
+        "type": 5
+      },
+      "simulateInLocalSpace": false,
+      "sizeOverLifetime": [
+        0.10000000149011612,
+        2.799999952316284
+      ],
+      "sizeRange": [
+        0.009999999776482582,
+        1.0
+      ],
+      "softParticles": true,
+      "speedOverLifetime": [
+        1.0,
+        0.3499999940395355
+      ],
+      "speedRange": [
+        0.3,
+        0.5
+      ],
+      "startColor": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "texturePath": "EngineData.Textures/Particles/smoke04.tga",
+      "useThreePointAlphaCurve": true,
+      "velocityInheritance": 0.15000000596046448
+    }
+  ],
+  "name": "Smoke",
+  "oneShot": false,
+  "seed": 777,
+  "version": 1
+}

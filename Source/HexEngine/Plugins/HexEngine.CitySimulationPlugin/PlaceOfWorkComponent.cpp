@@ -1,4 +1,5 @@
 #include "PlaceOfWorkComponent.hpp"
+#include "CityAnchorUtils.hpp"
 #include <HexEngine.Core/GUI/Elements/ComponentWidget.hpp>
 #include <HexEngine.Core/GUI/Elements/DragInt.hpp>
 #include <HexEngine.Core/GUI/Elements/EntitySearch.hpp>
@@ -21,6 +22,7 @@ PlaceOfWorkComponent::PlaceOfWorkComponent(HexEngine::Entity* entity) :
 {
 	RebuildRoleTags();
 	RebuildShiftsFromCsv();
+	RebuildServiceTags();
 }
 
 PlaceOfWorkComponent::PlaceOfWorkComponent(HexEngine::Entity* entity, PlaceOfWorkComponent* copy) :
@@ -34,10 +36,13 @@ PlaceOfWorkComponent::PlaceOfWorkComponent(HexEngine::Entity* entity, PlaceOfWor
 		_shiftWindowsCsv = copy->_shiftWindowsCsv;
 		_entryWaypointEntityName = copy->_entryWaypointEntityName;
 		_parkingWaypointEntityName = copy->_parkingWaypointEntityName;
+		_serviceTagsCsv = copy->_serviceTagsCsv;
+		_visitorCapacity = copy->_visitorCapacity;
 	}
 
 	RebuildRoleTags();
 	RebuildShiftsFromCsv();
+	RebuildServiceTags();
 }
 
 void PlaceOfWorkComponent::Serialize(json& data, HexEngine::JsonFile* file)
@@ -48,6 +53,8 @@ void PlaceOfWorkComponent::Serialize(json& data, HexEngine::JsonFile* file)
 	file->Serialize(data, "_shiftWindowsCsv", _shiftWindowsCsv);
 	file->Serialize(data, "_entryWaypointEntityName", _entryWaypointEntityName);
 	file->Serialize(data, "_parkingWaypointEntityName", _parkingWaypointEntityName);
+	file->Serialize(data, "_serviceTagsCsv", _serviceTagsCsv);
+	file->Serialize(data, "_visitorCapacity", _visitorCapacity);
 }
 
 void PlaceOfWorkComponent::Deserialize(json& data, HexEngine::JsonFile* file, uint32_t mask)
@@ -59,9 +66,12 @@ void PlaceOfWorkComponent::Deserialize(json& data, HexEngine::JsonFile* file, ui
 	file->Deserialize(data, "_shiftWindowsCsv", _shiftWindowsCsv);
 	file->Deserialize(data, "_entryWaypointEntityName", _entryWaypointEntityName);
 	file->Deserialize(data, "_parkingWaypointEntityName", _parkingWaypointEntityName);
+	file->Deserialize(data, "_serviceTagsCsv", _serviceTagsCsv);
+	file->Deserialize(data, "_visitorCapacity", _visitorCapacity);
 
 	RebuildRoleTags();
 	RebuildShiftsFromCsv();
+	RebuildServiceTags();
 }
 
 bool PlaceOfWorkComponent::CreateWidget(HexEngine::ComponentWidget* widget)
@@ -86,6 +96,16 @@ bool PlaceOfWorkComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 			_shiftWindowsCsv = ws2s(value);
 			RebuildShiftsFromCsv();
 		});
+
+	auto* services = new HexEngine::LineEdit(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Visitor Services (CSV)");
+	services->SetValue(std::wstring(_serviceTagsCsv.begin(), _serviceTagsCsv.end()));
+	services->SetDoesCallbackWaitForReturn(false);
+	services->SetOnInputFn([this](HexEngine::LineEdit* edit, const std::wstring& value)
+		{
+			_serviceTagsCsv = ws2s(value);
+			RebuildServiceTags();
+		});
+	auto* visitors = new HexEngine::DragInt(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Visitor Capacity", &_visitorCapacity, 0, 100000, 1);
 
 	auto* entry = new HexEngine::EntitySearch(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Entry Waypoint");
 	entry->SetValue(std::wstring(_entryWaypointEntityName.begin(), _entryWaypointEntityName.end()));
@@ -115,6 +135,8 @@ bool PlaceOfWorkComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 	shifts->SetPrefabOverrideBinding(GetComponentName(), "/_shiftWindowsCsv");
 	entry->SetPrefabOverrideBinding(GetComponentName(), "/_entryWaypointEntityName");
 	parking->SetPrefabOverrideBinding(GetComponentName(), "/_parkingWaypointEntityName");
+	services->SetPrefabOverrideBinding(GetComponentName(), "/_serviceTagsCsv");
+	visitors->SetPrefabOverrideBinding(GetComponentName(), "/_visitorCapacity");
 
 	return true;
 }
@@ -138,6 +160,39 @@ bool PlaceOfWorkComponent::IsHourInAnyShift(float hour) const
 		}
 	}
 	return false;
+}
+
+bool PlaceOfWorkComponent::OffersService(const std::string& tag) const
+{
+	for (const auto& s : _serviceTags)
+	{
+		if (_stricmp(s.c_str(), tag.c_str()) == 0)
+			return true;
+	}
+	return false;
+}
+
+std::string PlaceOfWorkComponent::ResolveEntryWaypointName() const
+{
+	return CityAnchors::ResolveNameCached(GetEntity(), _entryWaypointEntityName, _entryResolveCache);
+}
+
+std::string PlaceOfWorkComponent::ResolveParkingWaypointName() const
+{
+	return CityAnchors::ResolveNameCached(GetEntity(), _parkingWaypointEntityName, _parkingResolveCache);
+}
+
+void PlaceOfWorkComponent::RebuildServiceTags()
+{
+	_serviceTags.clear();
+	std::stringstream stream(_serviceTagsCsv);
+	std::string token;
+	while (std::getline(stream, token, ','))
+	{
+		token = Trim(token);
+		if (!token.empty())
+			_serviceTags.push_back(token);
+	}
 }
 
 void PlaceOfWorkComponent::RebuildRoleTags()

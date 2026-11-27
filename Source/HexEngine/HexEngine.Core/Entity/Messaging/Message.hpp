@@ -25,6 +25,7 @@ namespace HexEngine
 		EditorSceneViewportMouseDown,
 		EditorSceneViewportMouseMove,
 		EditorWorldRayCast,
+		AnimationEvent,	// AnimationEventMessage: a clip event was passed during playback
 
 		CustomMessage,	// custom game messages should start here
 	};
@@ -120,6 +121,12 @@ namespace HexEngine
 
 		Entity* trigger = nullptr;
 		EntityId triggerId = InvalidEntityId;
+
+		// The entity on the other side of the overlap. Physics delivers the
+		// message to BOTH sides: to the entering body (other = the trigger)
+		// and to the trigger itself (other = the entering body).
+		Entity* other = nullptr;
+		EntityId otherId = InvalidEntityId;
 	};
 
 	class LeaveTriggerMessage : public Message
@@ -129,6 +136,12 @@ namespace HexEngine
 
 		Entity* trigger = nullptr;
 		EntityId triggerId = InvalidEntityId;
+
+		// The entity on the other side of the overlap. Physics delivers the
+		// message to BOTH sides: to the entering body (other = the trigger)
+		// and to the trigger itself (other = the entering body).
+		Entity* other = nullptr;
+		EntityId otherId = InvalidEntityId;
 	};
 
 	class RigidBodyCollision : public Message
@@ -243,5 +256,23 @@ namespace HexEngine
 		Entity* hitEntity = nullptr;
 		EntityId hitEntityId = InvalidEntityId;
 		float hitDistance = 0.0f;
+	};
+
+	// A clip event (AnimationEvent) passed during playback. Sent by the entity's
+	// SkeletalAnimationComponent to every component on the same entity.
+	class AnimationEventMessage : public Message
+	{
+	public:
+		AnimationEventMessage(const std::string& name, uint32_t clipIndex, float time) :
+			Message(MessageId::AnimationEvent),
+			eventName(name),
+			clip(clipIndex),
+			ticks(time)
+		{
+		}
+
+		std::string eventName;
+		uint32_t clip = 0;
+		float ticks = 0.0f;
 	};
 }

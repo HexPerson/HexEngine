@@ -6,9 +6,15 @@
     "brotli",
     "cxxopts",
     "directxtk",
+    "directx-dxc",
     "directxtex",
     "freetype",
     "gamenetworkingsockets",
-    "nlohmann-json"
+    {
+      "name": "lua",
+      "features": [ "cpp" ]
+    },
+    "nlohmann-json",
+    "sol2"
   ]
 }

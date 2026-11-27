@@ -37,9 +37,13 @@ namespace HexEngine
 		void EnableBackgroundBlur(bool enable);
 		ITexture2D* GetBlurredBackground() const;
 
-		Element* GetRootElement() const;		
+		Element* GetRootElement() const;
 		void Lock();
 		void Unlock();
+
+		// Delete elements queued by DeleteMe now instead of next Update - e.g.
+		// before unloading a module whose widgets/callbacks they still hold.
+		void FlushPendingDeletions() { HandleDeletions(); }
 
 	private:
 		void RenderElement(Element* element, GuiRenderer* renderer);

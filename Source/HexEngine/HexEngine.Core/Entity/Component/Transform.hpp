@@ -65,6 +65,7 @@ namespace HexEngine
 		math::Vector3 ToEulerAngles();
 
 		void EnableInterpolation(bool enable);
+		bool IsInterpolationEnabled() const { return _enableInterpolation; }
 
 		// Collapse the interpolation history (previous/interpolated) onto the
 		// current state so GetPosition(Interpolated) - and therefore GetWorldTM -
@@ -101,6 +102,11 @@ namespace HexEngine
 		// to its pre-drag value; nothing is recorded for undo).
 		static void SetEditorGizmoMode(EditorGizmoMode mode);
 		static EditorGizmoMode GetEditorGizmoMode();
+
+		// The gizmos poll the mouse button directly, so the editor turns them off
+		// while the scene view is hidden behind another workspace tab - otherwise a
+		// click in, say, the animation editor would drag the hidden selected entity.
+		static void SetEditorGizmosEnabled(bool enabled);
 
 		virtual void OnMessage(Message* message, MessageListener* sender) override;
 		virtual void Serialize(json& data, JsonFile* file) override;

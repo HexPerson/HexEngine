@@ -98,6 +98,19 @@ namespace HexEngine
 		void EnableDLSS(bool enable);
 		bool IsDLSSEnabled() const;
 
+		// Temporal upscaling through the IUpscalerProvider plugin (FSR 2). Renders at
+		// the quality preset's internal size and upscales to the viewport. Mutually
+		// exclusive with DLSS - enabling either turns the other off.
+		void EnableFSR(bool enable);
+		bool IsFSREnabled() const;
+		void SetFSRQuality(int32_t quality);	// UpscalerQuality
+		int32_t GetFSRQuality() const { return _fsrQuality; }
+
+		// Any upscaler active: GetViewport() is the internal render size and
+		// GetDisplayViewport() the output size.
+		bool IsUpscalingEnabled() const { return IsDLSSEnabled() || IsFSREnabled(); }
+		const math::Viewport& GetDisplayViewport() const { return _viewport; }
+
 		float GetYaw();
 		float GetPitch();
 		float GetRoll();
@@ -166,12 +179,27 @@ namespace HexEngine
 
 		PVS* GetPVS() const;		
 
+		// Hold the camera at a fixed pose regardless of game/editor logic: re-applied at
+		// the start of every Update, before the view matrix is built. Used by the editor
+		// bridge to capture from an arbitrary viewpoint while a game camera controller is
+		// driving this camera (play mode). Clear it to hand control back. The state lives
+		// in a side table in Camera.cpp so the class layout (allocated inline by the
+		// editor and game modules via AddComponent<Camera>) is unchanged.
+		void SetPoseOverride(const math::Vector3& position, float pitchDegrees, float yawDegrees, float rollDegrees);
+		void ClearPoseOverride();
+		bool HasPoseOverride() const;
+
 		void AddEffect(CameraEffect effect);
 		void RemoveEffect(CameraEffect effect);
 		void ToggleEffect(CameraEffect effect);
 		CameraEffect GetCameraEffects() const;
 
 		virtual void OnDebugRender() override;
+
+		// Rebuild rotation + view from the current transform/angles now - for code
+		// that moves the camera's entity after Camera::Update ran this frame
+		// (a player riding a bus follows it in a post-update pass).
+		void RefreshViewMatrix() { UpdateRotation(); ConstructViewMatrix(); }
 
 	private:
 		void ConstructProjectionMatrix();
@@ -227,6 +255,11 @@ namespace HexEngine
 
 		bool _dlssEnabled = false;
 		bool _dlssValueChanged = false;
+
+		// FSR shares _dlssViewport as the internal render viewport.
+		bool _fsrEnabled = false;
+		bool _fsrValueChanged = false;
+		int32_t _fsrQuality = 1;	// UpscalerQuality::Quality
 
 		CameraEffect _effects = CameraEffect::None;
 

@@ -1,7 +1,9 @@
 
 
 #include "Scene.hpp"
+#include "../Physics/PhysUtils.hpp"
 #include "../HexEngine.hpp"
+#include "../Entity/Component/SkeletalAnimationComponent.hpp"
 #include "NetworkReplicationSystem.hpp"
 #include <algorithm>
 #include <chrono>
@@ -11,13 +13,16 @@
 
 #include "../Entity/Component/Transform.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
+#include "../Entity/Component/InteractionComponent.hpp"
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/FirstPersonCameraController.hpp"
 #include "../Entity/Component/InstancedStaticMeshComponent.hpp"
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
+#include "../Entity/Component/TerrainCutout.hpp"
 #include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "PVS.hpp"
+#include "../Physics/RayMath.hpp"
 
 namespace HexEngine
 {
@@ -221,12 +226,24 @@ namespace HexEngine
 	{
 		uint32_t index = 0;
 
-		if (!_freeEntitySlotIndices.empty())
+		bool reused = false;
+		while (!_freeEntitySlotIndices.empty())
 		{
 			index = _freeEntitySlotIndices.back();
 			_freeEntitySlotIndices.pop_back();
+			if (index < _entitySlots.size() && !_entitySlots[index].alive)
+			{
+				reused = true;
+				break;
+			}
+
+			// FreeEntityId refuses stale frees, so this means the free list was corrupted
+			// some other way - never hand a live slot to a second entity.
+			LOG_WARN("Scene: free entity slot %u is still alive (entity %p) - skipped", index,
+				index < _entitySlots.size() ? (void*)_entitySlots[index].entity : nullptr);
 		}
-		else
+
+		if (!reused)
 		{
 			index = static_cast<uint32_t>(_entitySlots.size());
 			_entitySlots.emplace_back();
@@ -255,6 +272,17 @@ namespace HexEngine
 			return;
 
 		EntitySlot& slot = _entitySlots[id.index];
+		if (!slot.alive || slot.generation != id.generation)
+		{
+			// A stale id (already freed, or an older generation). Freeing it anyway
+			// pushed the index onto the free list a second time and two entities
+			// later shared the slot: one ended up deleted-but-live (crash on the next
+			// scene walk), the other unreachable (survived play-stop teardown).
+			LOG_WARN("Scene: ignoring free of stale entity id %u:%u (slot alive %d, generation %u)",
+				id.index, id.generation, slot.alive ? 1 : 0, slot.generation);
+			return;
+		}
+
 		slot.alive = false;
 		slot.inLiveList = false;
 		slot.denseEntityIndex = InvalidDenseIndex;
@@ -330,9 +358,14 @@ namespace HexEngine
 
 		if (geometryChanged)
 		{
-			++_giGeometryRevision;
-			++_shadowGeometryRevision;
+			// Resolved at the end of the frame (ProcessPendingGiMeshes): only bumps
+			// the GI geometry revision if this mesh is / was part of the GI world.
+			_giPendingMeshes[component] = true;
 			_giSpatialCacheDirty = true;
+			if (auto* entity = component->GetEntity())
+				RecordShadowDirty(entity);
+			else
+				PushShadowDirtyRegion(dx::BoundingSphere(math::Vector3::Zero, FLT_MAX));
 		}
 
 		if (materialChanged)
@@ -343,11 +376,70 @@ namespace HexEngine
 		if (r_giLogInvalidations._val.b && (geometryChanged || materialChanged))
 		{
 			auto* entity = component->GetEntity();
-			LOG_INFO("GI %s%sRev bump (mesh '%s')",
+			LOG_INFO("GI %s%sRev %s (mesh '%s')",
 				geometryChanged ? "geom" : "",
 				materialChanged ? (geometryChanged ? "+mat" : "mat") : "",
+				geometryChanged ? "check queued" : "bump",
 				entity != nullptr ? entity->GetName().c_str() : "<null>");
 		}
+	}
+
+	void Scene::RecordShadowDirty(Entity* entity)
+	{
+		// Non-casters never appear in a shadow map, so moving one can't stale a tile.
+		if (!entity->GetCastsShadows())
+		{
+			entity->_hasLastShadowBounds = false;
+			return;
+		}
+
+		const dx::BoundingSphere now = entity->GetWorldBoundingSphere();
+		const bool valid = RayMath::IsFinite(now.Radius) && RayMath::IsFinite(now.Center.x) &&
+			RayMath::IsFinite(now.Center.y) && RayMath::IsFinite(now.Center.z);
+		if (!valid)
+		{
+			entity->_hasLastShadowBounds = false;
+			PushShadowDirtyRegion(dx::BoundingSphere(math::Vector3::Zero, FLT_MAX));
+			return;
+		}
+
+		dx::BoundingSphere region = now;
+		if (entity->_hasLastShadowBounds)
+			dx::BoundingSphere::CreateMerged(region, entity->_lastShadowBounds, now);
+		entity->_lastShadowBounds = now;
+		entity->_hasLastShadowBounds = true;
+		PushShadowDirtyRegion(region);
+	}
+
+	void Scene::PushShadowDirtyRegion(const dx::BoundingSphere& bounds)
+	{
+		_shadowDirtyRegions.push_back({ ++_shadowDirtySeq, bounds });
+		if (_shadowDirtyRegions.size() > kMaxShadowDirtyRegions)
+		{
+			_shadowDirtyFloorSeq = _shadowDirtyRegions.front().seq;
+			_shadowDirtyRegions.pop_front();
+		}
+	}
+
+	uint64_t Scene::GetShadowDirtySequence()
+	{
+		std::unique_lock lock(_lock);
+		return _shadowDirtySeq;
+	}
+
+	bool Scene::IsShadowVolumeDirtySince(uint64_t sinceSeq, const dx::BoundingSphere& volume)
+	{
+		std::unique_lock lock(_lock);
+		if (sinceSeq >= _shadowDirtySeq)
+			return false;
+		if (sinceSeq < _shadowDirtyFloorSeq)
+			return true; // regions newer than sinceSeq were dropped by the cap
+		for (auto it = _shadowDirtyRegions.rbegin(); it != _shadowDirtyRegions.rend() && it->seq > sinceSeq; ++it)
+		{
+			if (it->bounds.Radius == FLT_MAX || it->bounds.Intersects(volume))
+				return true;
+		}
+		return false;
 	}
 
 	void Scene::NotifyEntityTransformChanged(Entity* entity)
@@ -360,18 +452,26 @@ namespace HexEngine
 		// not a dirty flag - a full rebuild per moving entity would defeat it).
 		UpdatePvsSpatialEntriesForEntity(entity);
 
-		// Shadow revision: UNCONDITIONAL for anything with a mesh, unlike the
+		// The sky dome follows the camera every frame (UpdateSkySphereMatrix). It
+		// never casts a shadow and is never GI geometry, so its moves must not
+		// invalidate either - as a meshed mover it re-dirtied every shadow-atlas
+		// face every frame and queued a GI rebake every few frames while the
+		// camera moved.
+		if (entity->GetLayer() == Layer::Sky)
+			return;
+
+		// Shadow invalidation: UNCONDITIONAL for anything with a mesh, unlike the
 		// GI revision below which inherits GI's exclusions and debounce. The
 		// shadow atlas first keyed off the GI revision and objects flagged
 		// ExcludeFromGI (small props) silently stopped invalidating shadow
 		// tiles - a dragged trash can kept its stale shadow (user-found).
-		// Per-frame bumps while dragging are fine: the atlas render budget
-		// bounds the refresh cost, and a live shadow during the drag is what
-		// you want anyway.
+		// Regional, though: only atlas faces whose light volume the move
+		// touches re-render (a scene-wide revision re-dirtied every shadowed
+		// light whenever any NPC or car moved anywhere).
 		if (auto* anyMesh = entity->GetComponent<StaticMeshComponent>();
 			anyMesh != nullptr && anyMesh->GetMesh() != nullptr)
 		{
-			++_shadowGeometryRevision;
+			RecordShadowDirty(entity);
 		}
 
 		// GI motion debounce - deterministic-GI era. Movers STAY in the voxel
@@ -382,7 +482,7 @@ namespace HexEngine
 		// cheap enough to run at a THROTTLED cadence while the mesh moves -
 		// its GI pose lags a few frames, but its light never disappears.
 		if (auto* staticMesh = entity->GetComponent<StaticMeshComponent>();
-			staticMesh != nullptr && staticMesh->GetMesh() != nullptr && !staticMesh->GetExcludeFromGI())
+			staticMesh != nullptr && staticMesh->GetMesh() != nullptr && !staticMesh->GetExcludeFromGI() && staticMesh->GetGiCounted())
 		{
 			constexpr uint64_t kMovingRebakeFrames = 4ull;
 			auto it = _giMovingMeshes.find(staticMesh);
@@ -410,15 +510,64 @@ namespace HexEngine
 			}
 		}
 
-		if (entity->GetComponent<PointLight>() != nullptr ||
-			entity->GetComponent<SpotLight>() != nullptr ||
-			entity->GetComponent<DirectionalLight>() != nullptr)
+		// Only lights the voxel GI actually consumes: the sun always, local lights
+		// only when injected. A moving non-injected light (a vehicle headlight
+		// with _injectIntoGI off) used to bump the light revision every frame and
+		// relight the whole GI volume for nothing.
+		const auto* movedPoint = entity->GetComponent<PointLight>();
+		const auto* movedSpot = entity->GetComponent<SpotLight>();
+		if (entity->GetComponent<DirectionalLight>() != nullptr ||
+			(movedPoint != nullptr && movedPoint->GetInjectIntoGI()) ||
+			(movedSpot != nullptr && movedSpot->GetInjectIntoGI()))
 		{
 			++_giLightRevision;
 			if (r_giLogInvalidations._val.b)
 				LOG_INFO("GI lightRev bump -> %llu (light entity moved '%s')",
 					(unsigned long long)_giLightRevision, entity->GetName().c_str());
 		}
+	}
+
+	bool Scene::IsGiContributor(StaticMeshComponent* smc) const
+	{
+		if (smc == nullptr || smc->GetMesh() == nullptr || smc->GetExcludeFromGI() || smc->IsGiMotionExcluded())
+			return false;
+		Entity* entity = smc->GetEntity();
+		if (entity == nullptr || entity->IsPendingDeletion() || entity->GetLayer() == Layer::Sky)
+			return false;
+		if (smc->IsBoundToBone() || entity->HasA<SkeletalAnimationComponent>())
+			return false;   // characters: see DiffuseGI IsGiCharacterMesh
+		if (entity->HasFlag(EntityFlags::DoNotRender) && !smc->GetIncludeInGIWhenHidden())
+			return false;
+		return true;
+	}
+
+	void Scene::ProcessPendingGiMeshes()
+	{
+		// Caller (Scene::Update) holds _lock.
+		if (_giPendingMeshes.empty())
+			return;
+		uint32_t changed = 0;
+		const char* firstName = nullptr;
+		for (const auto& [smc, geometryChanged] : _giPendingMeshes)
+		{
+			const bool contributes = IsGiContributor(smc);
+			if (contributes != smc->GetGiCounted() || (geometryChanged && contributes))
+			{
+				++changed;
+				if (firstName == nullptr && smc->GetEntity() != nullptr)
+					firstName = smc->GetEntity()->GetName().c_str();
+			}
+			smc->SetGiCounted(contributes);
+		}
+		_giPendingMeshes.clear();
+		if (changed == 0)
+			return;
+		++_giGeometryRevision;
+		++_giMaterialRevision;
+		_giSpatialCacheDirty = true;
+		if (r_giLogInvalidations._val.b)
+			LOG_INFO("GI geomRev bump -> %llu (%u mesh(es) added/changed, e.g. '%s')",
+				(unsigned long long)_giGeometryRevision, changed, firstName != nullptr ? firstName : "?");
 	}
 
 	void Scene::UpdateGiMotionDebounce()
@@ -957,13 +1106,14 @@ namespace HexEngine
 		// DoNotSave, ...) onto the clone - CloneEntity previously copied only the layer,
 		// so these were lost on prefab spawn / duplicate. Strip the editor-only
 		// selection flag so clones aren't born selected (matches Entity::Deserialize).
-		clone->SetFlag(entity->GetFlags() & ~EntityFlags::SelectedInEditor);
+		clone->SetFlag(entity->GetFlags() & ~(EntityFlags::SelectedInEditor | EntityFlags::IsPendingRemoval | EntityFlags::RepresentedByHLOD));
 		if (entity->IsPrefabInstance())
 		{
 			clone->SetPrefabSource(entity->GetPrefabSourcePath(), entity->GetPrefabRootEntityName(), entity->IsPrefabInstanceRoot());
 			clone->SetPrefabNodeId(entity->EnsurePrefabNodeId());
 			clone->SetPrefabPropertyOverrides(entity->GetPrefabPropertyOverrides());
 			clone->SetPrefabOverridePatches(entity->GetPrefabOverridePatches());
+			clone->SetPrefabRevision(entity->GetPrefabRevision());
 		}
 		else
 		{
@@ -1001,13 +1151,17 @@ namespace HexEngine
 				return nullptr;
 			}
 
-			auto clonedComponent = cls->cloneInstanceFn(clone, comp);
+			auto clonedComponent = cls->cloneInstanceFn ? cls->cloneInstanceFn(clone, comp) : nullptr;   // empty while its module reloads
 
 			clone->AddComponent(clonedComponent);
 		}
 
-		// Even though the PVS was already flushed in CreateEntity we have to flush it again because it has had all its components added now
-		FlushPVS(entity);
+		// Even though the PVS was already flushed in CreateEntity we have to flush it again because it has had all its components added now.
+		// The CLONE - flushing the source put the SOURCE entity (for a prefab spawn: an entity in
+		// the prefab's private scene) into this scene's camera + light PVS snapshots. Once that
+		// prefab scene was freed (prefab unloaded, e.g. play stop clearing the asset pins) the
+		// shadow pass drew a freed StaticMeshComponent and crashed.
+		FlushPVS(clone);
 
 		return clone;
 	}
@@ -1027,6 +1181,11 @@ namespace HexEngine
 		{
 			for (auto& ent : map.second)
 			{
+				// A source scene that never ticks (a prefab's private scene) never reaps
+				// what it deleted - e.g. vehicle parts a VehicleComponent rebuilt. Don't
+				// resurrect them as extra live roots in the target scene.
+				if (ent == nullptr || ent->IsPendingDeletion())
+					continue;
 				auto newEnt = CloneEntity(ent, false);
 
 				renamedEnts.push_back({ newEnt, ent, newEnt->GetName(), ent->GetName() });
@@ -1120,6 +1279,22 @@ namespace HexEngine
 
 	void Scene::FlushPVS(Entity* entity, bool remove)
 	{
+		if (entity == nullptr)
+			return;
+		if (!remove)
+		{
+			std::lock_guard<std::mutex> guard(_pvsFlushMutex);
+			_pvsFlushQueue.emplace_back(entity, entity->GetId());
+			return;
+		}
+		{
+			std::lock_guard<std::mutex> guard(_pvsFlushMutex);
+			std::erase_if(_pvsFlushQueue, [entity](const auto& e) { return e.first == entity; });
+		}
+
+		if (remove && g_pEnv->_sceneRenderer != nullptr)
+			g_pEnv->_sceneRenderer->FlushRainOcclusionEntity(entity);
+
 		for (auto& camera : _cameras)
 		{
 			if(remove)
@@ -1135,19 +1310,89 @@ namespace HexEngine
 			camera->OnMessage(&message, nullptr);*/
 		}
 
-		for (auto& caster : g_pEnv->_sceneRenderer->GetShadowCasters())
+		// EVERY shadow-casting light keeps its own PVS, not just this frame's
+		// casters: GetShadowCasters() is only the nearest N picked per frame, so a
+		// light outside that set kept pointers to deleted entities and, once the
+		// camera moved and it was picked again, drew a freed mesh in the shadow pass
+		// (access violation in StaticMeshComponent::GetCachedInstanceData - seen
+		// after deleting a building and after play-mode stop restores).
+		auto flushLights = [&](ComponentId componentId)
 		{
-			if (caster->GetEntity() == entity)
-				continue;
-
-			for (auto i = 0; i < caster->GetMaxSupportedShadowCascades(); ++i)
+			const auto* pool = TryGetComponentPool(componentId);
+			if (pool == nullptr)
+				return;
+			for (uint32_t i = 0; i < pool->components.size(); ++i)
 			{
-				if(remove)
-					caster->GetPVS(i)->RemoveEntity(entity);
-				else
-					caster->GetPVS(i)->AddEntity(entity);
+				auto* light = pool->components[i] != nullptr ? pool->components[i]->CastAs<Light>() : nullptr;
+				if (light == nullptr || light->GetEntity() == entity || !light->GetDoesCastShadows())
+					continue;
+				for (auto c = 0; c < light->GetMaxSupportedShadowCascades(); ++c)
+				{
+					if (auto* pvs = light->GetPVS(c); pvs != nullptr)
+					{
+						if (remove)
+							pvs->RemoveEntity(entity);
+						else
+							pvs->AddEntity(entity);
+					}
+				}
 			}
+		};
+		flushLights(DirectionalLight::_GetComponentId());
+		flushLights(SpotLight::_GetComponentId());
+		flushLights(PointLight::_GetComponentId());
+	}
+
+	void Scene::FlushPendingPVS()
+	{
+		std::vector<std::pair<Entity*, EntityId>> queued;
+		{
+			std::lock_guard<std::mutex> guard(_pvsFlushMutex);
+			queued.swap(_pvsFlushQueue);
 		}
+		if (queued.empty())
+			return;
+
+		std::vector<Entity*> entities;
+		entities.reserve(queued.size());
+		for (const auto& [entity, id] : queued)
+		{
+			if (TryGetEntity(id) != entity || entity->IsPendingDeletion())
+				continue;
+			if (std::find(entities.begin(), entities.end(), entity) == entities.end())
+				entities.push_back(entity);
+		}
+		if (entities.empty())
+			return;
+
+		for (auto& camera : _cameras)
+			camera->GetPVS()->AddEntities(entities);
+
+		// Every shadow-casting light keeps its own PVS (see the remove path in
+		// FlushPVS); a light never flushes itself.
+		auto flushLights = [&](ComponentId componentId)
+		{
+			const auto* pool = TryGetComponentPool(componentId);
+			if (pool == nullptr)
+				return;
+			for (uint32_t i = 0; i < pool->components.size(); ++i)
+			{
+				auto* light = pool->components[i] != nullptr ? pool->components[i]->CastAs<Light>() : nullptr;
+				if (light == nullptr || !light->GetDoesCastShadows())
+					continue;
+				std::vector<Entity*> forLight;
+				forLight.reserve(entities.size());
+				for (auto* e : entities)
+					if (e != light->GetEntity())
+						forLight.push_back(e);
+				for (auto c = 0; c < light->GetMaxSupportedShadowCascades(); ++c)
+					if (auto* pvs = light->GetPVS(c); pvs != nullptr)
+						pvs->AddEntities(forLight);
+			}
+		};
+		flushLights(DirectionalLight::_GetComponentId());
+		flushLights(SpotLight::_GetComponentId());
+		flushLights(PointLight::_GetComponentId());
 	}
 
 	void Scene::OnGUI()
@@ -1156,11 +1401,25 @@ namespace HexEngine
 		{
 			std::unique_lock lock(_lock);
 
+			// The interactable being looked at draws its name/prompt from OnGUI. A
+			// multi-part object (a vehicle prefab = an empty root holding the
+			// interaction, mesh parts as children) has no renderable on the root,
+			// so the PVS loop below never reaches it - call it directly instead.
+			Entity* focused = nullptr;
+			if (auto* ic = InteractionComponent::GetFocused(); ic != nullptr && ic->GetEntity() != nullptr &&
+				ic->GetEntity()->GetScene() == this && ic->GetEntity()->GetComponent<StaticMeshComponent>() == nullptr)
+			{
+				focused = ic->GetEntity();
+				focused->OnGUI();
+			}
+
 			for (auto& renderable : _mainCamera->GetPVS()->GetRenderables())
 			{
 				for (auto& tuple : renderable.second)
 				{
 					auto ent = std::get<1>(tuple);
+					if (ent == focused)
+						continue;
 
 					ent->OnGUI();
 				}
@@ -1228,7 +1487,43 @@ namespace HexEngine
 		if (entity == nullptr)
 			return;
 
-		const EntityId id = entity->GetId();
+		if (entity->GetScene() != this && entity->GetScene() != nullptr)
+		{
+			LOG_WARN("Scene: entity [%p] '%s' removed through a scene that does not own it - forwarding",
+				entity, entity->GetName().c_str());
+			entity->GetScene()->RemoveEntityInternal(entity);
+			return;
+		}
+
+		if (!_entitiesBeingDeleted.insert(entity).second)
+		{
+			LOG_WARN("Scene: re-entrant removal of entity [%p] (already being deleted) ignored", entity);
+			return;
+		}
+
+		EntityId id = entity->GetId();
+		if (!IsValid(id) || _entitySlots[id.index].entity != entity)
+		{
+			// The entity's id does not point back at it. Never unlink/free whatever
+			// that id names now (another entity's slot); find the slot that really
+			// holds this pointer instead.
+			EntityId owned;
+			for (uint32_t i = 0; i < static_cast<uint32_t>(_entitySlots.size()); ++i)
+			{
+				if (_entitySlots[i].alive && _entitySlots[i].entity == entity)
+				{
+					owned.index = i;
+					owned.generation = _entitySlots[i].generation;
+					break;
+				}
+			}
+
+			LOG_WARN("Scene: entity [%p] '%s' id %u:%u does not own its slot (slot entity %p); real slot %d",
+				entity, entity->GetName().c_str(), id.index, id.generation,
+				id.index < _entitySlots.size() ? (void*)_entitySlots[id.index].entity : nullptr,
+				owned.IsValid() ? (int)owned.index : -1);
+			id = owned;
+		}
 
 		if (entity->GetComponent<DirectionalLight>() == _sunLight)
 		{
@@ -1276,6 +1571,7 @@ namespace HexEngine
 		{
 			FreeEntityId(id);
 		}
+		_entitiesBeingDeleted.erase(entity);
 		HEX_VALIDATE_SCENE_INVARIANTS();
 	}
 
@@ -1302,6 +1598,19 @@ namespace HexEngine
 		PROFILE();
 
 		if (entity == nullptr)
+			return;
+
+		if (entity->GetScene() != this && entity->GetScene() != nullptr)
+		{
+			LOG_WARN("Scene: DestroyEntity [%p] '%s' called on a scene that does not own it - forwarding",
+				entity, entity->GetName().c_str());
+			entity->GetScene()->DestroyEntity(entity, broadcast);
+			return;
+		}
+
+		// Already inside RemoveEntityInternal (a component teardown destroying its own
+		// owner, or a parent's destructor reaching a child mid-delete).
+		if (_entitiesBeingDeleted.count(entity) != 0)
 			return;
 
 		LOG_DEBUG("Removing entity [%p] %s. There will be %d entities remaining in the scene", entity, entity->GetName().c_str(), GetTotalNumberOfEntities() > 0 ? GetTotalNumberOfEntities() - 1 : 0);
@@ -1376,8 +1685,9 @@ namespace HexEngine
 
 		if (component->GetComponentId() == StaticMeshComponent::_GetComponentId())
 		{
-			++_giGeometryRevision;
-			++_giMaterialRevision;
+			// GI revision: resolved at the end of the frame (ProcessPendingGiMeshes),
+			// so a spawner can flag its transient meshes ExcludeFromGI first.
+			_giPendingMeshes[component->CastAs<StaticMeshComponent>()] = true;
 			_giSpatialCacheDirty = true;
 			// Incremental, NOT a dirty flag: transient per-frame helper entities
 			// add/remove mesh components constantly, and a dirty flag here meant
@@ -1387,6 +1697,7 @@ namespace HexEngine
 		else if (component->CastAs<Light>() != nullptr)
 		{
 			++_giLightRevision;
+			++_lightSetRevision;
 		}
 
 		for (auto&& listener : _entityListeners)
@@ -1462,15 +1773,32 @@ namespace HexEngine
 			// Drop from the GI motion-debounce set so the sweep never touches a
 			// destroyed component (pointers here are erased before the mesh dies).
 			_giMovingMeshes.erase(component->CastAs<StaticMeshComponent>());
-			++_giGeometryRevision;
-			++_giMaterialRevision;
+			_giPendingMeshes.erase(component->CastAs<StaticMeshComponent>());
+			if (component->CastAs<StaticMeshComponent>()->GetGiCounted())
+			{
+				++_giGeometryRevision;
+				++_giMaterialRevision;
+				if (r_giLogInvalidations._val.b)
+					LOG_INFO("GI geomRev bump -> %llu (mesh removed '%s')", (unsigned long long)_giGeometryRevision,
+						component->GetEntity() != nullptr ? component->GetEntity()->GetName().c_str() : "?");
+			}
 			_giSpatialCacheDirty = true;
 			// Incremental tombstone (see the add-side comment).
 			RemovePvsSpatialEntry_NoLock(component->CastAs<StaticMeshComponent>());
+
+			// Camera / light PVS snapshots hold the component pointer and the
+			// render pass WRITES its cached instance data back into it. Removing a
+			// mesh from an entity that lives on (in-place prefab sync, editor
+			// component removal) left those entries dangling: heap corruption /
+			// access violations in the next shadow or main pass. Drop the entity
+			// from every PVS; view-dirty re-adds whatever it still renders.
+			if (!isEntityPendingDeletion)
+				FlushPVS(entity, true);
 		}
 		else if (component->CastAs<Light>() != nullptr)
 		{
 			++_giLightRevision;
+			++_lightSetRevision;
 		}
 		MarkEntityViewDirty();
 
@@ -1593,6 +1921,7 @@ namespace HexEngine
 
 		// Re-bake GI meshes that have stopped moving (see NotifyEntityTransformChanged).
 		UpdateGiMotionDebounce();
+		ProcessPendingGiMeshes();
 
 		_insideEntityIteration = true;
 		
@@ -1609,11 +1938,33 @@ namespace HexEngine
 
 				if (updateComponent->CanUpdate())
 				{
-					float timeOffset = updateComponent->GetTickRate() > 1 ? g_pEnv->_timeManager->_currentTime - updateComponent->GetLastUpdateTime() : 0.0f;
-					updateComponent->Update(frameTime + timeOffset);
+					// A component ticking every N frames gets the GAME time since its
+					// last update (scaled, and zero across a pause). It used to get
+					// frameTime + the REAL time since then: through any pause (day-end
+					// tally, home computer, menus) the city routine saw time pass while
+					// its walkers stood frozen, declared them stuck and abandoned their
+					// trips. (That sum also counted the current frame twice.)
+					float elapsed = frameTime;
+					if (updateComponent->GetTickRate() > 1)
+					{
+						const float last = updateComponent->GetLastUpdateTime();
+						const float since = (float)(g_pEnv->_timeManager->_gameTime - (double)last);
+						if (last > 0.0f && since >= 0.0f)
+							elapsed = since;	// else the first update: just this frame
+					}
+					updateComponent->Update(elapsed);
 				}
 			}
+
+			for (auto&& component : updateSet)
+			{
+				auto updateComponent = component->CastAs<UpdateComponent>();
+				if (updateComponent != nullptr && updateComponent->WantsPostUpdate())
+					updateComponent->PostUpdate(frameTime);
+			}
 		}
+
+		FlushPendingPVS();
 
 		std::vector<Transform*> transformSet;
 
@@ -1762,8 +2113,14 @@ namespace HexEngine
 	{
 		//_skySphereMatrix = math::Matrix::CreateScale(math::Vector3(2.0f)) * math::Matrix::CreateTranslation(_mainCamera->GetEntity()->GetPosition());
 
-		if(_skySphere)
-			_skySphere->SetPosition(_mainCamera->GetEntity()->GetPosition() + _mainCamera->GetViewOffset());
+		if (_skySphere)
+		{
+			// Only when the camera actually moved: every SetPosition clears the
+			// transform caches and runs the scene's transform-change notify.
+			const math::Vector3 target = _mainCamera->GetEntity()->GetPosition() + _mainCamera->GetViewOffset();
+			if (_skySphere->GetPosition() != target)
+				_skySphere->SetPosition(target);
+		}
 	}
 
 	void Scene::OnDebugGUI()
@@ -1843,7 +2200,7 @@ namespace HexEngine
 			return material->GetBlendState() != BlendState::Opaque;
 		}
 
-		bool PrepareMeshRender(Entity* entity, Mesh* mesh, Material* material, MeshRenderFlags flags, int32_t instanceId, CullingMode shadowCullMode)
+		bool PrepareMeshRender(Entity* entity, Mesh* mesh, Material* material, MeshRenderFlags flags, int32_t instanceId, CullingMode shadowCullMode, bool mirrored = false)
 		{
 			if (!mesh || !material)
 				return false;
@@ -1907,7 +2264,15 @@ namespace HexEngine
 			// the air-side or the Snell's-window shading from the camera depth
 			// (g_oceanConfig3.z), not from the triangle facing.
 			const CullingMode materialCullMode = isWaterMaterial ? CullingMode::NoCulling : material->GetCullMode();
-			graphicsDevice->SetCullingMode(isShadowMap ? shadowCullMode : materialCullMode);
+			// A mirrored instance (negative-determinant world matrix) winds its
+			// triangles the other way round: flip which side gets culled, or its
+			// outside faces are dropped and the inside ones drawn (the see-through
+			// x-scale -1 city bus).
+			CullingMode cullMode = isShadowMap ? shadowCullMode : materialCullMode;
+			if (mirrored)
+				cullMode = cullMode == CullingMode::BackFace ? CullingMode::FrontFace
+					: cullMode == CullingMode::FrontFace ? CullingMode::BackFace : cullMode;
+			graphicsDevice->SetCullingMode(cullMode);
 
 			mesh->UpdateConstantBuffer(entity, math::Matrix::Identity, material, instanceId, isTransparency);
 
@@ -1928,16 +2293,20 @@ namespace HexEngine
 
 			uint32_t slotIdx = graphicsDevice->GetBoundResourceIndex();
 
-			std::vector<ITexture2D*> textures = {
-				material->GetTexture(MaterialTexture::Albedo).get(),
-				disableNormalMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Normal).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Roughness).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Metallic).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Height).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Emission).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Opacity).get(),
-				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::AmbientOcclusion).get()
-			};
+			auto& textures = material->GetCachedTextureArray();
+
+			if (textures.size() == 0)
+			{
+				textures = {
+					material->GetTexture(MaterialTexture::Albedo).get(),
+					disableNormalMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Normal).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Roughness).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Metallic).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Height).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Emission).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Opacity).get(),
+					disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::AmbientOcclusion).get()};
+			}
 
 			graphicsDevice->SetTexture2DArray(slotIdx, textures);
 
@@ -2168,6 +2537,11 @@ namespace HexEngine
 		uint32_t skippedGpuCulling = 0;
 		uint32_t skippedFrustumFine = 0;
 		uint32_t drawnInstancesTotal = 0;
+		// World position (GetPosition() is parent-local) for the per-frame HLOD
+		// proxy/source pick - the same camera for the main view and its shadows.
+		const math::Vector3 hlodCameraPos = (GetMainCamera() != nullptr && GetMainCamera()->GetEntity() != nullptr)
+			? GetMainCamera()->GetEntity()->GetWorldTM().Translation()
+			: math::Vector3::Zero;
 
 		if(pvs->DidRebuild())
 		{
@@ -2230,6 +2604,8 @@ namespace HexEngine
 					entry.entity = entity;
 					entry.component = meshComponent;
 					entry.transformVersion = entity->GetTransformVersion();
+					entry.mirrored = entity->GetWorldTM().Determinant() < 0.0f;
+					entry.hlodRole = pvs->ResolveHlodRole(entity, entry.hlodCentre);
 
 					if (entry.isBoundToBone)
 					{
@@ -2440,6 +2816,12 @@ namespace HexEngine
 						}
 					}
 
+					if (renderable.hlodRole != 0 && !HlodEntryDrawsAt(renderable, hlodCameraPos))
+					{
+						skippedLod++;
+						continue;
+					}
+
 					const math::Vector3 objectPosition = renderable.instanceData.worldMatrix.Translation();
 					TransparentRenderItem item;
 					item.material = material;
@@ -2471,7 +2853,7 @@ namespace HexEngine
 					continue;
 
 				instance->Start();
-				if (!PrepareMeshRender(renderable->entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable->shadowCullMode))
+				if (!PrepareMeshRender(renderable->entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable->shadowCullMode, renderable->mirrored))
 				{
 					instance->Finish();
 					skippedPrepareRender++;
@@ -2481,11 +2863,16 @@ namespace HexEngine
 				if (!renderable->isBoundToBone && renderable->component != nullptr && renderable->entity != nullptr)
 				{
 					const uint64_t transformVersion = renderable->entity->GetTransformVersion();
-					if (transformVersion != renderable->transformVersion)
+					const uint64_t frameNow = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0;
+					// Also re-pull on a new frame: the component zeroes the
+					// velocity of an entity that stopped moving, which a
+					// version-only check never saw (stopped vehicles smeared).
+					if (transformVersion != renderable->transformVersion || frameNow != renderable->instanceFrame)
 					{
 						renderable->instanceData = renderable->component->GetCachedInstanceData(material.get());
 						renderable->shadowInstanceData = renderable->component->GetCachedShadowInstanceData();
 						renderable->transformVersion = transformVersion;
+						renderable->instanceFrame = frameNow;
 					}
 				}
 
@@ -2541,6 +2928,7 @@ namespace HexEngine
 				int drawnInstances = 0;
 				MeshInstance* currentInstance = nullptr;
 				MeshInstance* lastInstance = nullptr;
+				bool lastMirrored = false;
 
 				for (auto&& renderable : it->second)
 				{
@@ -2584,7 +2972,7 @@ namespace HexEngine
 						continue;
 					}
 
-					if (currentInstance != lastInstance && lastInstance != nullptr || renderable.hasAnimations)
+					if ((currentInstance != lastInstance || renderable.mirrored != lastMirrored) && lastInstance != nullptr || renderable.hasAnimations)
 					{
 						if (isNormalRender)
 							++_drawCalls;
@@ -2636,6 +3024,13 @@ namespace HexEngine
 					}
 #endif
 
+					// HLOD: the proxy beyond the switch distance, its sources inside it.
+					if (renderable.hlodRole != 0 && !HlodEntryDrawsAt(renderable, hlodCameraPos))
+					{
+						skippedLod++;
+						continue;
+					}
+
 					if (!rendered)
 					{
 						if (isShadowMap)
@@ -2643,7 +3038,7 @@ namespace HexEngine
 						else
 							instance->Start();
 
-						if (PrepareMeshRender(renderable.entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode) == false)
+						if (PrepareMeshRender(renderable.entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode, renderable.mirrored) == false)
 						{
 							LOG_WARN("Failed to prepare mesh render state, ignoring this entity");
 							skippedPrepareRender++;
@@ -2655,6 +3050,7 @@ namespace HexEngine
 					drawnInstances++;
 					drawnInstancesTotal++;
 					lastInstance = currentInstance;
+					lastMirrored = renderable.mirrored;
 
 					// Lazy instance-data refresh: only entries that are actually
 					// drawn AND whose entity moved since they were snapshotted
@@ -2662,11 +3058,14 @@ namespace HexEngine
 					if (!renderable.isBoundToBone && renderable.component != nullptr && renderable.entity != nullptr)
 					{
 						const uint64_t transformVersion = renderable.entity->GetTransformVersion();
-						if (transformVersion != renderable.transformVersion)
+						const uint64_t frameNow = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0;
+						// Re-pull on a new frame too (see the PVS path above).
+						if (transformVersion != renderable.transformVersion || frameNow != renderable.instanceFrame)
 						{
 							renderable.instanceData = renderable.component->GetCachedInstanceData(material.get());
 							renderable.shadowInstanceData = renderable.component->GetCachedShadowInstanceData();
 							renderable.transformVersion = transformVersion;
+							renderable.instanceFrame = frameNow;
 						}
 					}
 
@@ -2786,11 +3185,54 @@ namespace HexEngine
 
 		PROFILE();
 
+		// Component debug drawing, per component TYPE: only pools whose class
+		// overrides OnDebugRender are visited. This used to call DebugRender on
+		// every entity, which made a virtual (almost always empty) call on every
+		// component in the scene each frame - a city scene's few thousand
+		// entities cost more than the drawing itself.
+		{
+			// Indexed by component id; rebuilt when the registry grows (plugin load).
+			static std::vector<uint8_t> s_typeDrawsDebug;
+			static size_t s_typeDrawsDebugRegistrySize = 0;
+			auto* registry = g_pEnv->_classRegistry;
+			const size_t registrySize = registry->GetAllClasses().size();
+			if (registrySize != s_typeDrawsDebugRegistrySize)
+			{
+				s_typeDrawsDebug.assign(MAX_COMPONENTS, 1);
+				for (ComponentId id = 0; id < MAX_COMPONENTS; ++id)
+					s_typeDrawsDebug[id] = registry->HasDebugRender(id) ? 1 : 0;
+				s_typeDrawsDebugRegistrySize = registrySize;
+			}
+
+			// Snapshot first: a component's OnDebugRender may add/remove
+			// components (the scene lock is recursive), which would invalidate
+			// a live pool iterator.
+			static std::vector<BaseComponent*> s_debugComponents;
+			s_debugComponents.clear();
+			for (const auto& [componentId, pool] : _componentPools)
+			{
+				if (componentId < MAX_COMPONENTS && s_typeDrawsDebug[componentId] == 0)
+					continue;
+				s_debugComponents.insert(s_debugComponents.end(), pool.components.begin(), pool.components.end());
+			}
+
+			for (auto* component : s_debugComponents)
+			{
+				auto* owner = component != nullptr ? component->GetEntity() : nullptr;
+				if (owner == nullptr || owner->IsPendingDeletion())
+					continue;
+				component->OnDebugRender();
+			}
+		}
+
+		// Editor gizmos: selected entities, plus any entity whose hover flag is
+		// still set from when it was selected (DebugRender clears it).
 		for (auto& set : GetEntities())
 		{
 			for (auto& ent : set.second)
 			{
-				ent->DebugRender();
+				if (ent->HasFlag(EntityFlags::SelectedInEditor) || ent->IsEditorGizmoHovered())
+					ent->DebugRender();
 			}
 		}
 
@@ -2869,18 +3311,12 @@ namespace HexEngine
 	bool Scene::GetEntities(const ComponentSignature signature, std::vector<Entity*>& entities)
 	{
 		std::unique_lock lock(_lock);
-		if (signature == 0)
+		if (!signature.Any())
 			return false;
 
-		if ((signature & (signature - 1)) == 0)
+		if (const int32_t single = signature.SingleBitIndex(); single >= 0)
 		{
-			ComponentId componentId = 0;
-			ComponentSignature mask = signature;
-			while ((mask >>= 1) != 0)
-			{
-				++componentId;
-			}
-
+			const ComponentId componentId = (ComponentId)single;
 			if (const auto* pool = TryGetComponentPool(componentId); pool != nullptr)
 			{
 				entities.reserve(entities.size() + pool->owners.size());
@@ -2906,7 +3342,7 @@ namespace HexEngine
 			if (entity == nullptr)
 				continue;
 
-			if ((entity->GetComponentSignature() & signature) != 0)
+			if (entity->GetComponentSignature().Intersects(signature))
 			{
 				entities.push_back(entity);
 			}
@@ -3125,6 +3561,18 @@ namespace HexEngine
 		return GetWaterHeight(position.x, position.z) - position.y;
 	}
 
+	float Scene::GetViewDepthBelowWater(const math::Vector3& eye) const
+	{
+		const float depth = GetDepthBelowWater(eye);
+		if (depth <= 0.0f)
+			return depth;
+		RayHit hit;
+		const math::Ray ray(eye, math::Vector3(0.0f, 1.0f, 0.0f));
+		if (PhysUtils::RayCast(ray, depth + 0.5f, LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit))
+			return -depth;
+		return depth;
+	}
+
 	float Scene::GetWaveAmplitudeBound() const
 	{
 		return OceanWaves::AmplitudeBound(_oceanWaveInputs);
@@ -3174,19 +3622,20 @@ namespace HexEngine
 		{
 			fs::path sidecar = file->GetAbsolutePath();
 			sidecar.replace_extension(L".navmesh");
-			std::ifstream in(sidecar, std::ios::binary | std::ios::ate);
-			if (in.is_open())
+
+			// ReadFileData, not std::ifstream: a packaged scene (GameData.pkg) has a
+			// package path, so a disk read found nothing - and with no navmesh no
+			// routine agent can plan a trip (every NPC stood still in a shipped build).
+			std::vector<uint8_t> bytes;
+			if (!g_pEnv->GetResourceSystem().ReadFileData(sidecar, bytes))
 			{
-				const std::streamsize sz = in.tellg();
-				if (sz > 0)
-				{
-					in.seekg(0);
-					std::vector<uint8_t> bytes((size_t)sz);
-					in.read(reinterpret_cast<char*>(bytes.data()), sz);
-					NavMeshId id = 0;
-					if (g_pEnv->_navMeshProvider->LoadNavMeshFromBytes(this, bytes, &id))
-						SetNavMeshId(id);
-				}
+				LOG_WARN("Scene: navmesh sidecar '%S' not found on disk or in a package - NPCs cannot path.", sidecar.wstring().c_str());
+			}
+			else
+			{
+				NavMeshId id = 0;
+				if (g_pEnv->_navMeshProvider->LoadNavMeshFromBytes(this, bytes, &id))
+					SetNavMeshId(id);
 			}
 		}
 	}
@@ -3855,6 +4304,25 @@ namespace HexEngine
 			NavMeshBlockingBox box;
 			volume->GetWorldFootprint(box);
 			out.push_back(box);
+		}
+	}
+
+	void Scene::GatherTerrainCutouts(std::vector<TerrainCutoutBox>& out)
+	{
+		std::unique_lock lock(_lock);
+
+		const auto* pool = TryGetComponentPool(TerrainCutout::_GetComponentId());
+		if (pool == nullptr)
+			return;
+
+		for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
+		{
+			auto* cutout = static_cast<TerrainCutout*>(pool->components[denseIndex]);
+			if (cutout == nullptr || TryGetEntity(pool->owners[denseIndex]) == nullptr)
+				continue;
+			TerrainCutoutBox box;
+			if (cutout->GetWorldBox(box))
+				out.push_back(box);
 		}
 	}
 

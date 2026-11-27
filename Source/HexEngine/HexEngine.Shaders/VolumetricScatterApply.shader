@@ -237,8 +237,22 @@
 		// Composite. Geometry uses beauty * t + I; sky skips the
 		// transmittance multiply to avoid double-darkening atmospheric
 		// scattering already baked into the sky colour.
+		//
+		// ...except in DENSE weather. Additive-only kept the sky (and the
+		// distant hills painted on the sky dome) crisp through a blizzard,
+		// storm or sandstorm - heavy presets looked like clear days with a
+		// dark haze in the street. Blend the sky toward the full composite by
+		// how much of the 128m volume the medium already blots out: thin fog
+		// (clear / hot, T ~0.85+) is untouched, heavy rain veils the sky
+		// partly, a blizzard (T ~0) whites it out to the fog's own colour.
+		float skyTransmittance = 1.0f;
+		if (skyPixel)
+		{
+			const float denseWeight = saturate(((1.0f - transmittance) - 0.35f) / 0.55f);
+			skyTransmittance = lerp(1.0f, transmittance, denseWeight);
+		}
 		const float3 final = skyPixel
-			? (beauty.rgb + inscatter)
+			? (beauty.rgb * skyTransmittance + inscatter)
 			: (beauty.rgb * transmittance + inscatter);
 
 		return float4(final, beauty.a);

@@ -188,6 +188,9 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="TransparentAtmosphere.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="TransparentForward.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
     <HexEngineShader Include="EnvMapCommon.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
@@ -247,12 +250,22 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="BuildDepthPyramid.shader" />
     <HexEngineShader Include="ClusterLightCull.shader" />
+    <HexEngineShader Include="AreaLightTextureBlit.shader" />
     <HexEngineShader Include="ClusterLightApply.shader" />
     <HexEngineShader Include="ClusterLightDebug.shader" />
     <HexEngineShader Include="ParticleSimulate.shader" />
     <HexEngineShader Include="ParticleBillboardLit.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />
     <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
+    <HexEngineShader Include="RtCommon.shader" />
+    <HexEngineShader Include="DDGICommon.shader" />
+    <HexEngineShader Include="DDGITrace.shader" />
+    <HexEngineShader Include="DDGIBlendIrradiance.shader" />
+    <HexEngineShader Include="DDGIBlendDepth.shader" />
+    <HexEngineShader Include="DDGIApply.shader" />
+    <HexEngineShader Include="DDGISSGI.shader" />
+    <HexEngineShader Include="DDGISSGIBlur.shader" />
+    <HexEngineShader Include="RtDebug.shader" />
     <HexEngineShader Include="DiffuseGIBuildCandidates.shader" />
     <HexEngineShader Include="DiffuseGICandidateArgsFixup.shader" />
     <HexEngineShader Include="DiffuseGIInjectResolve.shader" />
@@ -262,6 +275,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="DiffuseGIPropagateVoxel.shader" />
     <HexEngineShader Include="GpuFrustumCull.shader" />
     <HexEngineShader Include="GpuOcclusionCull.shader" />
+    <HexEngineShader Include="GpuSkinning.shader" />
     <HexEngineShader Include="DiffuseGIResolve.shader" />
     <HexEngineShader Include="DiffuseGIShiftVoxel.shader" />
     <HexEngineShader Include="DiffuseGITrace.shader">

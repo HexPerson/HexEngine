@@ -28,6 +28,10 @@ public:
 		void SetSculptEnabled(bool enabled) { _sculptEnabled = enabled; }
 		bool IsSculptEnabled() const { return _sculptEnabled; }
 
+		// Scripted terrain edit (console `vt_flatten`): Flatten brush stamped
+		// `passes` times at (x, height, z). Returns how many stamps changed terrain.
+		int32_t FlattenArea(const math::Vector3& centre, float radius, float height, int32_t passes);
+
 	private:
 		bool RayCastBrush(RayHit& hit) const;
 		void ApplyRealtimeBrush(float deltaTime);

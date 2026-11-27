@@ -100,6 +100,9 @@ public:
 
 	physx::PxRigidActor* GetRigidActor();
 
+	virtual void SetLinearVelocity(const math::Vector3& velocity) override;
+	virtual void SetAngularVelocity(const math::Vector3& velocity) override;
+
 	virtual void Move(const math::Vector3& dir, float minLength, float frameTime) override;
 
 	HexEngine::RigidBody* GetBodyComponent() { return _bodyComponent; }
@@ -128,6 +131,12 @@ public:
 	virtual void UpdatePosePosition(const math::Vector3& position) override;
 
 	virtual void UpdatePoseRotation(const math::Quaternion& rotation) override;
+
+protected:
+	// For a subclass whose actor is owned by something else (a PxController's
+	// kinematic actor is released by the controller): drop the pointers so
+	// Destroy() doesn't release them a second time.
+	void ForgetActor() { _body = nullptr; _shape = nullptr; }
 
 private:
 	// Snapshot of the input data + cook params for an in-flight async triangle

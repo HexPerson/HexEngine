@@ -1,6 +1,7 @@
 
 #include "NavigationComponent.hpp"
 #include "Transform.hpp"
+#include "../../Input/HVar.hpp"
 #include "Camera.hpp"
 #include "../Entity.hpp"
 #include "../../Math/FloatMath.hpp"
@@ -20,6 +21,16 @@
 
 namespace HexEngine
 {
+	namespace
+	{
+		NavigationComponent::SegmentGateFn s_segmentGate = nullptr;
+	}
+
+	void NavigationComponent::SetSegmentGate(SegmentGateFn gate)
+	{
+		s_segmentGate = gate;
+	}
+
 	NavigationComponent::NavigationComponent(Entity* entity) :
 		UpdateComponent(entity)
 	{
@@ -53,6 +64,8 @@ namespace HexEngine
 			g_pEnv->_inputSystem->RemoveInputListener(this);
 	}
 
+	HVar nav_logPartialPaths("nav_logPartialPaths", "Log every FindPath whose target is not reachable (agent name, from, to)", false, false, true);
+
 	void NavigationComponent::FindPath(NavMeshId id, const math::Vector3& from, const math::Vector3& to, float stepSize)
 	{
 		_result.path.clear();
@@ -70,13 +83,19 @@ namespace HexEngine
 
 		_targetPosition = to;
 
+		_result.partial = false;
 		g_pEnv->_navMeshProvider->FindPath(path, _result);
+
+		if (_result.partial && nav_logPartialPaths._val.b && GetEntity() != nullptr)
+			LOG_INFO("nav partial: '%s' (%.1f %.1f %.1f) -> (%.1f %.1f %.1f)", GetEntity()->GetName().c_str(),
+				from.x, from.y, from.z, to.x, to.y, to.z);
 	}
 
 	void NavigationComponent::ClearPath()
 	{
 		_result.path.clear();
 		_pathIndex = 0;
+		_heldByGate = false;
 	}
 
 	void NavigationComponent::Serialize(json& data, JsonFile* file)
@@ -205,6 +224,19 @@ namespace HexEngine
 				return false;
 			}
 
+			// ...nor far BELOW the navmesh. Walkable surfaces without colliders (city
+			// roads are render-only and carved out of the navmesh) let the probe fall
+			// through to the terrain metres beneath; standing the agent there hid it
+			// under the street and, with the path nodes now metres above, stalled it.
+			// The navmesh's smoothed ramp sits at most about half a stair flight off
+			// the real steps, so this keeps stairs while rejecting the under-world.
+			const float kBelowNavTolerance = 1.25f;
+			if (hit.position.y < navPos.y - kBelowNavTolerance)
+			{
+				_hasCachedGroundY = false;
+				return false;
+			}
+
 			_cachedGroundY = hit.position.y;
 			_hasCachedGroundY = true;
 			outY = _cachedGroundY;
@@ -241,8 +273,9 @@ namespace HexEngine
 
 		math::Ray ray(origin, dir);
 		RayHit hit;
+		// Skip the camera's own entity (and children): the ray starts inside it.
 		if (PhysUtils::RayCast(ray, 100000.0f,
-			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit))
+			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit, { cam->GetEntity() }))
 		{
 			_targetPosition = hit.position;
 			LOG_INFO("NavigationComponent: target set to [%.2f %.2f %.2f].",
@@ -293,6 +326,9 @@ namespace HexEngine
 	{
 		UpdateComponent::Update(dt);
 
+		if (_paused)
+			return;
+
 		if (_result.path.size() > 0)
 		{
 			INavMeshProvider::MoveResult result = g_pEnv->_navMeshProvider->Move(_result);
@@ -318,7 +354,20 @@ namespace HexEngine
 				constexpr float kNodeArrivalDistance = 1.0f;
 				constexpr float kMinDirectionEpsilon = 0.0001f;
 
-				auto delta = _result.path[_pathIndex] - currentPos;
+				// Steer and arrive in the horizontal plane. Height comes from the navmesh
+				// path (below) and the ground probe, never from the steering vector: with
+				// a 3D delta, any vertical gap between the agent and the next node (an
+				// agent the probe stood on lower ground, a node on a raised kerb) ate the
+				// step - the agent crawled at a fraction of its speed - and could hold
+				// the node out of arrival range forever.
+				auto horizontalTo = [&](const math::Vector3& node)
+				{
+					math::Vector3 d = node - currentPos;
+					d.y = 0.0f;
+					return d;
+				};
+
+				auto delta = horizontalTo(_result.path[_pathIndex]);
 				float length = delta.Length();
 
 				// Advance path node before normalizing to avoid invalid vectors when already on a node.
@@ -342,9 +391,18 @@ namespace HexEngine
 						return;
 					}
 
-					delta = _result.path[_pathIndex] - currentPos;
+					delta = horizontalTo(_result.path[_pathIndex]);
 					length = delta.Length();
 				}
+
+				// Movement gate (e.g. a pedestrian crossing at a red signal): wait
+				// where we are until it opens. The path and index are kept.
+				if (s_segmentGate != nullptr && !s_segmentGate(currentPos, _result.path[_pathIndex]))
+				{
+					_heldByGate = true;
+					return;
+				}
+				_heldByGate = false;
 
 				if (length <= kMinDirectionEpsilon)
 					return;
@@ -353,6 +411,26 @@ namespace HexEngine
 
 				const float moveDistance = std::min(length, std::max(0.0f, dt * _movementSpeed));
 				currentPos += delta * moveDistance;
+
+				// Navmesh height under the new position: interpolate along the segment
+				// being walked (previous node -> current node) by horizontal progress.
+				{
+					const math::Vector3& b = _result.path[_pathIndex];
+					if (_pathIndex > 0)
+					{
+						const math::Vector3& a = _result.path[_pathIndex - 1];
+						const math::Vector2 ab(b.x - a.x, b.z - a.z);
+						const float abLenSq = ab.LengthSquared();
+						float t = 1.0f;
+						if (abLenSq > 1e-6f)
+							t = std::clamp(((currentPos.x - a.x) * ab.x + (currentPos.z - a.z) * ab.y) / abLenSq, 0.0f, 1.0f);
+						currentPos.y = a.y + (b.y - a.y) * t;
+					}
+					else
+					{
+						currentPos.y = b.y;
+					}
+				}
 
 				// Base height: the real surface under the agent (ground probe) so it
 				// follows stairs/slopes - where the navmesh is a smoothed ramp above the

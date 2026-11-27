@@ -185,6 +185,9 @@ namespace HexEditor
 			HexEngine::Point(_size.x, _size.y - kUtilityBarHeight));
 
 		_sceneTab = _tabView->AddTab(L"Scene");
+		// The transform gizmos poll the mouse directly; keep them off while another
+		// workspace tab (material graph, animation editor) hides the scene.
+		_sceneTab->SetOnSelectedChanged([](bool selected) { HexEngine::Transform::SetEditorGizmosEnabled(selected); });
 
 		const int32_t tabHeaderHeight = HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.tab_height;
 		_sceneSurface = new SceneSurface(

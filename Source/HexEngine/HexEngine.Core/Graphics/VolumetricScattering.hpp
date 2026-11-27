@@ -149,8 +149,12 @@ namespace HexEngine
 		                        struct ID3D11ShaderResourceView* listsSrv,
 		                        bool active,
 		                        struct ID3D11ShaderResourceView* shadowAtlasSrv = nullptr,
-		                        struct ID3D11ShaderResourceView* atlasTileVpSrv = nullptr)
+		                        struct ID3D11ShaderResourceView* atlasTileVpSrv = nullptr,
+		                        struct ID3D11ShaderResourceView* areaTexturesSrv = nullptr,
+		                        struct ID3D11ShaderResourceView* pointAtlasSrv = nullptr)
 		{
+			_clAreaTexturesSrv = areaTexturesSrv;
+			_clPointAtlasSrv = pointAtlasSrv;
 			_clLightsSrv = lightsSrv; _clCountsSrv = countsSrv;
 			_clListsSrv = listsSrv; _clActive = active;
 			_clAtlasSrv = shadowAtlasSrv; _clAtlasTileVpSrv = atlasTileVpSrv;
@@ -258,6 +262,9 @@ namespace HexEngine
 		struct ID3D11ShaderResourceView* _clListsSrv = nullptr;
 		struct ID3D11ShaderResourceView* _clAtlasSrv = nullptr;
 		struct ID3D11ShaderResourceView* _clAtlasTileVpSrv = nullptr;
+		struct ID3D11ShaderResourceView* _clPointAtlasSrv = nullptr;   // t23 in the scatter CS
+		// Rect light image array (ClusteredLighting), CS t22; null = untextured.
+		struct ID3D11ShaderResourceView* _clAreaTexturesSrv = nullptr;
 
 		// Cloud shadow inputs (see SetCloudShadow). Not owned.
 		class IConstantBuffer* _cloudConstantsCb = nullptr;

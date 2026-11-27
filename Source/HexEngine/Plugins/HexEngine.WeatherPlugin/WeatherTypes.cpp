@@ -1,6 +1,7 @@
 #include "WeatherTypes.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace HexEngine::Weather
 {
@@ -81,9 +82,28 @@ namespace HexEngine::Weather
 			state.cloudDensity = 0.50f;
 			state.cloudErosion = 0.45f;
 			state.windSpeed = 9.0f;
-			state.fogDensity = 0.0002f;
-			state.fogHeightDensity = 0.0008f;
+			// 2026-11-24: a little haze - the ~20 km visibility (0.0002) read
+			// flat and Lambertian with nothing receding. ~3 km plus a low
+			// height band gives distant mountains and the far town aerial
+			// depth. The fog's ambient inscatter colour is the scene ambient,
+			// and the old dark grey (0.10) turned that haze into a dull brown
+			// veil; a sky-tinted ambient makes it read as airy daylight haze
+			// (warm at sunset, faint blue at night via the per-frame tint).
+			// With DDGI on, surfaces hand this flat ambient off entirely, so it
+			// only colours the air; with r_ddgi 0 it also lifts shadows.
+			state.fogDensity = 0.0012f;
+			state.fogHeightDensity = 0.0030f;
+			state.mieStrength = 1.4f;
+			state.sunHazeStrength = 1.2f;
+			state.fogSkyTintInfluence = 0.5f;
+			state.ambientLight = math::Vector4(0.34f, 0.36f, 0.40f, 1.0f);
+			// Warm-midday pass (same day): the haze ambient was too blue and the
+			// near-white sun let the sky fill wash surfaces blue; a slightly warm
+			// sun + near-neutral haze reads as a sunny day (user ref: vibrant, warm).
+			state.sunColour = math::Color(1.0f, 0.94f, 0.84f, 1.0f);
 			state.surface.temperatureBias = 0.2f;
+			state.sunIntensity = 1.92f;
+			// 2026-11-23 look pass: the sunny-day sun (was carried by a 3x day/night boost).
 			break;
 		case WeatherPresetId::Overcast:
 			state.zenithExponent = 2.2f;
@@ -95,15 +115,15 @@ namespace HexEngine::Weather
 			state.cirrusType = 0.50f;
 			state.anisotropicIntensity = 0.16f;
 			state.atmosphereDensity = 0.16f;
-			state.cloudCoverage = 0.88f;
+			state.cloudCoverage = 0.97f;
 			state.cloudDensity = 1.70f;
 			state.cloudAmbientStrength = 0.75f;
 			state.cloudViewAbsorption = 0.90f;
 			state.cloudShadowStrength = 0.82f;
-			state.sunIntensity = 0.22f;
+			state.sunIntensity = 0.05f;
 			state.sunColour = math::Color(0.68f, 0.71f, 0.76f, 1.0f);
 			state.fogColour = math::Color(0.50f, 0.53f, 0.58f, 1.0f);
-			state.ambientLight = math::Vector4(0.16f, 0.17f, 0.19f, 1.0f);
+			state.ambientLight = math::Vector4(0.34f, 0.35f, 0.37f, 1.0f);
 			state.ambientSkyStrength = 0.24f;
 			state.rayleighStrength = 0.34f;
 			state.mieStrength = 1.65f;
@@ -116,6 +136,8 @@ namespace HexEngine::Weather
 			state.fogDensity = 0.0013f;
 			state.fogHeightDensity = 0.0030f;
 			state.fogSkyTintInfluence = 0.08f;
+			// 2026-11-23 look pass: values tuned with r_iblSkyDiffuse 0.25 and the scene's
+			// _sunLightBoost 1.56 - cloud cover reads as soft diffuse light, not sun + gloom.
 			break;
 		case WeatherPresetId::Rain:
 			state.zenithExponent = 1.9f;
@@ -132,10 +154,10 @@ namespace HexEngine::Weather
 			state.cloudDensity = 1.90f;
 			state.cloudViewAbsorption = 0.90f;
 			state.cloudShadowStrength = 0.92f;
-			state.sunIntensity = 0.16f;
+			state.sunIntensity = 0.08f;
 			state.sunColour = math::Color(0.58f, 0.62f, 0.68f, 1.0f);
 			state.fogColour = math::Color(0.40f, 0.44f, 0.50f, 1.0f);
-			state.ambientLight = math::Vector4(0.12f, 0.13f, 0.16f, 1.0f);
+			state.ambientLight = math::Vector4(0.24f, 0.25f, 0.28f, 1.0f);
 			state.ambientSkyStrength = 0.16f;
 			state.rayleighStrength = 0.26f;
 			state.mieStrength = 1.95f;
@@ -146,7 +168,7 @@ namespace HexEngine::Weather
 			state.sunsetGlowStrength = 0.04f;
 			// Rain: ~1.1km visibility - the air visibly thickens but the
 			// street still reads clearly.
-			state.fogDensity = 0.0035f;
+			state.fogDensity = 0.004f;
 			state.fogHeightDensity = 0.0045f;
 			state.fogSkyTintInfluence = 0.04f;
 			state.windSpeed = 13.0f;
@@ -166,10 +188,10 @@ namespace HexEngine::Weather
 			state.cloudDensity = 2.10f;
 			state.cloudViewAbsorption = 0.95f;
 			state.cloudShadowStrength = 1.0f;
-			state.sunIntensity = 0.08f;
+			state.sunIntensity = 0.04f;
 			state.sunColour = math::Color(0.48f, 0.52f, 0.58f, 1.0f);
 			state.fogColour = math::Color(0.34f, 0.37f, 0.43f, 1.0f);
-			state.ambientLight = math::Vector4(0.08f, 0.09f, 0.11f, 1.0f);
+			state.ambientLight = math::Vector4(0.18f, 0.19f, 0.22f, 1.0f);
 			state.ambientSkyStrength = 0.10f;
 			state.rayleighStrength = 0.18f;
 			state.mieStrength = 2.15f;
@@ -180,7 +202,7 @@ namespace HexEngine::Weather
 			state.sunsetGlowStrength = 0.02f;
 			// Heavy rain: ~450m visibility - distant blocks dissolve into
 			// the downpour.
-			state.fogDensity = 0.0085f;
+			state.fogDensity = 0.008f;
 			state.fogHeightDensity = 0.0060f;
 			state.fogSkyTintInfluence = 0.02f;
 			state.windSpeed = 18.0f;
@@ -188,9 +210,18 @@ namespace HexEngine::Weather
 		case WeatherPresetId::Storm:
 			state = MakePresetState(WeatherPresetId::HeavyRain);
 			state.presetId = WeatherPresetId::Storm;
-			state.cloudType = 0.55f;      // towering storm cells
+			// 2026-11-26 cloud pass (user reference: stormy sunset, sculpted
+			// cumulonimbus with gaps toward a low sun). The old closed 1.0 deck
+			// at type 0.55 + 260 m fog rendered one flat grey ceiling with no
+			// edge to catch light. Now: towering cells (type 0.95 + coverage
+			// >= 0.55 arms the cumulonimbus/anvil profile in CloudCommon),
+			// broken (0.58) so the sun breaks through, clearer air (~1.5 km)
+			// so the cells read, and a real sun (0.45) for the shafts and the
+			// lit patches between cloud shadows. HeavyRain keeps the closed deck.
+			state.cloudType = 0.95f;      // towering storm cells
+			state.cloudErosion = 0.50f;
 			state.enableLightning = true;
-			state.lightningIntensity = 5.5f;
+			state.lightningIntensity = 3.0f;
 			state.lightningIntervalMin = 1.2f;
 			state.lightningIntervalMax = 3.0f;
 			state.lightningDuration = 0.35f;
@@ -198,39 +229,45 @@ namespace HexEngine::Weather
 			state.zenithExponent = 1.35f;
 			state.anisotropicIntensity = 0.06f;
 			state.atmosphereDensity = 0.24f;
-			state.cloudCoverage = 1.0f;
+			state.cloudCoverage = 0.58f;  // 0.66 closed into a ceiling once storm towers got their 8 km slab
 			state.cloudDensity = 2.40f;
-			state.sunIntensity = 0.03f;
+			state.sunIntensity = 0.45f;
 			state.sunColour = math::Color(0.42f, 0.46f, 0.52f, 1.0f);
 			state.fogColour = math::Color(0.24f, 0.27f, 0.32f, 1.0f);
-			state.ambientLight = math::Vector4(0.05f, 0.06f, 0.08f, 1.0f);
+			state.ambientLight = math::Vector4(0.11f, 0.12f, 0.15f, 1.0f);
 			state.ambientSkyStrength = 0.05f;
 			state.rayleighStrength = 0.10f;
 			state.mieStrength = 2.45f;
-			state.cloudAmbientStrength = 0.18f;
+			// 0.18 -> 0.30: the cloud shader now darkens bases by sky
+			// visibility itself; 0.18 on top crushed them to black.
+			state.cloudAmbientStrength = 0.30f;
 			state.cloudViewAbsorption = 1.0f;
 			state.cloudShadowStrength = 1.0f;
 			state.sunHazeStrength = 1.85f;
-			state.sunsetWarmStrength = 0.0f;
-			state.sunsetCoolStrength = 0.06f;
-			state.sunsetGlowStrength = 0.0f;
-			// Storm: ~260m visibility - the world closes in; lightning and
-			// local lights carve visible shafts through the murk.
-			state.fogDensity = 0.015f;
-			state.fogHeightDensity = 0.0080f;
+			// A little warm glow at the sun through the gaps (was 0 =
+			// colourless dusk). Kept low: 0.6 washed the whole frame orange
+			// (fog + sky), burying the cool storm bases.
+			state.sunsetWarmStrength = 0.15f;
+			state.sunsetCoolStrength = 0.3f;
+			state.sunsetGlowStrength = 0.35f;
+			// Storm: ~1.5 km visibility (was 0.013 = 260 m, which fogged the
+			// sky until no cloud structure survived). Rain shafts under the
+			// cells (VolumetricClouds) now carry the "closing in" mood.
+			state.fogDensity = 0.0025f;
+			state.fogHeightDensity = 0.0030f;
 			state.fogSkyTintInfluence = 0.0f;
 			state.windSpeed = 21.0f;
 			break;
 		case WeatherPresetId::Thunderstorm:
 			state = MakePresetState(WeatherPresetId::Storm);
 			state.presetId = WeatherPresetId::Thunderstorm;
-			state.lightningIntensity = 7.5f;
+			state.lightningIntensity = 3.0f;
 			state.lightningIntervalMin = 1.8f;
 			state.lightningIntervalMax = 4.0f;
 			state.lightningDuration = 0.45f;
-			// Slightly denser than the base storm (~220m visibility) so the
+			// Slightly denser than the base storm (~1.2 km vs ~1.5 km) so the
 			// two presets read differently even between lightning strikes.
-			state.fogDensity = 0.018f;
+			state.fogDensity = 0.0032f;
 			break;
 		case WeatherPresetId::Snow:
 			state.zenithExponent = 2.0f;
@@ -243,13 +280,13 @@ namespace HexEngine::Weather
 			state.surface.snowCoverage = 0.45f;
 			state.surface.snowMelt = 0.15f;
 			state.surface.temperatureBias = -0.8f;
-			state.cloudCoverage = 0.92f;
+			state.cloudCoverage = 0.96f;
 			state.cloudDensity = 1.50f;
 			state.atmosphereDensity = 0.13f;
-			state.sunIntensity = 0.18f;
+			state.sunIntensity = 0.10f;
 			state.sunColour = math::Color(0.72f, 0.76f, 0.82f, 1.0f);
 			state.fogColour = math::Color(0.58f, 0.62f, 0.68f, 1.0f);
-			state.ambientLight = math::Vector4(0.18f, 0.20f, 0.23f, 1.0f);
+			state.ambientLight = math::Vector4(0.36f, 0.38f, 0.42f, 1.0f);
 			state.ambientSkyStrength = 0.18f;
 			state.rayleighStrength = 0.20f;
 			state.mieStrength = 1.58f;
@@ -284,7 +321,7 @@ namespace HexEngine::Weather
 			state.sunIntensity = 0.04f;
 			state.sunColour = math::Color(0.60f, 0.64f, 0.70f, 1.0f);
 			state.fogColour = math::Color(0.48f, 0.52f, 0.58f, 1.0f);
-			state.ambientLight = math::Vector4(0.12f, 0.14f, 0.16f, 1.0f);
+			state.ambientLight = math::Vector4(0.52f, 0.55f, 0.60f, 1.0f);
 			state.ambientSkyStrength = 0.08f;
 			state.rayleighStrength = 0.10f;
 			state.mieStrength = 1.95f;
@@ -298,11 +335,12 @@ namespace HexEngine::Weather
 			// Blizzard: ~85m visibility - genuine whiteout. The froxel medium
 			// saturates toward the cool-grey ambient within a city block;
 			// the analytic continuation closes off everything beyond.
-			state.fogDensity = 0.046f;
+			state.fogDensity = 0.045f;
 			state.fogHeightDensity = 0.010f;
 			state.fogSkyTintInfluence = 0.02f;
 			state.windSpeed = 24.0f;
 			state.auroraIntensity = 0.0f;
+			// Bright ambient = the fog lights up into a white-out (it was a dark murk).
 			break;
 		case WeatherPresetId::Hot:
 			state.surface.temperatureBias = 1.0f;
@@ -313,7 +351,7 @@ namespace HexEngine::Weather
 			state.cloudDensity = 0.55f;
 			state.cloudAmbientStrength = 0.60f;
 			state.cloudViewAbsorption = 0.50f;
-			state.sunIntensity = 1.25f;
+			state.sunIntensity = 2.4f;
 			state.atmosphereDensity = 0.14f;
 			state.mieStrength = 1.45f;
 			state.sunHazeStrength = 1.35f;
@@ -337,11 +375,11 @@ namespace HexEngine::Weather
 			// Sandstorm: ~65m visibility, the densest preset. The froxel
 			// medium's ambient inscatter picks up the orange ambientLight
 			// below, so the whole air mass glows dusty orange.
-			state.fogDensity = 0.060f;
+			state.fogDensity = 0.035f;
 			state.fogHeightDensity = 0.008f;
 			state.fogSkyTintInfluence = 0.12f;
 			state.fogColour = math::Color(0.72f, 0.58f, 0.39f, 1.0f);
-			state.ambientLight = math::Vector4(0.42f, 0.34f, 0.24f, 1.0f);
+			state.ambientLight = math::Vector4(0.50f, 0.40f, 0.28f, 1.0f);
 			state.windDirection = math::Vector3(0.75f, 0.0f, 0.35f);
 			state.windSpeed = 29.0f;
 			break;
@@ -424,6 +462,203 @@ namespace HexEngine::Weather
 		out.auroraColorB = LerpValue(a.auroraColorB, b.auroraColorB, alpha);
 		out.transitionSeconds = LerpValue(a.transitionSeconds, b.transitionSeconds, alpha);
 		return out;
+	}
+
+	// ---- Sky moods -----------------------------------------------------------
+	namespace
+	{
+		// Every field is relative to the preset: multipliers (1 = unchanged),
+		// RGB tints (1,1,1 = unchanged) or additive offsets (0 = unchanged).
+		// A preset's reach k blends each term toward identity:
+		// mul -> 1 + (m - 1) * k, add -> a * k.
+		struct MoodDef
+		{
+			float warm, cool, glow;                        // env_sunset* trims
+			float density, rayleigh, mie, haze;            // atmosphere (LUTs)
+			math::Vector3 sunTint; float sunIntensity;     // directional light
+			math::Vector3 ambientTint;                     // scene ambient (also fog inscatter)
+			float fogDensity; math::Vector3 fogTint;       // froxel fog
+			float coverageAdd, cirrusAdd, cirrusTypeAdd, cloudTypeAdd;
+		};
+
+		const MoodDef& GetMoodDef(WeatherMoodId mood)
+		{
+			static const MoodDef kMoods[] = {
+				// Standard
+				{ 1.00f, 1.00f, 1.00f,  1.00f, 1.00f, 1.00f, 1.00f,  { 1.00f, 1.00f, 1.00f }, 1.00f,  { 1.00f, 1.00f, 1.00f },  1.00f, { 1.00f, 1.00f, 1.00f },  0.00f,  0.00f,  0.00f,  0.00f },
+				// Golden: richer warm horizon + halo, warm sun and fill.
+				{ 1.70f, 0.70f, 1.60f,  1.08f, 1.00f, 1.15f, 1.20f,  { 1.05f, 0.97f, 0.88f }, 1.00f,  { 1.05f, 1.00f, 0.93f },  1.00f, { 1.05f, 1.00f, 0.92f },  0.00f, 0.10f, 0.00f, 0.00f },
+				// Ember: thick aerosol reddens the low sun (Hillaire density/Mie),
+				// hot tinted light all day, warmer denser haze.
+				{ 2.10f, 0.45f, 1.90f,  1.55f, 0.95f, 1.90f, 1.40f,  { 1.09f, 0.90f, 0.74f }, 0.90f,  { 1.08f, 0.97f, 0.86f },  1.45f, { 1.10f, 0.96f, 0.82f },  0.00f, 0.05f, 0.00f, 0.00f },
+				// Crisp: thin clean air (deep blue, sharp distance), cooler light,
+				// pink-blue dusk instead of orange.
+				{ 0.65f, 1.70f, 0.75f,  0.85f, 1.15f, 0.50f, 0.70f,  { 0.95f, 1.00f, 1.08f }, 1.05f,  { 0.93f, 0.99f, 1.09f },  0.50f, { 0.92f, 0.99f, 1.08f },  0.00f,-0.10f, 0.00f, 0.00f },
+				// Violet: strong anti-sun purple, extra streaky cirrus to hold it.
+				{ 0.80f, 2.60f, 1.40f,  1.00f, 1.10f, 0.85f, 1.00f,  { 1.03f, 0.94f, 1.02f }, 1.00f,  { 1.03f, 0.94f, 1.10f },  0.85f, { 1.02f, 0.94f, 1.08f },  0.00f, 0.25f,-0.10f, 0.00f },
+				// Hazy: milky aerosol, soft sun, lower contrast.
+				{ 0.90f, 0.65f, 1.30f,  1.20f, 0.95f, 2.00f, 1.70f,  { 1.02f, 1.00f, 0.95f }, 0.85f,  { 1.05f, 1.04f, 1.00f },  2.00f, { 1.04f, 1.03f, 1.00f },  0.00f, 0.05f, 0.00f, 0.00f },
+				// Streaked: more cirrus + a few more low clouds to catch the light.
+				{ 1.20f, 1.10f, 1.25f,  1.00f, 1.00f, 1.00f, 1.00f,  { 1.00f, 1.00f, 1.00f }, 1.00f,  { 1.00f, 1.00f, 1.00f },  1.00f, { 1.00f, 1.00f, 1.00f },  0.06f,  0.35f, -0.15f, -0.05f },
+			};
+			static_assert(sizeof(kMoods) / sizeof(kMoods[0]) == static_cast<size_t>(WeatherMoodId::Count), "one MoodDef per WeatherMoodId");
+			const int32_t index = std::clamp(static_cast<int32_t>(mood), 0, static_cast<int32_t>(WeatherMoodId::Count) - 1);
+			return kMoods[index];
+		}
+
+		// How far moods reach for each preset, and how much the per-roll layout
+		// jitter (coverage / cirrus / wind heading) may move it. Storm-class
+		// presets get NO coverage jitter: coverage 0.50-0.65 is the storm-tower
+		// gate in CloudCommon (CloudStormSky), so +-0.03 would visibly grow or
+		// collapse the towers.
+		struct PresetMoodProfile
+		{
+			float reach = 0.0f;
+			float coverageJitter = 0.0f; // +- cloud coverage
+			float cirrusJitter = 0.0f;   // +- cirrus amount
+			float windJitterDeg = 0.0f;  // +- wind heading
+		};
+
+		PresetMoodProfile GetPresetMoodProfile(WeatherPresetId presetId)
+		{
+			switch (presetId)
+			{
+			case WeatherPresetId::Clear:        return { 1.00f, 0.030f, 0.12f, 25.0f };
+			case WeatherPresetId::Hot:          return { 1.00f, 0.030f, 0.12f, 25.0f };
+			case WeatherPresetId::Overcast:     return { 0.60f, 0.020f, 0.00f, 25.0f };
+			case WeatherPresetId::Rain:
+			case WeatherPresetId::HeavyRain:    return { 0.50f, 0.015f, 0.00f, 20.0f };
+			case WeatherPresetId::Storm:
+			case WeatherPresetId::Thunderstorm: return { 0.70f, 0.000f, 0.00f, 20.0f };
+			case WeatherPresetId::Snow:
+			case WeatherPresetId::Blizzard:     return { 0.60f, 0.015f, 0.05f, 20.0f };
+			case WeatherPresetId::Sandstorm:    return { 0.50f, 0.000f, 0.00f, 10.0f };
+			case WeatherPresetId::Custom:
+			default:                            return {};
+			}
+		}
+
+		float MoodMul(float m, float k) { return 1.0f + (m - 1.0f) * k; }
+		math::Vector3 MoodTint(const math::Vector3& t, float k)
+		{
+			return math::Vector3(MoodMul(t.x, k), MoodMul(t.y, k), MoodMul(t.z, k));
+		}
+	}
+
+	const wchar_t* GetMoodDisplayName(WeatherMoodId mood)
+	{
+		switch (mood)
+		{
+		case WeatherMoodId::Golden: return L"Golden";
+		case WeatherMoodId::Ember: return L"Ember";
+		case WeatherMoodId::Crisp: return L"Crisp";
+		case WeatherMoodId::Violet: return L"Violet";
+		case WeatherMoodId::Hazy: return L"Hazy";
+		case WeatherMoodId::Streaked: return L"Streaked";
+		case WeatherMoodId::Standard:
+		default: return L"Standard";
+		}
+	}
+
+	const std::vector<WeatherMoodId>& GetPresetMoods(WeatherPresetId presetId)
+	{
+		using M = WeatherMoodId;
+		static const std::vector<M> kClear    = { M::Standard, M::Golden, M::Ember, M::Crisp, M::Violet, M::Hazy, M::Streaked };
+		static const std::vector<M> kHot      = { M::Standard, M::Golden, M::Ember, M::Hazy, M::Streaked };
+		static const std::vector<M> kOvercast = { M::Standard, M::Golden, M::Crisp, M::Violet, M::Hazy };
+		static const std::vector<M> kRain     = { M::Standard, M::Golden, M::Crisp, M::Hazy };
+		// Crisp = the cold blue-grey storm, Golden = a copper break under the deck
+		// (Ember pushed Storm's already-high Mie to ~3.9 and washed the deck out).
+		static const std::vector<M> kStorm    = { M::Standard, M::Golden, M::Crisp, M::Violet };
+		static const std::vector<M> kSnow     = { M::Standard, M::Golden, M::Crisp, M::Violet };
+		static const std::vector<M> kSand     = { M::Standard, M::Ember, M::Hazy };
+		static const std::vector<M> kNone;
+
+		switch (presetId)
+		{
+		case WeatherPresetId::Clear:        return kClear;
+		case WeatherPresetId::Hot:          return kHot;
+		case WeatherPresetId::Overcast:     return kOvercast;
+		case WeatherPresetId::Rain:
+		case WeatherPresetId::HeavyRain:    return kRain;
+		case WeatherPresetId::Storm:
+		case WeatherPresetId::Thunderstorm: return kStorm;
+		case WeatherPresetId::Snow:
+		case WeatherPresetId::Blizzard:     return kSnow;
+		case WeatherPresetId::Sandstorm:    return kSand;
+		case WeatherPresetId::Custom:
+		default:                            return kNone;
+		}
+	}
+
+	void ApplyWeatherMood(WeatherState& state, WeatherPresetId presetId, const WeatherMoodRoll& roll, float strength)
+	{
+		const PresetMoodProfile profile = GetPresetMoodProfile(presetId);
+		const float k = profile.reach * std::clamp(strength, 0.0f, 2.0f);
+		if (k <= 0.0f)
+			return;
+
+		const MoodDef& m = GetMoodDef(roll.mood);
+		const float j0 = std::clamp(roll.jitter[0], -1.0f, 1.0f);
+		const float j1 = std::clamp(roll.jitter[1], -1.0f, 1.0f);
+		const float j2 = std::clamp(roll.jitter[2], -1.0f, 1.0f);
+		const float j3 = std::clamp(roll.jitter[3], -1.0f, 1.0f);
+
+		// Sunset trims (env_sunset* range 0..4).
+		state.sunsetWarmStrength = std::clamp(state.sunsetWarmStrength * MoodMul(m.warm, k) * (1.0f + 0.12f * j0 * k), 0.0f, 4.0f);
+		state.sunsetCoolStrength = std::clamp(state.sunsetCoolStrength * MoodMul(m.cool, k), 0.0f, 4.0f);
+		state.sunsetGlowStrength = std::clamp(state.sunsetGlowStrength * MoodMul(m.glow, k), 0.0f, 4.0f);
+
+		// Atmosphere: feeds the Hillaire LUTs, so these change the sky all day
+		// (a hazy day is hazy at noon too) and the sun's colour at the horizon.
+		state.atmosphereDensity = std::clamp(state.atmosphereDensity * MoodMul(m.density, k), 0.02f, 4.0f);
+		state.rayleighStrength = std::clamp(state.rayleighStrength * MoodMul(m.rayleigh, k), 0.0f, 4.0f);
+		state.mieStrength = std::clamp(state.mieStrength * MoodMul(m.mie, k), 0.0f, 4.0f);
+		state.sunHazeStrength = std::clamp(state.sunHazeStrength * MoodMul(m.haze, k), 0.0f, 4.0f);
+
+		const math::Vector3 sunTint = MoodTint(m.sunTint, k);
+		state.sunColour = math::Color(
+			std::clamp(state.sunColour.x * sunTint.x, 0.0f, 2.0f),
+			std::clamp(state.sunColour.y * sunTint.y, 0.0f, 2.0f),
+			std::clamp(state.sunColour.z * sunTint.z, 0.0f, 2.0f),
+			state.sunColour.w);
+		state.sunIntensity = std::max(0.0f, state.sunIntensity * MoodMul(m.sunIntensity, k));
+
+		const math::Vector3 ambientTint = MoodTint(m.ambientTint, k);
+		state.ambientLight = math::Vector4(
+			std::max(0.0f, state.ambientLight.x * ambientTint.x),
+			std::max(0.0f, state.ambientLight.y * ambientTint.y),
+			std::max(0.0f, state.ambientLight.z * ambientTint.z),
+			state.ambientLight.w);
+
+		const float fogMul = MoodMul(m.fogDensity, k);
+		state.fogDensity = std::max(0.0f, state.fogDensity * fogMul);
+		state.fogHeightDensity = std::max(0.0f, state.fogHeightDensity * fogMul);
+		const math::Vector3 fogTint = MoodTint(m.fogTint, k);
+		state.fogColour = math::Color(
+			std::clamp(state.fogColour.x * fogTint.x, 0.0f, 1.0f),
+			std::clamp(state.fogColour.y * fogTint.y, 0.0f, 1.0f),
+			std::clamp(state.fogColour.z * fogTint.z, 0.0f, 1.0f),
+			state.fogColour.w);
+
+		// Cloud layout. Coverage offsets use the profile's jitter scale as a
+		// gate too, so Storm (jitter 0) keeps its authored tower gate.
+		if (profile.coverageJitter > 0.0f)
+			state.cloudCoverage = std::clamp(state.cloudCoverage + m.coverageAdd * k + j1 * profile.coverageJitter * k, 0.01f, 1.0f);
+		state.cirrusAmount = std::clamp(state.cirrusAmount + m.cirrusAdd * k + j2 * profile.cirrusJitter * k, 0.0f, 1.0f);
+		state.cirrusType = std::clamp(state.cirrusType + m.cirrusTypeAdd * k, 0.0f, 1.0f);
+		if (profile.coverageJitter > 0.0f)
+			state.cloudType = std::clamp(state.cloudType + m.cloudTypeAdd * k, 0.0f, 1.0f);
+
+		// Wind heading: clouds drift (and rain slants) a different way each day.
+		if (profile.windJitterDeg > 0.0f && std::fabs(j3) > 0.0001f)
+		{
+			const float angle = j3 * profile.windJitterDeg * std::min(k / std::max(profile.reach, 0.0001f), 1.0f) * 0.0174532925f;
+			const float c = std::cos(angle);
+			const float s = std::sin(angle);
+			const math::Vector3 w = state.windDirection;
+			state.windDirection = math::Vector3(w.x * c - w.z * s, w.y, w.x * s + w.z * c);
+		}
 	}
 
 	void SerializeWeatherSurface(const WeatherSurfaceResponse& surface, json& data, JsonFile* file)

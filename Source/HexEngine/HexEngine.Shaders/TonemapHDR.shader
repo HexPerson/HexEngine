@@ -108,6 +108,8 @@
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
 		float4 colour = shaderTexture.Sample(PointSampler, input.texcoord);
-		return float4(ApplyHdrDisplayMap(colour.rgb, input.position.xy), colour.a);
+		// Opaque: the finished frame lands in a camera target that game UI may
+		// sample (e.g. a map); beauty's alpha is meaningless (0) by this point.
+		return float4(ApplyHdrDisplayMap(colour.rgb, input.position.xy), 1.0f);
 	}
 }

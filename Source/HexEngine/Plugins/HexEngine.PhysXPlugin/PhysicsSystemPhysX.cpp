@@ -5,6 +5,7 @@
 #include <HexEngine.Core/HexEngine.hpp>
 #include <extensions\PxExtensionsAPI.h>
 #include <cmath>
+#include <algorithm>
 
 namespace
 {
@@ -128,7 +129,10 @@ bool PhysicsSystemPhysX::Create()
 
 	_dispatcher = physx::PxDefaultCpuDispatcherCreate(2);
 
-	sceneDesc.gravity = physx::PxVec3(0.0f, -98.1f, 0.0f);
+	// Real gravity. Was -98.1 (10x) since the initial commit: hops couldn't
+	// leave the ground and ground friction was 10x, so vehicles needed absurd
+	// drive forces. The player CCT, particles and weather use their own gravity.
+	sceneDesc.gravity = physx::PxVec3(0.0f, -9.81f, 0.0f);
 	sceneDesc.cpuDispatcher = _dispatcher;
 	sceneDesc.filterShader = SampleSubmarineFilterShader;// physx::PxDefaultSimulationFilterShader;
 	sceneDesc.simulationEventCallback = this;
@@ -219,6 +223,7 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CreateController(const HexEngine::Con
 	desc.density = params.density;
 
 	desc.reportCallback = this;
+	desc.behaviorCallback = this;
 
 	auto controller = _controllerManager->createController(desc);
 
@@ -270,6 +275,10 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CreateRigidBody(HexEngine::Transform*
 
 		actor->userData = rigidBody;
 		_scene->addActor(*actor);
+		// Character controllers only see a new body once scene-query updates are
+		// flushed (they did when something was REMOVED, which flushes) - a bus
+		// spawned mid-game was walked straight through until then.
+		_scene->flushQueryUpdates();
 
 		_scene->unlockWrite();
 		//_scene->unlockRead();
@@ -344,6 +353,12 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 				rigidBody->_geometry = geomCopy;
 				rigidBody->_shape = _physics->createShape(*geomCopy, rigidBody->_customMaterial ? *rigidBody->_customMaterial : *_defaultMaterial, true);
 
+				// Keep the box's offset (its AABB centre): without it a prefab-spawned
+				// box sat centred on the entity origin - a van whose box should start
+				// at the ground rode a metre up / sank half into the road.
+				if (physxBody->_shape)
+					rigidBody->_shape->setLocalPose(physxBody->_shape->getLocalPose());
+
 				break;
 			}
 
@@ -373,6 +388,9 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 
 				rigidBody->_geometry = geomCopy;
 				rigidBody->_shape = _physics->createShape(*geomCopy, rigidBody->_customMaterial ? *rigidBody->_customMaterial : *_defaultMaterial, true);
+
+				if (physxBody->_shape)
+					rigidBody->_shape->setLocalPose(physxBody->_shape->getLocalPose());
 
 				break;
 			}
@@ -487,7 +505,11 @@ void PhysicsSystemPhysX::Update(float simulationTime)
 				if (body && body->IsPoseWritebackEnabled())
 				{
 
-					HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->Lock();
+					// Lock and unlock the SAME scene: re-reading GetCurrentScene() for
+					// the unlock aborted the editor (unlock of an unowned mutex) when an
+					// open_project load switched the current scene mid-loop.
+					auto lockedScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+					lockedScene->Lock();
 
 					auto transform = body->GetTransform();
 
@@ -524,7 +546,7 @@ void PhysicsSystemPhysX::Update(float simulationTime)
 					if (bodyComponent)
 						bodyComponent->EnableForcePoseUpdates(true);
 
-					HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->Unlock();
+					lockedScene->Unlock();
 				}
 			}
 		}
@@ -751,19 +773,40 @@ void PhysicsSystemPhysX::onTrigger(physx::PxTriggerPair* pairs, physx::PxU32 cou
 
 			if (triggerEnt && actorEnt)
 			{
+				// Both sides hear about the overlap: the entering body (other =
+				// the trigger) and the trigger itself (other = the entering body),
+				// so a script on a trigger volume gets OnTriggerEnter/Exit.
 				if (cp.status == physx::PxPairFlag::eNOTIFY_TOUCH_LOST)
 				{
 					HexEngine::LeaveTriggerMessage message;
 					message.trigger = triggerEnt;
 					message.triggerId = triggerEnt->GetId();
+					message.other = triggerEnt;
+					message.otherId = triggerEnt->GetId();
 					actorEnt->OnMessage(&message, triggerEnt);
+
+					HexEngine::LeaveTriggerMessage toTrigger;
+					toTrigger.trigger = triggerEnt;
+					toTrigger.triggerId = triggerEnt->GetId();
+					toTrigger.other = actorEnt;
+					toTrigger.otherId = actorEnt->GetId();
+					triggerEnt->OnMessage(&toTrigger, actorEnt);
 				}
 				else if (cp.status == physx::PxPairFlag::eNOTIFY_TOUCH_FOUND)
 				{
 					HexEngine::EnterTriggerMessage message;
 					message.trigger = triggerEnt;
 					message.triggerId = triggerEnt->GetId();
+					message.other = triggerEnt;
+					message.otherId = triggerEnt->GetId();
 					actorEnt->OnMessage(&message, triggerEnt);
+
+					HexEngine::EnterTriggerMessage toTrigger;
+					toTrigger.trigger = triggerEnt;
+					toTrigger.triggerId = triggerEnt->GetId();
+					toTrigger.other = actorEnt;
+					toTrigger.otherId = actorEnt->GetId();
+					triggerEnt->OnMessage(&toTrigger, actorEnt);
 				}
 			}
 		}
@@ -816,6 +859,9 @@ uint32_t PhysicsSystemPhysX::RayCast(const math::Vector3& from, const math::Vect
 		hitInfo->distance = hit.distance;
 		hitInfo->entity = entity;
 		hitInfo->normal = math::Vector3(hit.normal.x, hit.normal.y, hit.normal.z);
+		hitInfo->smoothNormal = hitInfo->normal;
+		hitInfo->backFace = hitInfo->normal.Dot(unitDir) > 0.0f;
+		hitInfo->source = HexEngine::RayHitSource::Collider;
 		hitInfo->start = from;
 	}
 
@@ -824,6 +870,65 @@ uint32_t PhysicsSystemPhysX::RayCast(const math::Vector3& from, const math::Vect
 
 namespace
 {
+	// The engine entity that owns a PhysX actor. Ordinary bodies resolve via
+	// their RigidBody component; character controllers have no component
+	// (RigidBodyPhysX is built with bodyComponent == nullptr) but do carry
+	// their entity, so fall back to that - otherwise a CCT capsule hit has no
+	// entity and can't be ignored or layer-filtered by the caller.
+	HexEngine::Entity* EntityFromActor(const physx::PxRigidActor* actor)
+	{
+		if (actor == nullptr || actor->userData == nullptr)
+			return nullptr;
+		RigidBodyPhysX* rb = (RigidBodyPhysX*)actor->userData;
+		if (rb->GetBodyComponent() != nullptr)
+			return rb->GetBodyComponent()->GetEntity();
+		return rb->GetEntity();
+	}
+
+	void FillSceneHit(HexEngine::RayHit* hitInfo, const math::Vector3& from, const math::Vector3& unitDir, const physx::PxRaycastHit& b)
+	{
+		hitInfo->start = from;
+		hitInfo->position = math::Vector3(b.position.x, b.position.y, b.position.z);
+		hitInfo->normal = math::Vector3(b.normal.x, b.normal.y, b.normal.z);
+		hitInfo->smoothNormal = hitInfo->normal;
+		hitInfo->distance = b.distance;
+		hitInfo->entity = EntityFromActor(b.actor);
+		hitInfo->uv = math::Vector2(0.0f, 0.0f);
+		hitInfo->backFace = hitInfo->normal.Dot(unitDir) > 0.0f;
+		hitInfo->source = HexEngine::RayHitSource::PhysicsScene;
+		hitInfo->triangleIndex = UINT32_MAX;
+	}
+
+	// Prefilter for RayCastSceneFiltered: drops the ignore body and any
+	// collider whose entity the caller rejects, so the query continues to
+	// whatever is behind them. touchMode turns every accepted collider into a
+	// touch so a slope filter can look past a steep nearest surface.
+	struct EntityQueryFilter : public physx::PxQueryFilterCallback
+	{
+		const physx::PxRigidActor* ignore = nullptr;
+		const HexEngine::RaySceneFilter* filter = nullptr;
+		bool touchMode = false;
+
+		virtual physx::PxQueryHitType::Enum preFilter(
+			const physx::PxFilterData&, const physx::PxShape*,
+			const physx::PxRigidActor* actor, physx::PxHitFlags&) override
+		{
+			if (actor == ignore)
+				return physx::PxQueryHitType::eNONE;
+			if (filter != nullptr && filter->acceptEntity != nullptr &&
+				!filter->acceptEntity(EntityFromActor(actor), filter->context))
+				return physx::PxQueryHitType::eNONE;
+			return touchMode ? physx::PxQueryHitType::eTOUCH : physx::PxQueryHitType::eBLOCK;
+		}
+
+		virtual physx::PxQueryHitType::Enum postFilter(
+			const physx::PxFilterData&, const physx::PxQueryHit&,
+			const physx::PxShape*, const physx::PxRigidActor*) override
+		{
+			return touchMode ? physx::PxQueryHitType::eTOUCH : physx::PxQueryHitType::eBLOCK;
+		}
+	};
+
 	// Scene raycast prefilter that rejects a single actor (the caster's own
 	// body), so a downward ground probe doesn't just hit its own collider.
 	struct IgnoreActorQueryFilter : public physx::PxQueryFilterCallback
@@ -875,19 +980,73 @@ uint32_t PhysicsSystemPhysX::RayCastScene(const math::Vector3& from, const math:
 	if (!hit || !buf.hasBlock)
 		return 0;
 
-	const physx::PxRaycastHit& b = buf.block;
-	hitInfo->start = from;
-	hitInfo->position = math::Vector3(b.position.x, b.position.y, b.position.z);
-	hitInfo->normal = math::Vector3(b.normal.x, b.normal.y, b.normal.z);
-	hitInfo->distance = b.distance;
-	hitInfo->entity = nullptr;
-	if (b.actor != nullptr && b.actor->userData != nullptr)
+	FillSceneHit(hitInfo, from, math::Vector3(_dir.x, _dir.y, _dir.z), buf.block);
+	return 1;
+}
+
+uint32_t PhysicsSystemPhysX::RayCastSceneFiltered(const math::Vector3& from, const math::Vector3& unitDir, float maxDist, HexEngine::RayHit* hitInfo, const HexEngine::RaySceneFilter& filter)
+{
+	if (_scene == nullptr || hitInfo == nullptr || !(maxDist > 0.0f))
+		return 0;
+
+	const physx::PxVec3 _from(from.x, from.y, from.z);
+	physx::PxVec3 _dir(unitDir.x, unitDir.y, unitDir.z);
+	if (_dir.magnitudeSquared() < 1e-12f)
+		return 0;
+	_dir.normalize();
+	const math::Vector3 dir(_dir.x, _dir.y, _dir.z);
+
+	EntityQueryFilter cb;
+	cb.ignore = filter.ignoreBody != nullptr ? ((RigidBodyPhysX*)filter.ignoreBody)->GetRigidActor() : nullptr;
+	cb.filter = &filter;
+	// A slope limit has to see past a steep nearest surface - including other
+	// triangles of the SAME mesh/heightfield (eMESH_MULTIPLE) - so it collects
+	// every touch and picks the nearest acceptable one. Without one, the
+	// single nearest blocking hit is all we need.
+	cb.touchMode = filter.minNormalY > -1.0f;
+
+	physx::PxQueryFilterData fd;
+	fd.flags = physx::PxQueryFlag::eSTATIC | physx::PxQueryFlag::eDYNAMIC | physx::PxQueryFlag::ePREFILTER;
+
+	physx::PxHitFlags hitFlags = physx::PxHitFlag::ePOSITION | physx::PxHitFlag::eNORMAL;
+
+	if (!cb.touchMode)
 	{
-		RigidBodyPhysX* rb = (RigidBodyPhysX*)b.actor->userData;
-		if (rb->GetBodyComponent() != nullptr)
-			hitInfo->entity = rb->GetBodyComponent()->GetEntity();
+		physx::PxRaycastBuffer buf;
+		_scene->lockRead();
+		const bool hit = _scene->raycast(_from, _dir, maxDist, buf, hitFlags, fd, &cb);
+		_scene->unlockRead();
+		if (!hit || !buf.hasBlock)
+			return 0;
+		FillSceneHit(hitInfo, from, dir, buf.block);
+		return 1;
 	}
 
+	hitFlags |= physx::PxHitFlag::eMESH_MULTIPLE;
+	fd.flags |= physx::PxQueryFlag::eNO_BLOCK;
+	// If more colliders than this are touched the overflow is dropped by
+	// PhysX (in no defined order); 256 is far beyond a sane single ray.
+	constexpr physx::PxU32 kMaxTouches = 256;
+	thread_local physx::PxRaycastHit touches[kMaxTouches];
+	physx::PxRaycastBuffer buf(touches, kMaxTouches);
+
+	_scene->lockRead();
+	_scene->raycast(_from, _dir, maxDist, buf, hitFlags, fd, &cb);
+	_scene->unlockRead();
+
+	const physx::PxRaycastHit* best = nullptr;
+	for (physx::PxU32 i = 0; i < buf.nbTouches; ++i)
+	{
+		const physx::PxRaycastHit& t = buf.touches[i];
+		if (t.normal.y < filter.minNormalY)
+			continue;
+		if (best == nullptr || t.distance < best->distance)
+			best = &t;
+	}
+	if (best == nullptr)
+		return 0;
+
+	FillSceneHit(hitInfo, from, dir, *best);
 	return 1;
 }
 
@@ -899,6 +1058,24 @@ void PhysicsSystemPhysX::onControllerHit(const physx::PxControllersHit& hit)
 void PhysicsSystemPhysX::onObstacleHit(const physx::PxControllerObstacleHit& hit)
 {
 
+}
+
+physx::PxControllerBehaviorFlags PhysicsSystemPhysX::getBehaviorFlags(const physx::PxShape& shape, const physx::PxActor& actor)
+{
+	(void)shape; (void)actor;
+	return physx::PxControllerBehaviorFlag::eCCT_USER_DEFINED_RIDE;
+}
+
+physx::PxControllerBehaviorFlags PhysicsSystemPhysX::getBehaviorFlags(const physx::PxController& controller)
+{
+	(void)controller;
+	return physx::PxControllerBehaviorFlags(0);
+}
+
+physx::PxControllerBehaviorFlags PhysicsSystemPhysX::getBehaviorFlags(const physx::PxObstacle& obstacle)
+{
+	(void)obstacle;
+	return physx::PxControllerBehaviorFlags(0);
 }
 
 void PhysicsSystemPhysX::onContact(const physx::PxContactPairHeader& pairHeader, const physx::PxContactPair* pairs, physx::PxU32 nbPairs)
@@ -1002,4 +1179,54 @@ void PhysicsSystemPhysX::CreateHingeJoint(HexEngine::IRigidBody* bodies[2], cons
 	_scene->unlockWrite();
 
 	//joint->set
+}
+
+void* PhysicsSystemPhysX::CreateConeJoint(HexEngine::IRigidBody* parent, HexEngine::IRigidBody* child, const math::Matrix& jointWorld,
+	float swingDegrees, float twistDegrees)
+{
+	auto* a = parent != nullptr ? ((RigidBodyPhysX*)parent)->GetRigidActor() : nullptr;
+	auto* b = child != nullptr ? ((RigidBodyPhysX*)child)->GetRigidActor() : nullptr;
+	if (a == nullptr || b == nullptr || _physics == nullptr)
+		return nullptr;
+
+	// SimpleMath rows are the frame's axes + translation (row-vector convention).
+	physx::PxMat44 m(physx::PxIDENTITY::PxIdentity);
+	m.column0 = physx::PxVec4(jointWorld._11, jointWorld._12, jointWorld._13, 0.0f);
+	m.column1 = physx::PxVec4(jointWorld._21, jointWorld._22, jointWorld._23, 0.0f);
+	m.column2 = physx::PxVec4(jointWorld._31, jointWorld._32, jointWorld._33, 0.0f);
+	m.column3 = physx::PxVec4(jointWorld._41, jointWorld._42, jointWorld._43, 1.0f);
+	physx::PxTransform world(m);
+	world.q.normalize();
+
+	_scene->lockWrite();
+	const physx::PxTransform localA = a->getGlobalPose().getInverse() * world;
+	const physx::PxTransform localB = b->getGlobalPose().getInverse() * world;
+	physx::PxD6Joint* joint = physx::PxD6JointCreate(*_physics, a, localA, b, localB);
+	if (joint != nullptr)
+	{
+		const float deg = 3.14159265f / 180.0f;
+		const float swing = std::clamp(swingDegrees, 1.0f, 170.0f) * deg;
+		const float twist = std::clamp(twistDegrees, 1.0f, 170.0f) * deg;
+		joint->setMotion(physx::PxD6Axis::eX, physx::PxD6Motion::eLOCKED);
+		joint->setMotion(physx::PxD6Axis::eY, physx::PxD6Motion::eLOCKED);
+		joint->setMotion(physx::PxD6Axis::eZ, physx::PxD6Motion::eLOCKED);
+		joint->setMotion(physx::PxD6Axis::eTWIST, physx::PxD6Motion::eLIMITED);
+		joint->setMotion(physx::PxD6Axis::eSWING1, physx::PxD6Motion::eLIMITED);
+		joint->setMotion(physx::PxD6Axis::eSWING2, physx::PxD6Motion::eLIMITED);
+		joint->setTwistLimit(physx::PxJointAngularLimitPair(-twist, twist));
+		joint->setSwingLimit(physx::PxJointLimitCone(swing, swing));
+		// Joined limbs never collide with each other (they overlap at the joint).
+		joint->setConstraintFlag(physx::PxConstraintFlag::eCOLLISION_ENABLED, false);
+	}
+	_scene->unlockWrite();
+	return joint;
+}
+
+void PhysicsSystemPhysX::DestroyJoint(void* joint)
+{
+	if (joint == nullptr)
+		return;
+	_scene->lockWrite();
+	static_cast<physx::PxJoint*>(joint)->release();
+	_scene->unlockWrite();
 }

@@ -28,5 +28,35 @@ namespace Mcp
 	// connect/IO/timeout/parse failure.
 	bool CallBridge(const SessionInfo& session, const json& request, json& response,
 		std::string& error, unsigned int timeoutMs = 5000);
+
+	// A long-lived connection to the newest editor bridge session. Connects
+	// lazily, keeps the pipe open across calls (no per-call discovery or
+	// connect), and transparently re-discovers + reconnects when the pipe is
+	// found dead BEFORE a request was sent (editor restarted). It never resends a
+	// request whose write succeeded, so a read timeout can't cause a duplicate
+	// mutation. Not thread-safe: use one connection per thread.
+	class BridgeConnection
+	{
+	public:
+		BridgeConnection() = default;
+		~BridgeConnection();
+		BridgeConnection(const BridgeConnection&) = delete;
+		BridgeConnection& operator=(const BridgeConnection&) = delete;
+
+		// `request` needs only method + params; id and token are filled in.
+		bool Call(const json& request, json& response, std::string& error, unsigned int timeoutMs);
+
+		void Close();
+		bool IsConnected() const;
+		const SessionInfo& Session() const { return _session; }
+
+	private:
+		bool Connect(std::string& error);
+
+		void*       _handle = nullptr; // HANDLE, nullptr when disconnected
+		SessionInfo _session;
+		std::string _buffer;           // bytes read past the last newline
+		int64_t     _nextId = 1;
+	};
 }
 }

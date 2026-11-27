@@ -16,6 +16,7 @@ namespace HexEngine
 	// at the waterline doesn't chatter.
 	HVar snd_underwater("snd_underwater", "Muffle audio (level duck + pitch drop) while the listener is below the sea surface", true, false, true);
 	HVar snd_underwaterVolume("snd_underwaterVolume", "Master volume multiplier while fully submerged", 0.42f, 0.0f, 1.0f);
+	HVar snd_masterVolume("snd_masterVolume", "Master volume (game options menu)", 1.0f, 0.0f, 1.0f);
 	HVar snd_underwaterPitch("snd_underwaterPitch", "Pitch offset (octaves, negative = lower) layered on every sound while fully submerged", -0.22f, -1.0f, 0.0f);
 
 	AudioManager::AudioManager()
@@ -178,7 +179,7 @@ namespace HexEngine
 		{
 			// Ramp over the top 25 cm so ears-at-the-waterline is a partial
 			// muffle, not a switch.
-			target = std::clamp(scene->GetDepthBelowWater(listenerPosition) / 0.25f, 0.0f, 1.0f);
+			target = std::clamp(scene->GetViewDepthBelowWater(listenerPosition) / 0.25f, 0.0f, 1.0f);
 		}
 
 		const float dt = (g_pEnv->_timeManager != nullptr) ? std::clamp(g_pEnv->_timeManager->GetFrameTime(), 0.0f, 0.1f) : 0.0f;
@@ -189,8 +190,15 @@ namespace HexEngine
 
 		_underwaterPitchOffset = snd_underwaterPitch._val.f32 * _underwaterBlend;
 
-		if (_engine != nullptr && _underwaterBlend != _underwaterAppliedBlend)
-			_engine->SetMasterVolume(1.0f + (snd_underwaterVolume._val.f32 - 1.0f) * _underwaterBlend);
+		// Player-facing master volume (game options menu) on top of the muffle.
+		// File-static tracker so the class layout (and Game.dll ABI) is unchanged.
+		static float s_appliedMaster = -1.0f;
+		const float master = std::clamp(snd_masterVolume._val.f32, 0.0f, 1.0f);
+		if (_engine != nullptr && (_underwaterBlend != _underwaterAppliedBlend || master != s_appliedMaster))
+		{
+			_engine->SetMasterVolume(master * (1.0f + (snd_underwaterVolume._val.f32 - 1.0f) * _underwaterBlend));
+			s_appliedMaster = master;
+		}
 	}
 
 	void AudioManager::Play(const std::shared_ptr<SoundEffect>& effect)

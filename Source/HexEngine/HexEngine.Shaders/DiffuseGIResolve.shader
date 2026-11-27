@@ -52,8 +52,12 @@
 	// The trace shader packs voxelOcc into alpha; bilateral upsampling uses
 	// the same edge-aware weights for both signals so AO follows surface
 	// discontinuities just like the GI lighting does.
-	float4 UpsampleGiBilateral(float2 uv)
+	// Also returns the min/max of the well-matched (same surface) current
+	// samples: the neighbourhood the history is clamped into.
+	float4 UpsampleGiBilateral(float2 uv, out float4 nMin, out float4 nMax)
 	{
+		nMin = 1e6f.xxxx;
+		nMax = -1e6f.xxxx;
 		const float2 halfTexel = max(g_giParams1.zw, float2(1.0f / 4096.0f, 1.0f / 4096.0f));
 		const float4 centerNormalDepth = g_normalDepth.Sample(g_pointSampler, uv);
 		const float3 centerNormal = normalize(centerNormalDepth.xyz + float3(1e-5f, 1e-5f, 1e-5f));
@@ -83,6 +87,11 @@
 
 				accum += giSample * weight;
 				accumWeight += weight;
+				if (normalWeight * depthWeight > 0.5f && abs(x) <= 1 && abs(y) <= 1)
+				{
+					nMin = min(nMin, giSample);
+					nMax = max(nMax, giSample);
+				}
 			}
 		}
 
@@ -113,7 +122,15 @@
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
 		const float2 uv = input.texcoord;
-		const float4 currentRGBA = UpsampleGiBilateral(uv);
+		float4 nMin;
+		float4 nMax;
+		const float4 currentRGBA = UpsampleGiBilateral(uv, nMin, nMax);
+		// The 3x3 always contains the centre tap's own surface, but guard anyway.
+		if (nMax.a < nMin.a)
+		{
+			nMin = currentRGBA;
+			nMax = currentRGBA;
+		}
 		const float3 current     = currentRGBA.rgb;
 		const float  currentOcc  = currentRGBA.a;
 		const float debugMode = g_giParams0.z;
@@ -126,7 +143,12 @@
 		}
 
 		const float2 velocity = g_motionVectors.Sample(g_pointSampler, uv).xy;
-		const float2 historyUv = uv + velocity;
+		// CalcVelocity (Utils.shader) stores old-minus-new in CLIP space, +y UP.
+		// Texcoords are y-DOWN, so the previous-frame UV is uv + (v.x, -v.y).
+		// Adding it unflipped reprojected history from the mirrored vertical
+		// offset: on any pitch / forward move the lit GI history slid with the
+		// camera and then "re-settled" once motion stopped.
+		const float2 historyUv = uv + float2(velocity.x, -velocity.y);
 		const bool historyUvValid = all(historyUv >= 0.0f.xx) && all(historyUv <= 1.0f.xx);
 		const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 		const float shiftSettle = saturate(g_giParams6.y);
@@ -173,6 +195,16 @@
 		const float3 historyMin = current * minScale;
 		const float3 historyMax = current * maxScaleMotion + bias.xxx;
 		history = clamp(history, historyMin, historyMax);
+		// Neighbourhood clamp (standard TAA anti-ghosting): history may not
+		// leave the range the CURRENT frame shows around this pixel. The ratio
+		// clamp above allowed 0.45x-1.55x of current, which with long-range
+		// (cone) GI - high contrast, strong spatial gradients - left visibly
+		// lagging light trailing the camera.
+		{
+			const float3 slack = (nMax.rgb - nMin.rgb) * 0.25f + 0.01f;
+			history = clamp(history, nMin.rgb - slack, nMax.rgb + slack);
+			historyOcc = clamp(historyOcc, nMin.a - 0.05f, nMax.a + 0.05f);
+		}
 
 		float historyWeight = lerp(g_giParams1.x, 0.0f, rejectFactor);
 		historyWeight *= (1.0f - pixelMotionReject);
@@ -209,7 +241,11 @@
 
 		// During clipmap warm-up we temporarily cap per-frame GI deltas to suppress residual
 		// recenter flicker (single-frame dark/bright spikes).
-		if (historyUvValid && (warmStabilize > 0.0f || shiftSettle > 0.0f))
+		// Recentre settle limiter: warm-up only. It used to engage on
+		// shiftSettle too - i.e. during ANY camera movement - capping the
+		// per-frame GI change to a small absolute step, so stronger GI visibly
+		// lagged behind the camera. The shift itself is world-locked now.
+		if (historyUvValid && warmStabilize > 0.0f)
 		{
 			const float deltaLumScale = 0.08f + currentLum * 0.12f;
 			const float3 looseLimit = (0.28f + deltaLumScale).xxx;

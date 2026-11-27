@@ -1,5 +1,6 @@
 
 #include "Entity.hpp"
+#include <functional>
 #include "Component\Transform.hpp"
 #include "../HexEngine.hpp"
 #include "../Scene/Scene.hpp"
@@ -71,12 +72,18 @@ namespace HexEngine
 
 	void Entity::SetFlag(EntityFlags flags)
 	{
+		const bool shadowChange = (flags & EntityFlags::DoNotCastShadows) != EntityFlags::None && !HasFlag(EntityFlags::DoNotCastShadows);
 		_flags |= flags;
+		if (shadowChange)
+			OnCastShadowsChanged();
 	}
 
 	void Entity::ClearFlags(EntityFlags flags)
 	{
+		const bool shadowChange = (flags & EntityFlags::DoNotCastShadows) != EntityFlags::None && HasFlag(EntityFlags::DoNotCastShadows);
 		_flags &= ~flags;
+		if (shadowChange)
+			OnCastShadowsChanged();
 	}
 
 	EntityFlags Entity::GetFlags() const
@@ -96,10 +103,18 @@ namespace HexEngine
 
 		if (broadcast)
 		{
-			// Notify all entities first
+			// Only the parent acts on EntityDestroyed (it detaches us from its
+			// _children); scene-level listeners get it through the scene. This used
+			// to go to EVERY entity in the scene, each forwarding it to all its
+			// components and children - ~13k+ OnMessage calls per deleted entity,
+			// a visible hitch every time traffic despawned a car (one root + its
+			// generated parts) and ~3% of play-mode main-thread time.
 			EntityDestroyedMessage message(this);
 			message._entityId = GetId();
-			BroadcastMessage(&message);
+			if (_parent != nullptr)
+				_parent->OnMessage(&message, this);
+			if (_scene != nullptr)
+				_scene->BroadcastMessage(&message);
 		}
 
 		// Children are intentionally left attached. Scene::DestroyEntity walks our
@@ -278,7 +293,7 @@ namespace HexEngine
 		{
 			auto* component = _components.back().component;
 			const auto componentId = _components.back().id;
-			LOG_DEBUG("Destroying component with ID %d", componentId);
+			(void)componentId;
 			RemoveComponent(component);
 		}
 
@@ -292,6 +307,10 @@ namespace HexEngine
 		{
 			auto* child = _children.back();
 			_children.pop_back();
+			// We are being deleted: if the scene defers the child (mid-iteration) it
+			// must not keep a back-pointer to us.
+			if (child->_parent == this)
+				child->_parent = nullptr;
 			_scene->DestroyEntity(child);
 		}
 	}
@@ -322,7 +341,8 @@ namespace HexEngine
 
 		ComponentSignature previousSignature = _componentsSignature;
 
-		_componentsSignature = previousSignature & ~((ComponentSignature)1 << componentId);
+		_componentsSignature = previousSignature;
+		_componentsSignature.Clear(componentId);
 
 		auto* componentToDestroy = it->component;
 		_components.erase(it);
@@ -345,7 +365,8 @@ namespace HexEngine
 
 		ComponentSignature previousSignature = _componentsSignature;
 
-		_componentsSignature = previousSignature & ~((ComponentSignature)1 << id);
+		_componentsSignature = previousSignature;
+		_componentsSignature.Clear(id);
 
 		for (auto it = _components.begin(); it != _components.end(); it++)
 		{
@@ -389,19 +410,12 @@ namespace HexEngine
 
 		ComponentId newCompId = component->GetComponentId();
 
-		_componentsSignature |= ((ComponentSignature)1 << newCompId);
-
-		// strip off all the other components signatures first otherwise we will get overlap
-		/*for (auto& comp : _components)
-		{
-			if (comp.component != component)
-				_componentsSignature &= ~(1 << comp.id);
-		}*/
+		_componentsSignature.Set(newCompId);
 
 		// Does this component inherit from UpdateComponent? if so it should have its signature adjusted so it can be updated
 		if (component->CastAs<UpdateComponent>() != nullptr)
 		{
-			_componentsSignature |= ((ComponentSignature)1 << UpdateComponent::_GetComponentId());
+			_componentsSignature.Set(UpdateComponent::_GetComponentId());
 		}
 
 		_scene->OnEntityAddComponent(this, previousSignature, component);
@@ -437,7 +451,7 @@ namespace HexEngine
 
 		for (auto&& component : _components)
 		{
-			if ((signature & ((ComponentSignature)1 << component.id)) != 0)
+			if (signature.Has(component.id))
 				result.push_back(component.component);
 		}
 
@@ -478,18 +492,20 @@ namespace HexEngine
 		//	//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetUp() * 20.0f, math::Color(0, 1, 0, 1));
 		//}
 
+		// Editor gizmos only. Component OnDebugRender is dispatched per
+		// component TYPE by Scene::RenderDebug (only types that override it),
+		// which also only calls this for selected entities plus any entity
+		// whose hover flag still needs clearing.
 		_isEditorGizmoHovered = false;
+
+		if (!HasFlag(EntityFlags::SelectedInEditor))
+			return;
 
 		for (auto& comp : _components)
 		{
-			comp.component->OnDebugRender();
-
-			if (HasFlag(EntityFlags::SelectedInEditor))
-			{
-				bool hovering = false;
-				comp.component->OnRenderEditorGizmo(true, hovering);
-				_isEditorGizmoHovered |= hovering;
-			}
+			bool hovering = false;
+			comp.component->OnRenderEditorGizmo(true, hovering);
+			_isEditorGizmoHovered |= hovering;
 		}
 	}
 
@@ -1038,8 +1054,6 @@ namespace HexEngine
 
 			if (it != _children.end())
 			{
-				LOG_DEBUG("Removing child '%s' from parent '%s'", destroyMessage->_entity->GetName().c_str(), GetName().c_str());
-
 				// Detach both directions together. This message fires when the child is
 				// *marked* for removal (DeleteMe), not when it is finally deleted, so if
 				// we only drop it from our _children the child keeps a _parent pointer to
@@ -1102,7 +1116,26 @@ namespace HexEngine
 
 	void Entity::SetCastsShadows(bool castsShadows)
 	{
-		_canCastShadows = castsShadows;
+		if (castsShadows)
+			ClearFlags(EntityFlags::DoNotCastShadows);
+		else
+			SetFlag(EntityFlags::DoNotCastShadows);
+	}
+
+	void Entity::OnCastShadowsChanged()
+	{
+		// The shadow PVSes cache their casters: re-flush this entity and everything
+		// under it (the flag is inherited) so the change shows without a rebuild.
+		if (_scene == nullptr || !HasFlag(EntityFlags::HasBeenCreated))
+			return;
+		std::function<void(Entity*)> visit = [&](Entity* e)
+		{
+			_scene->FlushPVS(e);
+			for (auto* child : e->GetChildren())
+				if (child != nullptr)
+					visit(child);
+		};
+		visit(this);
 	}
 
 	bool Entity::GetCastsShadows()
@@ -1115,12 +1148,12 @@ namespace HexEngine
 		// change, marking a parent non-casting cascades to anything beneath it in the
 		// hierarchy, which is the natural semantic for opting an entire prefab/group out
 		// of shadow casting.
-		if (!_canCastShadows)
+		if (HasFlag(EntityFlags::DoNotCastShadows))
 			return false;
 
 		for (Entity* parent = _parent; parent != nullptr; parent = parent->_parent)
 		{
-			if (!parent->_canCastShadows)
+			if (parent->HasFlag(EntityFlags::DoNotCastShadows))
 				return false;
 		}
 
@@ -1141,6 +1174,8 @@ namespace HexEngine
 			prefabData["sourcePath"] = _prefabSourcePath.string();
 			prefabData["rootEntityName"] = _prefabRootEntityName;
 			prefabData["isRootInstance"] = _isPrefabInstanceRoot;
+			if (!_prefabRevision.empty())
+				prefabData["revision"] = _prefabRevision;
 
 			if (!_prefabPropertyOverrides.empty())
 			{
@@ -1197,15 +1232,13 @@ namespace HexEngine
 			component.component->Serialize(compData, file);
 
 			compsData.push_back(compData);
-
-			LOG_DEBUG("Saved component '%s::%s'", GetName().c_str(), component.component->GetComponentName())
 		}
 	}
 
 	Entity* Entity::LoadFromFile(json& data, const std::string& name, Scene* scene, JsonFile* file)
 	{
-		LOG_DEBUG("Loading entity '%s' from file", name.c_str());
-
+		// Per-entity / per-component load logging removed: on a 13k-entity scene
+		// it was ~20% of the loader thread (disk flush + log panel + bridge per line).
 		Entity* entity = scene->CreateEntity(name);
 
 		if (entity == nullptr)
@@ -1247,6 +1280,7 @@ namespace HexEngine
 			_prefabSourcePath = sourcePath.empty() ? fs::path() : fs::path(sourcePath);
 			_prefabRootEntityName = prefabData.value("rootEntityName", std::string());
 			_isPrefabInstanceRoot = prefabData.value("isRootInstance", false);
+			_prefabRevision = prefabData.value("revision", std::string());
 			_prefabPropertyOverrides.clear();
 			_prefabOverridePatches.clear();
 
@@ -1294,8 +1328,6 @@ namespace HexEngine
 		{
 			std::string componentName = comp.value()["name"];
 
-			LOG_DEBUG("Loading component id %s", componentName.c_str());
-
 			BaseComponent* component = GetComponentByClassName(componentName);			
 
 			// we only should add one of each component
@@ -1305,6 +1337,8 @@ namespace HexEngine
 				{
 					if (cls.second.name == componentName)
 					{
+						if (!cls.second.newInstanceFn)
+							break;   // class released while its module hot-reloads
 						component = cls.second.newInstanceFn(this);
 						AddComponent(component);
 						break;
@@ -1314,11 +1348,19 @@ namespace HexEngine
 
 			if (!component)
 			{
+				if (auto* released = g_pEnv->_classRegistry->Find(componentName); released != nullptr && !released->newInstanceFn)
+				{
+					LOG_WARN("Skipped component '%s' on '%s': its module is reloading", componentName.c_str(), GetName().c_str());
+					continue;
+				}
 				LOG_CRIT("Unhandled component load: %s", componentName.c_str());
 				return;
 			}
 
-			if (mask != 0 && (((ComponentSignature)1 << component->GetComponentId()) & mask) != mask)
+			// `mask` (a 32-bit Deserialize filter, e.g. "the Transform only") selects one
+			// component type by its bit; types past bit 31 are never selected by it.
+			const ComponentId maskedId = component->GetComponentId();
+			if (mask != 0 && (maskedId >= 32 || ((1u << maskedId) & mask) != mask))
 				continue;
 
 			component->Deserialize(comp.value(), file, mask);
@@ -1349,6 +1391,7 @@ namespace HexEngine
 		_isPrefabInstanceRoot = isRootInstance;
 		_prefabPropertyOverrides.clear();
 		_prefabOverridePatches.clear();
+		_prefabRevision.clear();
 	}
 
 	void Entity::ClearPrefabSource()
@@ -1358,6 +1401,7 @@ namespace HexEngine
 		_isPrefabInstanceRoot = false;
 		_prefabPropertyOverrides.clear();
 		_prefabOverridePatches.clear();
+		_prefabRevision.clear();
 	}
 
 	bool Entity::IsPrefabInstance() const

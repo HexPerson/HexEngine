@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include "../Required.hpp"
 #include "Scene.hpp"
 #include "../Graphics/GBuffer.hpp"
@@ -9,6 +11,7 @@
 #include "../Graphics/AutoExposure.hpp"
 #include "../Graphics/ColourLut.hpp"
 #include "DiffuseGI.hpp"
+#include "DDGI.hpp"
 #include "../Graphics/ClusteredLighting.hpp"
 #include "../Graphics/ShadowAtlas.hpp"
 #include "GpuVisibilityCulling.hpp"
@@ -18,13 +21,15 @@
 namespace HexEngine
 {
 	class Camera;
+	class PointLight;
+	class SpotLight;
 	class ITexture3D;
 	class IConstantBuffer;
 	class IVertexBuffer;
 		class IStructuredBuffer;
 	class IIndexBuffer;
 
-	class SceneRenderer
+	class HEX_API SceneRenderer
 	{
 	public:
 		SceneRenderer();
@@ -41,6 +46,10 @@ namespace HexEngine
 		ITexture2D* GetBeautyTexture() const;
 		std::shared_ptr<ITexture2D> GetNoiseTexture() const { return _blueNoise;}
 		const std::vector<Light*>& GetShadowCasters() const;
+
+		// Scene::FlushPVS hook: drops a removed entity from renderer-owned
+		// PVSes that aren't a camera's or a light's (the rain occlusion PVS).
+		void FlushRainOcclusionEntity(Entity* entity);
 		void ClearShadowCasters();
 		void RemoveShadowCaster(Light* light);
 
@@ -50,6 +59,7 @@ namespace HexEngine
 		// trace alpha) can grab the resolved RT without going through the
 		// scene-renderer's private members.
 		DiffuseGI* GetDiffuseGI() { return &_diffuseGi; }
+		DDGI* GetDDGI() { return &_ddgi; }
 		// The frame's weather-tinted flat ambient (same value the froxel fog
 		// medium uses). DiffuseGI reads it to couple its base diffuse injection
 		// to the actual scene light level - GI then tracks day/night/weather
@@ -73,7 +83,7 @@ namespace HexEngine
 		// Slice 7: render one local-light shadow face into its atlas tile
 		// (viewport-carved; the tile is cleared with a ClearView rect so
 		// cached neighbours survive).
-		void RenderShadowFaceToAtlas(const ShadowAtlas::FaceAssignment& assignment);
+		void RenderShadowFaceToAtlas(ShadowAtlas& atlas, const ShadowAtlas::FaceAssignment& assignment);
 
 		void RenderOpaque();
 		void RenderTransparent();
@@ -126,6 +136,40 @@ namespace HexEngine
 		void CreateSsrTargets(int32_t width, int32_t height);
 		void RenderLights();
 		void RenderPointLights();
+
+		// Sun cascade staggering (r_shadowCascadeStagger): per-cascade record of when
+		// it was last rendered and from where. A skipped cascade keeps BOTH its depth
+		// map and its matrices (ConstructMatrices is skipped too), so sampling stays
+		// consistent - it is simply a few frames old.
+		struct CascadeStaggerState
+		{
+			const void* light = nullptr;
+			const void* camera = nullptr;
+			bool valid[6] = {};
+			uint64_t lastFrame[6] = {};
+			math::Vector3 cameraPos[6];
+			math::Vector3 lightDir[6];
+		};
+		CascadeStaggerState _cascadeStagger;
+
+		// Distance-sorted, filtered (live, alpha > 0) light lists, rebuilt every
+		// r_lightSortInterval frames, when the camera moves > 2 m or changes, or when
+		// a light is added/removed (Scene::GetLightSetRevision). Several passes per
+		// frame used to gather + sort every light in the scene each.
+		template<typename T>
+		struct SortedLightCache
+		{
+			const void* scene = nullptr;
+			const void* camera = nullptr;
+			uint64_t revision = UINT64_MAX;
+			uint64_t frame = 0;
+			math::Vector3 cameraPos;
+			std::vector<T*> lights;
+		};
+		SortedLightCache<PointLight> _sortedPointLights;
+		SortedLightCache<SpotLight> _sortedSpotLights;
+		template<typename T>
+		const std::vector<T*>& GetSortedLights(SortedLightCache<T>& cache, const math::Vector3& cameraPos);
 		void RenderSpotLights();
 		void RenderDirectionalLights();
 		void RenderDiffuseGI();
@@ -166,6 +210,17 @@ namespace HexEngine
 		void RenderDecals();
 		void RenderVignette();
 		void SetStreamlineConstants();
+
+		// FSR 2 (IUpscalerProvider plugin) is upscaling the current camera.
+		bool IsFsrActive() const;
+		// Point shadows go through _pointShadowAtlas (sampled by the clustered
+		// apply + froxel fog) rather than dedicated cube maps + sphere passes.
+		bool IsPointAtlasMode() const;
+		// This frame's projection jitter in NDC for a render viewport: the upscaler's
+		// sequence while FSR is active, TAA's otherwise.
+		math::Vector2 GetFrameJitter(float renderWidth, float renderHeight) const;
+		// Runs the FSR upscale of _beautyRT into _dlssTarget. False = nothing written.
+		bool EvaluateFsr();
 
 		// Gathers the closest point + spot lights in the scene and uploads them to the
 		// forward-lights constant buffer (PS slot b7). Used by the transparency pass so glass /
@@ -395,7 +450,7 @@ namespace HexEngine
 		IConstantBuffer* _cloudConstantBuffer = nullptr;
 		IConstantBuffer* _forwardLightsBuffer = nullptr;
 		std::shared_ptr<Mesh> _sphereMesh = nullptr;
-		Entity* _sphereEntity = nullptr;
+		Entity* _sphereEntity = nullptr; // unused: the light volume no longer has an entity (kept so the class layout doesn't change)
 		std::shared_ptr<Material> _pointLightMaterial;
 		std::shared_ptr<Material> _spotLightMaterial;
 
@@ -404,13 +459,24 @@ namespace HexEngine
 		// Set when TAA or DLSS resolved this frame, so the overlay chain can skip FXAA
 		// rather than stacking a second, spatial AA pass on top of a temporal one.
 		bool _temporalAaAppliedThisFrame = false;
+		// Lit-preview view (PreviewLighting without post, e.g. a game map camera):
+		// transparents draw without the froxel/AP haze, whose volumes belong to
+		// the main camera.
+		bool _previewNoPost = false;
 
 		// Cut detection for TAA history invalidation - see RenderScene. Raw observer
 		// pointers, only ever compared for identity, never dereferenced.
 		Camera* _taaHistoryCamera = nullptr;
 		Scene* _taaHistoryScene = nullptr;
 		math::Vector3 _taaHistoryCameraPos = math::Vector3(0.0f, 0.0f, 0.0f);
+		// Same cut detection for the FSR history, tracked only across FSR renders so
+		// other cameras rendering in between (previews, captures) don't reset it.
+		Camera* _fsrHistoryCamera = nullptr;
+		Scene* _fsrHistoryScene = nullptr;
+		math::Vector3 _fsrHistoryCameraPos = math::Vector3(0.0f, 0.0f, 0.0f);
 		DiffuseGI _diffuseGi;
+		// Probe GI (compute ray traced) - owns indirect diffuse when r_ddgi is on.
+		DDGI _ddgi;
 		// GI ambient-ownership compose is live for the current view (main
 		// camera, GI on, blurred AO available). Set in SetupPerFrameBuffer
 		// (drives g_giComposeParams), read by RenderDirectionalLights to bind
@@ -422,6 +488,14 @@ namespace HexEngine
 		// keeps its dedicated cascade chain; point/spot faces allocate tiles
 		// here when r_shadowAtlas is on.
 		ShadowAtlas _shadowAtlas;
+		// Point lights' cube faces (1024 tiles): shaded in the clustered apply
+		// and froxel fog like atlas spots, cached while nothing moves.
+		ShadowAtlas _pointShadowAtlas;
+		// Last frame's point shadow casters: they rank 20% closer when the next
+		// set is chosen, so lamps near the cut don't flicker in and out.
+		std::vector<const Light*> _prevPointCasters;
+		// This frame's distance fade (0..1) per selected local shadow caster.
+		std::unordered_map<const void*, float> _shadowFade;
 		// Lazy r_shadowAtlasDebug overlay copy (raw atlas -> drawable SRV).
 		ITexture2D* _shadowAtlasDebugTex = nullptr;
 
@@ -515,5 +589,9 @@ namespace HexEngine
 		int32_t _ssrBaseHeight = 0;
 
 		DenoiserFrameData _denoiseFD;
+
+		// Scene the rain occlusion PVS snapshot was built from (identity only,
+		// never dereferenced): a different current scene forces a rebuild.
+		const Scene* _rainOcclusionScene = nullptr;
 	};
 }

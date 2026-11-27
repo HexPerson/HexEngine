@@ -482,6 +482,13 @@ namespace HexEngine
 					value.code = "g_weatherSurface.precipitationIntensity";
 				else if (key == "lightningFlash" || key == "lightning")
 					value.code = "g_weatherSurface.lightningFlash";
+				// 0 by day .. 1 at night, from the sun's light multiplier
+				// (g_globalLight.x = DayNightCycle daylight x boost, ~1.5 at noon,
+				// 0 after dusk). Rises once daylight is below ~0.5, so lit windows
+				// and signs come on through dusk, independent of the clock's
+				// hour-to-angle mapping.
+				else if (key == "night" || key == "nightFactor")
+					value.code = "saturate(1.0f - g_globalLight.x * 2.0f)";
 				else
 				{
 					ctx.errors.push_back(std::format(
@@ -698,9 +705,18 @@ namespace HexEngine
 			ss << "\"Requirements\"\n{\n}\n";
 			ss << "\"InputLayout\"\n{\n\tPosNormTanBinTex_INSTANCED\n}\n";
 			ss << "\"VertexShaderIncludes\"\n{\n\tMeshCommon\n\tUtils\n}\n";
-			ss << "\"PixelShaderIncludes\"\n{\n\tMeshCommon\n\tUtils\n\tAtmosphere\n\tPBRutils\n}\n";
+			// TransparentForward = the transparency phase's full forward lighting
+			// (sun cascade shadows, local lights, SSR + sky reflection, per-fragment
+			// fog), shared with DefaultPixel. It declares the pass resources at
+			// t10..t29, so a graph whose own textures reach t10 keeps the old
+			// sun-only shading rather than clashing registers.
+			const bool fullTransparency = ctx.nextTextureSlot <= 10;
+			ss << "\"PixelShaderIncludes\"\n{\n\tMeshCommon\n\tUtils\n\tAtmosphere\n\tPBRutils\n";
+			if (fullTransparency)
+				ss << "\tTransparentForward\n";
+			ss << "}\n";
 			ss << "\"VertexShader\"\n{\n";
-			ss << "\tMeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)\n\t{\n";
+			ss << "\tMeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID, uint vertexID : SV_VertexID)\n\t{\n";
 			ss << "\t\tMeshPixelInput output;\n";
 			ss << "\t\tinput.position.w = 1.0f;\n";
 			ss << "\t\tmatrix worldMatrix = mul(instance.world, g_worldMatrix);\n";
@@ -716,11 +732,18 @@ namespace HexEngine
 			ss << "\t\t\toutput.position.xyz += WindSwayOffset(output.position.xyz, worldMatrix[3].xyz, g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_time);\n";
 			ss << "\t\t\toutput.positionWS = output.position;\n";
 			ss << "\t\t}\n";
+			// Write SV_CullDistance on EVERY path (see Default.shader): left
+			// undefined when g_cullDistance == 0, optimised FXC folds the guard
+			// away and culls every triangle - the "invisible mesh, shadow fine"
+			// Release-only graph-shader bug that HLSL.cpp works around by
+			// skipping optimisation for generated shaders.
+			ss << "\t\toutput.cullDistance = 1.0f;\n";
 			ss << "\t\tif(g_cullDistance > 0.0f)\n\t\t{\n";
 			ss << "\t\t\toutput.cullDistance = length(output.positionWS.xyz - g_eyePos.xyz) >= g_cullDistance ? -1.0f : 1.0f;\n";
 			ss << "\t\t}\n";
 			ss << "\t\toutput.position = mul(output.position, g_viewProjectionMatrix);\n";
-			ss << "\t\tfloat4 prevFrame_worldPos = mul(input.position, worldPrev);\n";
+			// Skinned meshes (GpuSkinning) read last frame's pose - see MeshCommon.
+			ss << "\t\tfloat4 prevFrame_worldPos = mul(PreviousLocalPosition(input.position, vertexID), worldPrev);\n";
 			ss << "\t\t[branch]\n";
 			ss << "\t\tif (g_material.windSwayParams.w > 0.5f)\n\t\t{\n";
 			ss << "\t\t\tprevFrame_worldPos.xyz += WindSwayOffset(prevFrame_worldPos.xyz, worldPrev[3].xyz, g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_timePrev);\n";
@@ -775,8 +798,9 @@ namespace HexEngine
 			// editing only DefaultPixel once left the hall floor completely
 			// unaffected even at full strength.
 			// Shelter occlusion - matches DefaultPixel: covered surfaces get
-			// no rain or snow.
-			ss << "\t\tconst float __shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);\n";
+			// no rain or snow. Normal-aware so the inner face of an exterior
+			// wall doesn't read the open sky past the roof edge (PBRutils).
+			ss << "\t\tconst float __shelter = SampleRainShelterN(input.positionWS.xyz, normalize(input.normal), g_textureSampler);\n";
 			ss << "\t\tconst float __shelteredWetness = saturate((g_weatherSurface.wetness + g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * __shelter);\n";
 			ss << "\t\tfloat __wetFilm = 0.0f;\n";
 			// Sea contact (underwater S4) - lockstep with DefaultPixel; the
@@ -849,14 +873,30 @@ namespace HexEngine
 			// diffuse UNLIT wherever pos.w (the mask) is > 0.
 			ss << "\t\tconst float emissiveMask = saturate(dot(emission, float3(0.2126f, 0.7152f, 0.0722f)));\n";
 			ss << "\t\tfloat3 finalRGB = lerp(baseColor.rgb, emission, emissiveMask);\n";
+			ss << "\t\tfloat transparencyAlpha = saturate(opacity * baseColor.a);\n";
 			ss << "\t\tif (g_material.isInTransparencyPhase != 0)\n";
 			ss << "\t\t{\n";
-			ss << "\t\t\tfloat4 litSurface = CalculatePBRSurface(metallic, roughness, worldNormal, input.positionWS.xyz, -normalize(g_lightDirection.xyz), getSunColour(), baseColor.rgb, 1.0f, g_globalLight[0]);\n";
-			ss << "\t\t\tfinalRGB = lerp(litSurface.rgb, emission, emissiveMask);\n";
+			if (fullTransparency)
+			{
+				// Same shading as DefaultPixel's transparency phase (graph glass used
+				// to get sun-only N.L with no shadows, reflections or local lights -
+				// the "flat, washed-out windows"): rgb/alpha composed for straight
+				// alpha blending with the Fresnel reflection raising alpha, then fog
+				// at the fragment's own depth, then the emissive REPLACE (emission is
+				// not fogged, as there).
+				ss << "\t\t\tconst float4 glass = ShadeTransparentSurface(input.positionWS.xyz, worldNormal, baseColor.rgb, metallic, roughness, transparencyAlpha, g_textureSampler);\n";
+				ss << "\t\t\ttransparencyAlpha = glass.a;\n";
+				ss << "\t\t\tconst float3 litSurface = ApplyTransparentAtmosphere(glass.rgb, input.positionWS.xyz, input.position.xy, g_transFogVolume, g_transApVolume, g_transLinearSampler);\n";
+				ss << "\t\t\tfinalRGB = lerp(litSurface, emission, emissiveMask);\n";
+			}
+			else
+			{
+				ss << "\t\t\tfloat4 litSurface = CalculatePBRSurface(metallic, roughness, worldNormal, input.positionWS.xyz, -normalize(g_lightDirection.xyz), getSunColour(), baseColor.rgb, 1.0f, g_globalLight[0]);\n";
+				ss << "\t\t\tfinalRGB = lerp(litSurface.rgb, emission, emissiveMask);\n";
+			}
 			ss << "\t\t}\n";
 			ss << "\t\tfloat2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));\n";
-			ss << "\t\tfloat transparencyAlpha = saturate(opacity * baseColor.a);\n";
-			ss << "\t\tfloat outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;\n";
+			ss << "\t\tfloat outputAlpha =g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;\n";
 			// Rain-drip cell-grid diagnostic (see r_rainDripDebug) - same as
 			// DefaultPixel.shader so graph-compiled materials show the same
 			// visualization when the flag is on.
@@ -1031,6 +1071,12 @@ namespace HexEngine
 		{
 			if (auto* fsys = material.GetOwningFileSystem(); fsys != nullptr)
 			{
+				// Engine-owned materials of an INSTALLED build: the engine Data
+				// folder is read-only Program Files, so bake into the per-user
+				// data root instead. Loaded back by absolute path either way.
+				if (FileSystem::IsInstalledBuild() && g_pEnv != nullptr && fsys == &g_pEnv->GetFileSystem())
+					return FileSystem::GetUserDataRoot() / "GeneratedShaders";
+
 				const fs::path dataDir = fsys->GetDataDirectory();
 				if (!dataDir.empty())
 					return dataDir / "Shaders" / "Generated";
@@ -1152,7 +1198,15 @@ namespace HexEngine
 			//   6 - dust sampler arg (sand textures).
 			//   7 - vegetation wind sway in the emitted VS (WindSwayOffset
 			//       at g_time + g_timePrev, gated on windSwayParams.w).
-			combined += "\0codegen:8";
+			//   8 - (unrecorded)
+			//   9 - pre-skinned motion vectors (PreviousLocalPosition, SV_VertexID),
+			//       so graph materials work on GPU-skinned characters.
+			//  10 - normal-aware shelter (SampleRainShelterN): no rain droplets
+			//       on the inner faces of exterior walls.
+			// The separator is pushed as a char: the old "\0codegen:N" literal was a
+			// C string that ends at its first byte, so the salt was never appended.
+			combined += '\0';
+			combined += "codegen:10";
 
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);

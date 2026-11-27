@@ -23,6 +23,12 @@ namespace HexEngine
 
 		virtual void LateUpdate(float frameTime) {}
 
+		// Opt-in second pass, run by Scene::Update after EVERY component's Update
+		// and before rendering: for work that must see this frame's final poses
+		// of other entities (a player riding a moving bus follows it here).
+		virtual bool WantsPostUpdate() const { return false; }
+		virtual void PostUpdate(float frameTime) { (void)frameTime; }
+
 		void SetTickRate(int32_t tickRate);
 		int32_t GetTickRate() const;
 		bool CanUpdate() const;

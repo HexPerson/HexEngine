@@ -4,6 +4,7 @@
 #include "InteractionComponent.hpp"
 #include "../../Math/FloatMath.hpp"
 
+#include <algorithm>
 #include <vector>
 #include <string>
 #include <memory>
@@ -53,7 +54,14 @@ namespace HexEngine
 		float downforce = 6.0f;       // downforce at speed (m/s^2)
 
 		// Steering / orientation
-		float steer = 18.0f;          // yaw authority (torque scale)
+		// Steering is a turn-RATE controller: holding a direction asks for a yaw
+		// rate (tight at walking pace, capped at speed) and `steer` is how hard
+		// the body is torqued toward it - so releasing the key stops the turn
+		// instead of letting the bike keep spinning on its own momentum.
+		float steer = 18.0f;          // yaw-rate tracking gain (1/s)
+		float maxYawRate = 55.0f;     // full-lock turn rate at speed (deg/s)
+		float minTurnRadius = 4.5f;   // tightest turn radius - limits the rate at low speed (m)
+		float standYawRate = 12.0f;   // turn rate available near a standstill (deg/s)
 		float lean = 0.5f;            // lean-into-turn angle at speed (rad)
 		float upright = 55.0f;        // upright/lean P gain
 		float steerSmooth = 8.0f;     // digital steer smoothing rate (1/s)
@@ -68,6 +76,20 @@ namespace HexEngine
 		float chassisRestitution = 0.0f;  // collider bounciness
 
 		bool  debug = false;          // log grounded/speed/ray ~1/sec while possessed
+
+		// Hop (Space) + coming off the bike. A hop clears a kerb with a good
+		// line; hitting one (or landing badly) throws the rider off - the time
+		// lost getting back on is the penalty.
+		float hopSpeed = 3.2f;          // upward speed the hop kick reaches (m/s) - ~0.5 m of lift
+		float hopCooldown = 0.6f;       // seconds between hops
+		float crashSpeed = 4.0f;        // min speed (m/s) before an impact can throw the rider
+		float crashSpeedLoss = 0.6f;    // fraction of that speed lost within ~0.15 s = crash
+		// Kerb climbing: a low ledge in front of the chassis up to this high (m) is
+		// stepped up onto, the way a car's wheels roll over a kerb. 0 = off (the
+		// bikes: a kerb is something you hop or crash on).
+		float stepHeight = 0.0f;
+		float crashLandAngle = 40.0f;   // landing tilted more than this (deg) = crash
+		float crashRemountDelay = 2.5f; // seconds before a crashed bike can be remounted
 
 		// Mounted first-person camera. cameraOffset is the rider's eye in the
 		// vehicle's LOCAL space (up = +Y, length ~= Z); every vehicle sits the
@@ -141,12 +163,38 @@ namespace HexEngine
 		void SetSteerLeft(bool v) { _kLeft = v; }
 		void SetSteerRight(bool v) { _kRight = v; }
 		void SetHandbrake(bool v) { _kHandbrake = v; }
+		// Hop is edge-triggered: a press requests one hop (taken if grounded).
+		void SetHop(bool v) { if (v && !_kHop) _hopRequested = true; _kHop = v; }
+
+		// Crash state. ConsumeCrash() returns true ONCE per crash so game code can
+		// show feedback; IsCrashed() stays true until the bike is remounted.
+		bool ConsumeCrash() { const bool c = _crashEvent; _crashEvent = false; return c; }
+		bool IsCrashed() const { return _crashed; }
+		float CrashRemountSecondsLeft() const { return _crashed ? std::max(0.0f, _crashTimer) : 0.0f; }
 
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 		virtual bool CreateWidget(ComponentWidget* widget) override;
 
 		// Per-instance handling tuning (read every FixedUpdate; editable live).
+		// Runtime gameplay multipliers on top of the serialized tuning (upgrades,
+		// a heavy load, ...). Never saved; reset to 1 on play start by the game.
+		struct GameplayModifiers
+		{
+			float speed = 1.0f;       // x maxSpeed
+			float accel = 1.0f;       // x driveAccel
+			float brake = 1.0f;       // x brakeAccel
+			float grip = 1.0f;        // x grip
+			float wetPenalty = 1.0f;  // x the wet-road grip/brake loss (0 = weatherproof)
+		};
+		void SetGameplayModifiers(const GameplayModifiers& m) { _mods = m; }
+		const GameplayModifiers& GetGameplayModifiers() const { return _mods; }
+		// Current wet-road grip factor (1 = dry) - for HUD hints.
+		float GetWetGripFactor() const { return _wetGripFactor; }
+		// Kick the mounted camera (decays over ~0.4 s). 1 = a hard hit.
+		void AddCameraShake(float amount) { _camShake = std::min(1.5f, _camShake + std::max(0.0f, amount)); }
+		// Edge-triggered: true ONCE after the bike lands from a real drop (hop/kerb).
+		bool ConsumeLanding(float& impactSpeed) { const bool l = _landingEvent; _landingEvent = false; impactSpeed = _landingSpeed; return l; }
 		DriveTuning& GetTuning() { return _tuning; }
 		const DriveTuning& GetTuning() const { return _tuning; }
 
@@ -159,6 +207,9 @@ namespace HexEngine
 
 	private:
 		bool ResolveBody();
+		// Mounting a bike that's lying over: stand it up in place (heading kept),
+		// zero its motion and briefly suppress the crash checks.
+		void RightForMount();
 		// Collision-aware dismount placement. Probes candidate spots around the
 		// vehicle with scene rays (approach clearance from the seat, ground
 		// snap, headroom, body clearance) and returns the first clean foot
@@ -167,6 +218,9 @@ namespace HexEngine
 		bool IsDismountSpotClear(const math::Vector3& seat, const math::Vector3& dir, float lateral, math::Vector3& outFeet) const;
 		void CreateBinds();
 		void RemoveBinds();
+		// Throw the rider off: dismount next tick, lock out remounting for
+		// crashRemountDelay, and let the bike topple (upright control off).
+		void TriggerCrash(const char* reason, float speed);
 
 		// First-person camera mount: hand the main camera to this vehicle (on
 		// possess) and give it back to the player's FirstPersonCameraController
@@ -201,6 +255,7 @@ namespace HexEngine
 		bool _dismountRequested = false;
 		int32_t _dismountKeyBound = -1;          // key bound to BikeDismount while possessed
 		int64_t _lastPossessChangeFrame = -1;    // same-frame toggle debounce
+		bool _resumeRideAfterLoad = false;       // game save had the player riding: Possess() on next Update
 		// Where the player stood when they mounted - the dismount fallback when
 		// no spot around the vehicle is clear (it was a valid standing spot).
 		math::Vector3 _mountFromPos;
@@ -209,6 +264,33 @@ namespace HexEngine
 		// digital key state (player path)
 		bool _kThrottle = false, _kBrake = false, _kLeft = false, _kRight = false, _kHandbrake = false;
 		float _steerSmoothed = 0.0f;
+		// Heading at the previous physics step: the rigid-body interface has no
+		// angular-velocity read, so the yaw rate is a finite difference.
+		math::Vector3 _prevHeading = math::Vector3::Zero;
+		bool _hasPrevHeading = false;
+
+		// --- hop / crash runtime state (not serialized) ---
+		bool  _kHop = false;
+		bool  _hopRequested = false;
+		float _hopKickLeft = 0.0f;       // seconds of upward kick still to apply
+		float _hopCooldownLeft = 0.0f;
+		float _hopAirGrace = 0.0f;       // after a hop: no vertical damping / downforce
+		static constexpr int kSpeedWindow = 36;      // ~0.3 s of fixed steps at 120 Hz (a kerb hit decelerates over ~0.3 s as the capsule rides the face)
+		float _speedWindow[kSpeedWindow] = {};       // recent horizontal speeds (impact detection)
+		int   _speedWindowIdx = 0;
+		float _airborneTime = 0.0f;      // wheel line clearly off the ground (landing detection)
+		float _prevGroundY = 0.0f;       // seam guard: ground height under the wheels last step
+		float _stepCooldown = 0.0f;      // kerb climbing: time until the next step-up is allowed
+		bool  _chassisSized = false;     // kerb climbing: half length/width from the mesh parts
+		float _chassisHalfLength = 1.0f;
+		float _chassisHalfWidth = 0.4f;
+		bool  _hasPrevGroundY = false;
+		bool  _crashed = false;
+		float _crashTimer = 0.0f;        // remount lockout remaining
+		float _remountGrace = 0.0f;      // crash checks suppressed after righting on mount
+		float _crashTopple = 0.0f;       // seconds of tip-over torque remaining
+		float _crashToppleSide = 1.0f;
+		bool  _crashEvent = false;
 
 		// per-frame outputs
 		float _forwardSpeed = 0.0f;
@@ -248,6 +330,16 @@ namespace HexEngine
 		math::Vector3 _camEyeSmoothed;               // smoothed world eye position
 		math::Vector3 _camLookSmoothed;              // smoothed world look direction
 		math::Vector3 _camSavedViewOffset;           // player's eye-height view offset, restored on dismount
+		float _camBaseFov = 0.0f;                    // main camera FOV at mount, restored on dismount
+		float _camFovBoost = 0.0f;                   // smoothed speed-reactive FOV widening (deg)
+		float _camShake = 0.0f;                      // camera shake energy (decays)
+		float _camShakeTime = 0.0f;                  // shake noise phase
+		GameplayModifiers _mods;                     // runtime (not serialized)
+		float _wetGripFactor = 1.0f;                 // 1 dry .. v_bikeWetGrip at full wetness
+		float _wetBrakeFactor = 1.0f;
+		bool  _landingEvent = false;
+		float _landingSpeed = 0.0f;
+		float _lastVerticalSpeed = 0.0f;
 
 		// --- audio playback state (runtime; not serialized) ---
 		std::shared_ptr<SoundEffect> _engineMaster, _engineInst;

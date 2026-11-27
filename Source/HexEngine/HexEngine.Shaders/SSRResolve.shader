@@ -12,6 +12,8 @@
 	// Octahedral environment atlas + the shared EvaluateEnvSpecular that the
 	// deferred lighting pass calls with the same arguments.
 	EnvMapCommon
+	// Probe sky visibility for the env-spec occlusion while DDGI is active.
+	DDGICommon
 }
 "VertexShader"
 {
@@ -234,6 +236,10 @@
 			g_probeCenter, g_probeExtents, g_probeCenter2, g_probeExtents2,
 			envRadiance,
 			specularReflectance);
+
+		// DDGI: the probes' sky visibility occludes the env term (the voxel
+		// AO below is inactive while DDGI owns GI). No-op when DDGI is off.
+		envSpecular = DdgiOccludeEnvSpecular(envSpecular, specularReflectance, pixelPosWS.xyz, N, V, reflect(-V, N));
 
 		// GI specular occlusion on the ENV FALLBACK only. The env term has no
 		// occlusion of its own, so a matte indoor pixel (SSR confidence ~0)

@@ -51,7 +51,12 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
-      <Command>copy "$(TargetDir)$(TargetName).exe" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).exe"</Command>
+      <Command>rem A running MCP server (Claude Code starts it from Bin via .mcp.json) locks the exe: Windows allows
+rem renaming a running exe but not overwriting it, so move it aside, then clear old copies no longer in use.
+set "MCP_DEST=$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).exe"
+if exist "%MCP_DEST%" move /y "%MCP_DEST%" "%MCP_DEST%.%RANDOM%%RANDOM%.old" &gt;nul
+del /q "%MCP_DEST%.*.old" 2&gt;nul
+copy /y "$(TargetDir)$(TargetName).exe" "%MCP_DEST%"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -73,7 +78,12 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
-      <Command>copy "$(TargetDir)$(TargetName).exe" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).exe"</Command>
+      <Command>rem A running MCP server (Claude Code starts it from Bin via .mcp.json) locks the exe: Windows allows
+rem renaming a running exe but not overwriting it, so move it aside, then clear old copies no longer in use.
+set "MCP_DEST=$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).exe"
+if exist "%MCP_DEST%" move /y "%MCP_DEST%" "%MCP_DEST%.%RANDOM%%RANDOM%.old" &gt;nul
+del /q "%MCP_DEST%.*.old" 2&gt;nul
+copy /y "$(TargetDir)$(TargetName).exe" "%MCP_DEST%"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

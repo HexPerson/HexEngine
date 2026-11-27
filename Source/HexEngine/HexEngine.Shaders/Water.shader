@@ -498,6 +498,10 @@
 
 	WaterOut ShaderMain(MeshPixelInput input)
 	{
+		// The sea-level plane runs under the whole map: inside a TerrainCutout
+		// (a stairwell or cutting dug below sea level) it must not show.
+		clip(IsInsideTerrainCutout(input.positionWS.xyz) ? -1.0f : 1.0f);
+
 		float4 specular = float4(0, 0, 0, 1);
 
 		float3 eyeVector = normalize(g_eyePos.xyz - input.positionWS.xyz);

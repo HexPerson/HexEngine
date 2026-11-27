@@ -22,6 +22,10 @@ public:
 	const std::vector<std::string>& GetVehiclePrefabPaths() const { return _vehiclePrefabPaths; }
 	float GetSpawnIntervalSeconds() const { return _spawnIntervalSeconds; }
 	int32_t GetMaxActiveVehicles() const { return _maxActiveVehicles; }
+	// Night cap (< 0 = same as the day cap); the manager blends day->night by game time.
+	int32_t GetNightMaxActiveVehicles() const { return _nightMaxActiveVehicles < 0 ? _maxActiveVehicles : _nightMaxActiveVehicles; }
+	// No spawning while the camera is closer than this - cars appear out of sight.
+	float GetMinActivationDistance() const { return _minActivationDistance; }
 	float GetActivationDistance() const { return _activationDistance; }
 	float GetSpawnClearanceDistance() const { return _spawnClearanceDistance; }
 	bool IsEnabled() const { return _enabled; }
@@ -39,6 +43,8 @@ private:
 	std::vector<std::string> _vehiclePrefabPaths;
 	float _spawnIntervalSeconds = 2.0f;
 	int32_t _maxActiveVehicles = 6;
+	int32_t _nightMaxActiveVehicles = -1;
+	float _minActivationDistance = 0.0f;
 	float _activationDistance = 200.0f;
 	float _spawnClearanceDistance = 7.0f;
 	bool _enabled = true;

@@ -246,5 +246,15 @@ namespace HexEngine
 		// setFootPosition runs overlap recovery against world geometry) is very
 		// expensive when fired every frame by e.g. mouse-look rotation.
 		virtual bool IsCharacterController() const { return false; }
+
+		// Character controllers: the body whose collider the capsule is standing
+		// on (from the last Move), or null. Lets the controller ride moving
+		// platforms - a kinematic bus or train floor.
+		virtual IRigidBody* GetGroundBody() const { return nullptr; }
+
+		// Dynamic bodies: set the velocity directly (ragdoll limbs inherit the
+		// character's motion plus the hit). Declared last: vtable slots above unchanged.
+		virtual void SetLinearVelocity(const math::Vector3& velocity) { (void)velocity; }
+		virtual void SetAngularVelocity(const math::Vector3& velocity) { (void)velocity; }
 	};
 }

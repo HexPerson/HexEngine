@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Xml Include="shader.xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="HexEngine.Shaders.targets" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Headers">
+      <UniqueIdentifier>{b494e9b0-c1a3-472b-a661-1dd538ccbcf5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Cpp">
+      <UniqueIdentifier>{214c730e-0cc9-4059-8abf-4bc14e709e40}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="<$NAME>.hpp">
+      <Filter>Headers</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="<$NAME>.cpp">
+      <Filter>Cpp</Filter>
+    </ClCompile>
+	<ClCompile Include="Main.cpp">
+      <Filter>Cpp</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

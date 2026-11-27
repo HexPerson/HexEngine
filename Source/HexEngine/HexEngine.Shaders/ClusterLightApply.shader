@@ -53,7 +53,10 @@
 		float4 posRadius;
 		float4 colorStrength;
 		float4 dirCone;
-		float4 params; // x cos(inner), y type (0 point, 1 spot), z shadowed
+		float4 params; // x cos(inner) | area range, y type (0 point, 1 spot, 2 tube, 3 rect), z shadowed
+		float4 shape;  // area lights: xyz rect up * halfHeight, w two-sided (see PBRutils)
+		float4 ext0;           // points: room box min xyz, w shadow cross-fade (ClusteredLighting.hpp)
+		float4 ext1;           // points: room box max xyz, w unshadowed visibility scale
 	};
 
 	// Raw-bound by SceneRenderer at explicit slots (the engine API has no PS
@@ -74,9 +77,67 @@
 	static const float kAtlasTileUvSize = 1.0f / kAtlasTilesPerRow;
 	static const float kAtlasTexel = 1.0f / 8192.0f;
 
+	// Point-light atlas (ShadowAtlas kPointAtlasSize 8192 / kPointTileSize
+	// 1024 = 8x8 tiles). A point's six cube-face tiles ride in dirCone.xyzw +
+	// shape.xy (params.w = 1); their matrices follow the 16 spot tiles in
+	// g_atlasTileVP (ClusteredLighting::kSpotTileVps).
+	Texture2D                 g_pointShadowAtlas : register(t26);
+	static const float kPointAtlasTilesPerRow = 8.0f;
+	static const float kPointAtlasTexel = 1.0f / 8192.0f;
+	static const uint  kSpotTileVps = 16u;
+
+
+
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_pointSampler : register(s2);
+
+	// Engine cube-face order = PointLight.cpp gLightDirs [-Z, +Z, +Y, -Y, -X, +X]
+	// (same selection as PointLight.shader's CalculatePointShadowSample).
+	float PointAtlasShadow(GpuLight light, float3 worldPos, float3 worldNormal)
+	{
+		const float3 toPixel = worldPos - light.posRadius.xyz;
+		const float3 a = abs(toPixel);
+		// Face -> tile straight from the light's fields (faces 0..5 =
+		// dirCone.xyzw, shape.xy); selects rather than a runtime-indexed local
+		// array, which fxc would spill to an indexable temp.
+		float tileF;
+		if (a.z >= a.x && a.z >= a.y)
+			tileF = toPixel.z > 0.0f ? light.dirCone.y : light.dirCone.x;   // +Z 1 / -Z 0
+		else if (a.y >= a.x)
+			tileF = toPixel.y > 0.0f ? light.dirCone.z : light.dirCone.w;   // +Y 2 / -Y 3
+		else
+			tileF = toPixel.x > 0.0f ? light.shape.y : light.shape.x;       // +X 5 / -X 4
+		const int tile = (int)tileF;
+		if (tile < 0)
+			return 1.0f;
+
+		const float4 lightClip = mul(float4(worldPos, 1.0f), g_atlasTileVP[kSpotTileVps + (uint)tile]);
+		if (lightClip.w <= 0.0f)
+			return 1.0f;
+		const float3 ndc = lightClip.xyz / lightClip.w;
+		if (ndc.z <= 0.0f || ndc.z >= 1.0f)
+			return 1.0f;
+		float2 uv = float2(ndc.x * 0.5f + 0.5f, -ndc.y * 0.5f + 0.5f);
+
+		// Bias as the legacy point path (PointLight.shader).
+		const float NdotL = saturate(dot(worldNormal, normalize(-toPixel)));
+		const float compareZ = ndc.z - (0.0015f * (1.0f - NdotL) + 0.0008f);
+
+		// Clamp 1.5 texels inside the tile so the taps never read a neighbour.
+		const float tileUv = 1.0f / kPointAtlasTilesPerRow;
+		const float margin = 1.5f * kPointAtlasTexel / tileUv;
+		uv = clamp(uv, margin, 1.0f - margin);
+		const float2 tileXY = float2((float)(tile % (int)kPointAtlasTilesPerRow), (float)(tile / (int)kPointAtlasTilesPerRow));
+		const float2 atlasUv = (tileXY + uv) * tileUv;
+		const float t = kPointAtlasTexel;
+		float vis = 0.0f;
+		vis += g_pointShadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2( t,  t), compareZ);
+		vis += g_pointShadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2(-t,  t), compareZ);
+		vis += g_pointShadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2( t, -t), compareZ);
+		vis += g_pointShadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2(-t, -t), compareZ);
+		return saturate(vis * 0.25f);
+	}
 
 	static const uint  kClustersX = 16;
 	static const uint  kClustersY = 9;
@@ -161,8 +222,37 @@
 			// vector exists for slope-scaling); everything else shadowed
 			// stays on the per-light path exactly as before.
 			const bool atlasShadowed = light.params.z > 0.5f;
-			if (atlasShadowed && ((int)light.params.w < 0 || light.params.y < 0.5f))
+			const bool isPointLight = light.params.y < 0.5f;
+			const bool atlasPoint = atlasShadowed && isPointLight && light.params.w > 0.5f;
+			if (atlasShadowed && !atlasPoint && ((int)light.params.w < 0 || abs(light.params.y - 1.0f) > 0.5f))
 				continue; // per-light path's job
+
+			// Area lights (tube / rect): unshadowed, own geometry - see PBRutils'
+			// ComputeAreaLightTerms. Material decoded exactly as
+			// CalculatePBRPointLighting does (metallic .r, roughness .g).
+			if (light.params.y > 1.5f)
+			{
+				const float2 mr = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos).rg;
+				accum += ShadeAreaLight(pixelPosWS.xyz, normalWS, pixelColour.rgb, mr.r, mr.g,
+					light.colorStrength.rgb * light.colorStrength.w, light.params.y,
+					light.posRadius.xyz, light.dirCone, light.shape, light.params.x);
+				continue;
+			}
+
+			// Points: unshadowed visibility = inside the room box (params.x) x
+			// ext1.w (r_pointShadowFallback for a box-less caster). An atlas
+			// point cross-fades from this to its cube shadow by ext0.w, so a
+			// lamp gaining/losing its shadow slot doesn't pop.
+			float pointUnshadowed = 1.0f;
+			if (isPointLight)
+			{
+				pointUnshadowed = light.ext1.w;
+				if (light.params.x > 0.5f &&
+					(any(pixelPosWS.xyz < light.ext0.xyz) || any(pixelPosWS.xyz > light.ext1.xyz)))
+					pointUnshadowed = 0.0f;
+				if (!atlasPoint && pointUnshadowed <= 0.0f)
+					continue;
+			}
 
 			// PIXEL -> LIGHT. The old shaders name this exact vector
 			// "lightToPixelVec" while constructing lightPos - pixelPos; the name
@@ -183,7 +273,7 @@
 			float attenuation = distanceFalloff / max(d * d, minDistSqr);
 
 			// Spot cone, same smoothstep as SpotLight.shader.
-			if (light.params.y > 0.5f)
+			if (abs(light.params.y - 1.0f) < 0.5f)
 			{
 				// Inside the cone when the light->pixel direction aligns with
 				// the spot forward: that is minus the pixel->light vector.
@@ -205,7 +295,15 @@
 			// the lamp base). A tiny constant holds where the surface faces
 			// the light; the tan-shaped term only grows at grazing angles.
 			float shadowTerm = 1.0f;
-			if (atlasShadowed)
+			if (atlasPoint)
+			{
+				shadowTerm = lerp(pointUnshadowed, PointAtlasShadow(light, pixelPosWS.xyz, normalWS), saturate(light.ext0.w));
+			}
+			else if (isPointLight)
+			{
+				shadowTerm = pointUnshadowed;
+			}
+			else if (atlasShadowed)
 			{
 				const int tileIndex = (int)light.params.w;
 
@@ -255,13 +353,19 @@
 						sum += g_shadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2( 0.5f, -0.5f) * atlasTexel, cmpDepth);
 						sum += g_shadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2(-0.5f,  0.5f) * atlasTexel, cmpDepth);
 						sum += g_shadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2( 0.5f,  0.5f) * atlasTexel, cmpDepth);
-						shadowTerm = sum * 0.25f;
+						// Distance fade (ext0.w): far spots lose their shadow smoothly.
+						shadowTerm = lerp(1.0f, sum * 0.25f, saturate(light.ext0.w));
 					}
 				}
-
-				if (shadowTerm <= 0.001f)
-					continue;
 			}
+
+			// ONE early-out after the whole chain. A `continue` inside each
+			// branch of this if/else-if chain crashed FXC at optimisation
+			// level 3 ("internal error: argument pulled into unrelated
+			// predicate"), so Release shader builds failed while Debug
+			// (skip-optimisation) compiled fine. Keep the continue here.
+			if (shadowTerm <= 0.001f)
+				continue;
 
 			const float4 pbr = CalculatePBRPointLighting(
 				GBUFFER_SPECULAR,

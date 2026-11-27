@@ -46,6 +46,25 @@ namespace HexEngine
 		void Toggle();
 		bool IsDoorOpen() const { return _isOpen; }
 
+		// Sound slots ("" = silent; a comma list = random takes).
+		const std::string& GetOpenSoundPath() const { return _openSoundPath; }
+		const std::string& GetCloseSoundPath() const { return _closeSoundPath; }
+		bool HasAuthoredSounds() const { return !_openSoundPath.empty() || !_closeSoundPath.empty(); }
+
+		// Runtime fallback a game assigns to doors left silent in the editor
+		// (e.g. from its own sound table at play start). Deliberately NOT
+		// serialised: a game-state load restores components from saved json and
+		// would wipe a fallback written into the authored slots - and saves would
+		// carry every door's paths. Used only while the authored slot is empty.
+		void SetFallbackSounds(const std::string& open, const std::string& close, float volume)
+		{
+			_fallbackOpenPath = open;
+			_fallbackClosePath = close;
+			_fallbackVolume = volume;
+			_fallbackOpenSound = nullptr;
+			_fallbackCloseSound = nullptr;
+		}
+
 	private:
 		// Applies the current eased progress (_t) to the transform: slerps the
 		// rotation from closed->open and orbits the position around the hinge.
@@ -53,7 +72,13 @@ namespace HexEngine
 		// Removes/restores the door mesh from GI for the duration of a swing so the
 		// per-frame movement doesn't re-voxelise the clipmap every frame.
 		void SetSwingGiExclusion(bool excluded);
-		void PlayDoorSound(const std::string& path, std::shared_ptr<SoundEffect>& master);
+
+		// Play-time only: swap a frame-only triangle-mesh collider for a box that
+		// also covers collider-less child meshes (glass panes), so the focus ray
+		// (a physics query) hits the door through its glass. Returns true once
+		// done or not applicable; false = retry next tick (async cook in flight).
+		bool FitColliderToLeaf();
+		void PlayDoorSound(const std::string& path, std::shared_ptr<SoundEffect>& master, float volume);
 
 	private:
 		// --- Config (serialised + editor-exposed) ---
@@ -79,11 +104,19 @@ namespace HexEngine
 		// it settles. _meshOriginalExclude remembers that authored state.
 		bool             _giExcludedForSwing  = false;
 		bool             _meshOriginalExclude = false;
+		bool             _colliderFitted      = false; // FitColliderToLeaf done this play session
 
 		// Master sounds (lazy-loaded) + in-flight clones held alive (AudioManager
 		// keeps only weak refs).
 		std::shared_ptr<SoundEffect> _openSound;
 		std::shared_ptr<SoundEffect> _closeSound;
 		std::vector<std::shared_ptr<SoundEffect>> _activeSounds;
+
+		// Runtime-only fallback sounds (SetFallbackSounds; never serialised).
+		std::string _fallbackOpenPath;
+		std::string _fallbackClosePath;
+		float       _fallbackVolume = 0.8f;
+		std::shared_ptr<SoundEffect> _fallbackOpenSound;
+		std::shared_ptr<SoundEffect> _fallbackCloseSound;
 	};
 }

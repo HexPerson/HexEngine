@@ -40,6 +40,8 @@ TrafficSpawnerComponent::TrafficSpawnerComponent(HexEngine::Entity* entity, Traf
 		_vehiclePrefabPaths = copy->_vehiclePrefabPaths;
 		_spawnIntervalSeconds = copy->_spawnIntervalSeconds;
 		_maxActiveVehicles = copy->_maxActiveVehicles;
+		_nightMaxActiveVehicles = copy->_nightMaxActiveVehicles;
+		_minActivationDistance = copy->_minActivationDistance;
 		_activationDistance = copy->_activationDistance;
 		_spawnClearanceDistance = copy->_spawnClearanceDistance;
 		_enabled = copy->_enabled;
@@ -60,6 +62,8 @@ void TrafficSpawnerComponent::Serialize(json& data, HexEngine::JsonFile* file)
 	file->Serialize(data, "_vehiclePrefabPaths", _vehiclePrefabPaths);
 	file->Serialize(data, "_spawnIntervalSeconds", _spawnIntervalSeconds);
 	file->Serialize(data, "_maxActiveVehicles", _maxActiveVehicles);
+	file->Serialize(data, "_nightMaxActiveVehicles", _nightMaxActiveVehicles);
+	file->Serialize(data, "_minActivationDistance", _minActivationDistance);
 	file->Serialize(data, "_activationDistance", _activationDistance);
 	file->Serialize(data, "_spawnClearanceDistance", _spawnClearanceDistance);
 	file->Serialize(data, "_enabled", _enabled);
@@ -81,6 +85,8 @@ void TrafficSpawnerComponent::Deserialize(json& data, HexEngine::JsonFile* file,
 	}
 	file->Deserialize(data, "_spawnIntervalSeconds", _spawnIntervalSeconds);
 	file->Deserialize(data, "_maxActiveVehicles", _maxActiveVehicles);
+	file->Deserialize(data, "_nightMaxActiveVehicles", _nightMaxActiveVehicles);
+	file->Deserialize(data, "_minActivationDistance", _minActivationDistance);
 	file->Deserialize(data, "_activationDistance", _activationDistance);
 	file->Deserialize(data, "_spawnClearanceDistance", _spawnClearanceDistance);
 	file->Deserialize(data, "_enabled", _enabled);
@@ -157,6 +163,8 @@ bool TrafficSpawnerComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 	auto* drawDebug = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Draw Debug", &_drawDebug);
 	auto* interval = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Spawn Interval (s)", &_spawnIntervalSeconds, 0.05f, 600.0f, 0.1f, 2);
 	auto* maxActive = new HexEngine::DragInt(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Max Active", &_maxActiveVehicles, 0, 10000, 1);
+	new HexEngine::DragInt(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Max Active at Night (-1 = same)", &_nightMaxActiveVehicles, -1, 10000, 1);
+	new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Min Activation Distance (out of sight)", &_minActivationDistance, 0.0f, 50000.0f, 1.0f, 1);
 	auto* activationDistance = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Activation Distance", &_activationDistance, 1.0f, 50000.0f, 1.0f, 1);
 	auto* spawnClearanceDistance = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Spawn Clearance", &_spawnClearanceDistance, 0.0f, 5000.0f, 0.1f, 2);
 

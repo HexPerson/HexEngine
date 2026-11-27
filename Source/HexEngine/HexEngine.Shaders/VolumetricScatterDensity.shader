@@ -3,6 +3,7 @@
 	Global
 	AtmosphereCommon
 	CloudCommon
+	DDGICommon
 }
 "ComputeShader"
 {
@@ -76,7 +77,10 @@
 		float4 posRadius;      // xyz world, w radius
 		float4 colorStrength;  // rgb colour, w strength
 		float4 dirCone;        // spot: xyz dir, w cos(outer)
-		float4 params;         // x cos(inner), y type, z shadowed
+		float4 params;         // x cos(inner) | area range, y type (0 point, 1 spot, 2 tube, 3 rect), z shadowed
+		float4 shape;          // area lights - see PBRutils' packing doc
+		float4 ext0;           // points: room box min xyz, w shadow cross-fade (ClusteredLighting.hpp)
+		float4 ext1;           // points: room box max xyz, w unshadowed visibility scale
 	};
 	StructuredBuffer<ClGpuLight> g_clLights : register(t12);
 	StructuredBuffer<uint>       g_clCounts : register(t13);
@@ -104,6 +108,12 @@
 	// declared by the CloudCommon include (b4). Null-safe: an unbound b4
 	// reads half-extent 0 and SampleCloudShadowMap returns 1.
 	Texture2D                g_cloudShadowMap  : register(t21);
+	// Rect light images (ClusteredLighting's array, 1-based slice in dirCone.w):
+	// fog takes each image's average colour (last mip). Null when none exist.
+	Texture2DArray           g_clAreaTextures  : register(t22);
+	// Point-light shadow atlas (8x8 tiles of 1024); tile matrices follow the
+	// 16 spot tiles in g_clAtlasTileVP. Null when not in point-atlas mode.
+	Texture2D                g_clPointShadowAtlas : register(t23);
 	SamplerState g_shadowPointSampler : register(s2);
 	// Linear-clamp sampler for the transmittance LUT - the LUT is a
 	// continuous function so point sampling shows banding.
@@ -338,13 +348,47 @@
 	// flagged in params.z. g_emissiveParams.z carries "clustered fog active".
 	float3 EvalClusteredLightScatter(ClGpuLight light, float3 worldPos, float3 rayDir, float phaseG)
 	{
-		const float strength = light.colorStrength.w;
+		// Points carry a per-light fog scale in shape.w (interior lamps ~0).
+		// Points: fog scale (shape.w) and, when not atlas-shadowed, the
+		// unshadowed visibility scale (ext1.w = r_pointShadowFallback for a
+		// box-less caster; the atlas branch folds it into its own fade).
+		const float strength = light.colorStrength.w *
+			(light.params.y < 0.5f ? light.shape.w * (light.params.w < 0.5f ? light.ext1.w : 1.0f) : 1.0f);
 		if (strength <= 0.0f)
 			return float3(0.0f, 0.0f, 0.0f);
 
-		const float3 toLight = light.posRadius.xyz - worldPos;
+		// Area lights (tube / rect) scatter as a point light at the emitter's
+		// nearest point, ranged from the shape (params.x) - the shape's own
+		// extent is what gives the glow its elongated form.
+		float3 lightPos = light.posRadius.xyz;
+		float radius = light.posRadius.w;
+		float3 imageTint = 1.0f.xxx;
+		if (light.params.y > 1.5f)
+		{
+			const float3 rel = worldPos - light.posRadius.xyz;
+			const float hw = length(light.dirCone.xyz);
+			const float3 axisN = light.dirCone.xyz / max(hw, 1e-6f);
+			lightPos += axisN * clamp(dot(rel, axisN), -hw, hw);
+			if (light.params.y > 2.5f)
+			{
+				const float hh = length(light.shape.xyz);
+				const float3 upN = light.shape.xyz / max(hh, 1e-6f);
+				// One-sided rects light only the half-space they face.
+				if (light.shape.w < 0.5f && dot(rel, normalize(cross(upN, axisN))) <= 0.0f)
+					return float3(0.0f, 0.0f, 0.0f);
+				lightPos += upN * clamp(dot(rel, upN), -hh, hh);
+				if (light.dirCone.w > 0.5f)
+					imageTint = g_clAreaTextures.SampleLevel(g_linearSamplerAtm, float3(0.5f, 0.5f, light.dirCone.w - 1.0f), 9.0f).rgb;
+			}
+			radius = light.params.x;
+		}
+		// Room-clipped point: no indoor lamp glow in the air outside its room.
+		else if (light.params.y < 0.5f && light.params.w < 0.5f && light.params.x > 0.5f &&
+			(any(worldPos < light.ext0.xyz) || any(worldPos > light.ext1.xyz)))
+			return float3(0.0f, 0.0f, 0.0f);
+
+		const float3 toLight = lightPos - worldPos;
 		const float distSq = dot(toLight, toLight);
-		const float radius = light.posRadius.w;
 		if (distSq >= radius * radius)
 			return float3(0.0f, 0.0f, 0.0f);
 
@@ -353,7 +397,7 @@
 		float falloff = LocalLightFalloff(distSq, radius);
 
 		// Spot cone, matching the forward spot eval's smoothstep.
-		if (light.params.y > 0.5f)
+		if (abs(light.params.y - 1.0f) < 0.5f)
 		{
 			const float coneDot = dot(-lightDir, light.dirCone.xyz);
 			falloff *= smoothstep(
@@ -364,7 +408,7 @@
 
 		const float mu = dot(rayDir, lightDir);
 		const float phase = MiePhaseHG(mu, phaseG);
-		return light.colorStrength.rgb * (strength * falloff * phase);
+		return light.colorStrength.rgb * imageTint * (strength * falloff * phase);
 	}
 
 	float3 EvalPointLightScatter(uint i, float3 worldPos, float3 rayDir, float phaseG)
@@ -515,7 +559,25 @@
 		// raw froxel-boundary stairsteps without needing to bump the
 		// volume resolution. The +0.5f keeps the un-jittered position
 		// at the cell centre when g_jitter.xyz == (0,0,0).
-		const float3 uvw = (float3(dtid) + 0.5f + g_jitter.xyz) / float3(dims);
+		//
+		// The sequence is ROTATED per froxel (Cranley-Patterson: a fixed
+		// per-froxel hash offset, wrapped back into the cell). With one
+		// global offset every froxel sat at the same sub-cell position each
+		// frame, so the sampling error was spatially COHERENT: where the
+		// signal changes a lot inside one cell - the narrow cone under a
+		// street lamp's head, against 64 depth slices that are ~2.5 m deep
+		// at 20 m - the whole cone brightened and dimmed together, repeating
+		// with the 16-frame Halton period (measured: +/-8% at a lamp head
+		// with the camera still) - visible as PULSING. Rotated, neighbours
+		// sample different sub-positions in the same frame, so the error
+		// is decorrelated noise that the 3x3x3 spatial filter and the
+		// temporal EMA average away; each froxel still walks the full
+		// low-discrepancy sequence over 16 frames.
+		uint hj = dtid.x * 73856093u ^ dtid.y * 19349663u ^ dtid.z * 83492791u;
+		hj ^= hj >> 16; hj *= 0x7feb352du; hj ^= hj >> 15; hj *= 0x846ca68bu; hj ^= hj >> 16;
+		const float3 cellRot = float3(hj & 0x3ffu, (hj >> 10) & 0x3ffu, (hj >> 20) & 0x3ffu) / 1024.0f;
+		const float3 froxelJitter = frac(g_jitter.xyz + 0.5f + cellRot) - 0.5f;
+		const float3 uvw = (float3(dtid) + 0.5f + froxelJitter) / float3(dims);
 
 		// Reconstruct world ray direction from screen UV. Same trick the AP
 		// volume uses: unproject the far-plane NDC, take direction from eye.
@@ -541,7 +603,24 @@
 		// Extinction stored per-step (volume integration multiplies by
 		// step length later). Keep separate so integration can apply
 		// per-froxel step distance.
-		const float extinction = max(0.0f, density);
+		float extinction = max(0.0f, density);
+		// (DDGICommon: VolumetricScattering.cpp binds the probes, t56-64 / b8,
+		// for this dispatch; with DDGI inactive b8 is null and this is skipped.)
+		// Weather fog stays outside. The medium density is authored for open
+		// air; indoors the same haze turned rooms milky and sky-lit. With
+		// DDGI the probes know how much of the sky a point can see (irradiance
+		// alpha = cosine-weighted fraction of rays that escaped), so the fog's
+		// extinction - and with it the ambient haze, which scales with it - is
+		// scaled by the sky visibility looking UP from this froxel. The sun
+		// shafts are untouched: their scattering rate (MIE_COEFF) is
+		// independent of fog density, so god rays through windows survive.
+		// g_ddgiParams4.y = remaining fraction in fully enclosed air;
+		// g_ddgiParams4.z = max distance (m) the probes are consulted at.
+		if (g_ddgiCascade[0].dims.w > 0 && depthM < g_ddgiParams4.z)
+		{
+			const float skyVis = DdgiSampleIrradiance4(worldPos, float3(0.0f, 1.0f, 0.0f), -rayDir).a;
+			extinction *= lerp(saturate(g_ddgiParams4.y), 1.0f, smoothstep(0.05f, 0.60f, skyVis));
+		}
 
 		// Sun light contribution.
 		const float3 sunDir       = g_sunDirAndIntensity.xyz;
@@ -574,10 +653,20 @@
 		// interior margin) take part, so we never min against garbage sampled at
 		// a cascade border. If no cascade contains the froxel, visibility stays 0
 		// (out of shadow range -> no sun inscatter, the original gating).
+		// Depth compare bias, in METRES along the light and toward SHADOW.
+		// It used to subtract a fixed 0.001 of the cascade's NDC depth range
+		// (toward lit): with cascade ranges of hundreds of metres that let the
+		// air up to tens of cm - over a metre in the wide cascades - under
+		// every roof count as sunlit, a sun-angle-dependent haze sheet hanging
+		// under ceilings ("fog through the roof above the front door"). Air
+		// has no surface to acne against, so the bias can lean the other way:
+		// ~1.5 texels of the cascade (clamped 2-30 cm) covers the 2x2 PCF
+		// taps reading a sloped roof's deeper neighbouring texels. Shafts are
+		// prisms along the light, so the shift only trims their far end by
+		// at most 30 cm where they land.
 		float sunVisibility = 0.0f;
 		float anyCascade = 0.0f;
 		const uint cascadeCount = (uint)g_shadowParams.w;
-		const float bias        = g_shadowParams.x;
 		const float2 texel      = g_shadowParams.yz;
 		// SM5.0 sampler-array indices MUST be literal expressions -
 		// runtime loop counters don't qualify even with [unroll]. So
@@ -600,7 +689,14 @@
 				const float fade_##IDX = saturate(marginMin_##IDX / 0.05f);                           \
 				if (fade_##IDX > 0.5f)                                                                \
 				{                                                                                     \
-					const float compare_##IDX = depthFromLight_##IDX - bias;                          \
+					const float3 zAxis_##IDX = float3(g_sunCascadeVPs[IDX]._13,                       \
+						g_sunCascadeVPs[IDX]._23, g_sunCascadeVPs[IDX]._33);                          \
+					const float3 xAxis_##IDX = float3(g_sunCascadeVPs[IDX]._11,                       \
+						g_sunCascadeVPs[IDX]._21, g_sunCascadeVPs[IDX]._31);                          \
+					const float depthPerM_##IDX = length(zAxis_##IDX);                                \
+					const float texelM_##IDX = 2.0f * texel.x / max(length(xAxis_##IDX), 1e-6f);      \
+					const float pushM_##IDX = clamp(1.5f * texelM_##IDX, 0.02f, 0.30f);               \
+					const float compare_##IDX = depthFromLight_##IDX + pushM_##IDX * depthPerM_##IDX; \
 					float acc_##IDX = 0.0f;                                                           \
 					[unroll] for (int oy_##IDX = 0; oy_##IDX < 2; ++oy_##IDX)                         \
 					{                                                                                 \
@@ -719,15 +815,25 @@
 
 		if (clusteredFog)
 		{
-			// Froxel -> cluster (16x9x32). The cluster grid is fixed while the
-			// froxel dims are configurable, so derive the mapping from dims
-			// instead of hard-coding the division (the old 128x72x64 grid used
-			// /8,/8,/2). Exact when dims are multiples of the cluster grid -
-			// which the volume constants guarantee - and the depth slicing
-			// matches because both use the same exponential mapping.
-			const uint ccx = min(dtid.x * 16u / dims.x, 15u);
-			const uint ccy = min(dtid.y * 9u  / dims.y, 8u);
-			const uint ccz = min(dtid.z * 32u / dims.z, 31u);
+			// Froxel -> cluster (16x9x32), from the position the lights are
+			// actually evaluated at (jittered uv + this froxel's VIEW depth),
+			// with the cluster grid's own slicing - the same mapping the
+			// forward shaders use (ClusterLightCull: 0.1..128 m exponential).
+			// It used to be dtid.z * 32 / dims.z, which assumed the froxel
+			// volume and the clusters share one depth range. They don't since
+			// the volume grew to 384 m: a froxel 15 m away read the light list
+			// of the 7-9 m slice, so a lamp's cone was culled from whole
+			// cluster rows near its head and the glow ended in a hard,
+			// screen-aligned horizontal band (user: "street light has a hard
+			// band"). Beyond 128 m everything clamps into the far slice, which
+			// the cull already fills for that case.
+			const float4 fwdH = mul(float4(0.0f, 0.0f, 1.0f, 1.0f), g_viewProjectionMatrixInverse);
+			const float3 camFwd = normalize(fwdH.xyz / max(fwdH.w, 1e-6f) - g_eyePos.xyz);
+			const float viewDepth = depthM * max(dot(rayDir, camFwd), 1e-3f);
+			const float cw = log(max(viewDepth, 0.1f) / 0.1f) / log(128.0f / 0.1f);
+			const uint ccx = min((uint)(saturate(uvw.x) * 16.0f), 15u);
+			const uint ccy = min((uint)(saturate(uvw.y) * 9.0f), 8u);
+			const uint ccz = min((uint)(saturate(cw) * 32.0f), 31u);
 			const uint clusterIdx = (ccz * 9u + ccy) * 16u + ccx;
 			const uint cCount = min(g_clCounts[clusterIdx], 64u);
 			[loop] for (uint ci = 0u; ci < cCount; ++ci)
@@ -740,8 +846,49 @@
 					// no longer flows through the legacy shadow-slotted
 					// forward path). Everything else shadowed still belongs
 					// to the forward path.
+					// Atlas-shadowed point (params.w = 1, six face tiles in
+					// dirCone.xyzw + shape.xy): one tap on the face the froxel
+					// falls in - same face order as PointLight.shader.
+					if (cl.params.y < 0.5f && cl.params.w > 0.5f)
+					{
+						const float3 toPx = worldPos - cl.posRadius.xyz;
+						const float3 ap = abs(toPx);
+						int face;
+						if (ap.z >= ap.x && ap.z >= ap.y)
+							face = toPx.z > 0.0f ? 1 : 0;
+						else if (ap.y >= ap.x)
+							face = toPx.y > 0.0f ? 2 : 3;
+						else
+							face = toPx.x > 0.0f ? 5 : 4;
+						const float ptiles[6] = { cl.dirCone.x, cl.dirCone.y, cl.dirCone.z, cl.dirCone.w, cl.shape.x, cl.shape.y };
+						const int ptile = (int)ptiles[face];
+						if (ptile >= 0)
+						{
+							const float4 plc = mul(float4(worldPos, 1.0f), g_clAtlasTileVP[16 + ptile]);
+							if (plc.w > 0.0f)
+							{
+								float2 puv = float2(plc.x / plc.w * 0.5f + 0.5f, -plc.y / plc.w * 0.5f + 0.5f);
+								const float pDepth = plc.z / plc.w;
+								if (pDepth > 0.0f && pDepth < 1.0f)
+								{
+									puv = clamp(puv, 0.5f / 1024.0f, 1.0f - 0.5f / 1024.0f);
+									const float2 ptxy = float2((float)(ptile % 8), (float)(ptile / 8));
+									const float mapDepth = g_clPointShadowAtlas.SampleLevel(g_shadowPointSampler, (ptxy + puv) * 0.125f, 0).r;
+									shadowTerm = (pDepth - 0.001f) <= mapDepth ? 1.0f : 0.0f;
+								}
+							}
+						}
+						// Cross-fade from the unshadowed look (room box x ext1.w).
+						float fogUnsh = cl.ext1.w;
+						if (cl.params.x > 0.5f && (any(worldPos < cl.ext0.xyz) || any(worldPos > cl.ext1.xyz)))
+							fogUnsh = 0.0f;
+						shadowTerm = lerp(fogUnsh, shadowTerm, saturate(cl.ext0.w));
+						localScatter += EvalClusteredLightScatter(cl, worldPos, rayDir, phaseG) * shadowTerm;
+						continue;
+					}
+
 					const int tile = (int)cl.params.w;
-					if (tile < 0 || cl.params.y < 0.5f)
+					if (tile < 0 || abs(cl.params.y - 1.0f) > 0.5f)
 						continue;
 
 					const float4 lc = mul(float4(worldPos, 1.0f), g_clAtlasTileVP[tile]);
@@ -761,7 +908,7 @@
 							suv = clamp(suv, 0.5f / 2048.0f, 1.0f - 0.5f / 2048.0f);
 							const float2 atlasUv = (float2(tileX, tileY) + suv) * 0.25f;
 							const float mapDepth = g_clShadowAtlas.SampleLevel(g_shadowPointSampler, atlasUv, 0).r;
-							shadowTerm = (lightDepth - 0.0005f) <= mapDepth ? 1.0f : 0.0f;
+							shadowTerm = lerp(1.0f, (lightDepth - 0.0005f) <= mapDepth ? 1.0f : 0.0f, saturate(cl.ext0.w));
 						}
 					}
 				}

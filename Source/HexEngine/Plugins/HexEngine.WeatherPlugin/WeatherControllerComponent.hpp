@@ -83,7 +83,20 @@ namespace HexEngine::Weather
 		// debug menu, a cutscene, etc.) can force a weather change.
 		void AdvanceRandomCycle();
 
+		// Sky moods (see WeatherMoodId). Rolls a new mood for the current
+		// preset, avoiding the one already showing. slowBlend fades over
+		// _moodTransitionSeconds instead of the preset transition time.
+		void RollMood(bool slowBlend);
+		WeatherMoodId GetActiveMood() const { return GetEffectiveMoodRoll().mood; }
+
 	private:
+		WeatherMoodRoll GetEffectiveMoodRoll() const;
+		// The global preset's state with the active mood applied (Custom: the
+		// authored _globalState untouched).
+		WeatherState BuildGlobalState() const;
+		// Detects the day/night clock crossing midnight and rolls a new mood.
+		void UpdateMoodClock(Scene* scene);
+
 		// Picks the next preset for random cycling. Honors _naturalProgression: when
 		// true, picks a neighbour of the current preset from a hand-authored adjacency
 		// graph (Clear -> Overcast -> Rain -> HeavyRain -> ...). When false, any
@@ -97,6 +110,7 @@ namespace HexEngine::Weather
 		void UpdateLightning(Scene* scene, Camera* camera, const WeatherState& currentState, const WeatherState& targetState, float frameTime);
 		void UpdateAudio(Scene* scene, Camera* camera, const WeatherState& currentState, const WeatherState& targetState, float frameTime);
 		void CleanupHelperEntity(Entity*& entity);
+		void ValidateHelperEntities(Scene* scene);
 		Entity* EnsurePrecipitationEntity(Scene* scene, size_t index);
 		std::shared_ptr<ParticleEffect> BuildParticleEffect(const WeatherState& state) const;
 		float ComputeDesiredLoopGain(WeatherAudioLoopSlot slot, const WeatherState& state) const;
@@ -177,7 +191,26 @@ namespace HexEngine::Weather
 		};
 		std::vector<std::shared_ptr<PresetMaskBinding>> _presetMaskBindings;
 
+		// --- Sky moods ---
+		// _moodSelection: -1 = a random mood per in-game day (and per preset
+		// change), otherwise a WeatherMoodId pinned for look-dev. The roll is
+		// serialised so reloading a scene / save keeps today's look.
+		int32_t _moodSelection = -1;
+		float _moodStrength = 1.0f;
+		float _moodTransitionSeconds = 30.0f;
+		WeatherMoodRoll _moodRoll;
+		WeatherPresetId _moodRolledFor = WeatherPresetId::Custom;
+		bool _moodRolled = false;
+		bool _moodBlendPending = false;   // next transition uses _moodTransitionSeconds (not serialised)
+		float _lastClockHours = -1.0f;    // day/night clock last frame (not serialised)
+		uint32_t _moodRngState = 0;       // lazily seeded like _cycleRngState
+
 		std::array<Entity*, 7> _precipitationEntities = {};
+		// Generation-checked ids of the helpers above. The helpers are DoNotSave
+		// scene entities, so anything that rebuilds the scene behind our back (the
+		// play-mode stop restore) frees them while these raw pointers survive;
+		// ValidateHelperEntities() drops any pointer whose id no longer resolves to it.
+		std::array<EntityId, 7> _precipitationEntityIds = {};
 		std::array<WeatherLoopAudioRuntime, static_cast<size_t>(WeatherAudioLoopSlot::Count)> _loopAudioRuntime = {};
 		std::shared_ptr<SoundEffect> _thunderSound;
 		std::vector<ActiveThunderSoundRuntime> _activeThunderSounds;

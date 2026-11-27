@@ -1,769 +1,432 @@
 
 #include "PhysUtils.hpp"
+#include "RayMath.hpp"
 #include "../Scene/SceneManager.hpp"
+#include "../Scene/Scene.hpp"
+#include "../Scene/Mesh.hpp"
 #include "../Environment/IEnvironment.hpp"
-#include "../Terrain/ChunkManager.hpp"
 #include "../Entity/Component/RigidBody.hpp"
+#include "../Entity/Component/StaticMeshComponent.hpp"
+#include "../Input/HVar.hpp"
+#include "../Environment/LogFile.hpp"
+
+#include <mutex>
 
 namespace HexEngine
 {
+	HVar phys_rayBvh("phys_rayBvh", "PhysUtils::RayCast: test big meshes through a cached per-mesh triangle BVH (0 = brute force over every triangle)", true, false, true);
+	HVar phys_rayBvhMinTriangles("phys_rayBvhMinTriangles", "PhysUtils::RayCast: meshes with at least this many triangles get a ray BVH", 256u, 1u, 0x7FFFFFFFu);
+	HVar phys_raySpatialGrid("phys_raySpatialGrid", "PhysUtils::RayCast: gather candidate meshes from the scene spatial grid instead of scanning every static mesh component", true, false, true);
+
 	namespace PhysUtils
 	{
-		bool HEX_API RayCast(const math::Vector3& from, const math::Vector3& to, LayerMask mask, RayHit* hitInfo, const std::vector<Entity*>& entsToIgnore)
+		namespace
 		{
-			math::Vector3 direction = (to - from);
-			float maxDistance = direction.Length();
-			direction.Normalize();
+			// ---- Per-mesh ray BVH cache --------------------------------------
+			//
+			// Keyed by Mesh*, validated by a weak_ptr (a freed Mesh whose address
+			// is reused can't alias a stale entry) plus the mesh's geometry
+			// revision and vertex/index counts (rebuilt after
+			// UpdateDynamicGeometry / Add* / Clear). Built lazily on the first
+			// ray that reaches the mesh's triangles. A BVH is immutable once
+			// published, so rays hold a shared_ptr and test without the lock.
 
-			// sanity checks
-			if (to == from || maxDistance <= FLT_EPSILON)
+			struct MeshBvhEntry
+			{
+				std::weak_ptr<Mesh> mesh;
+				uint32_t revision = 0;
+				size_t vertexCount = 0;
+				size_t indexCount = 0;
+				std::shared_ptr<const RayMath::TriangleBVH> bvh;
+			};
+
+			std::mutex g_meshBvhMutex;
+			std::unordered_map<const Mesh*, MeshBvhEntry> g_meshBvhCache;
+			uint32_t g_meshBvhInsertsSincePurge = 0;
+
+			std::shared_ptr<const RayMath::TriangleBVH> GetMeshBvh(const std::shared_ptr<Mesh>& mesh, size_t triCount)
+			{
+				const auto& verts = mesh->GetVertices();
+				const auto& idx = mesh->GetIndices();
+				const uint32_t revision = mesh->GetGeometryRevision();
+
+				std::lock_guard<std::mutex> lock(g_meshBvhMutex);
+				auto it = g_meshBvhCache.find(mesh.get());
+				if (it != g_meshBvhCache.end())
+				{
+					const MeshBvhEntry& e = it->second;
+					if (e.mesh.lock() == mesh && e.revision == revision &&
+						e.vertexCount == verts.size() && e.indexCount == idx.size())
+						return e.bvh;
+				}
+
+				// (Re)build. Holding the cache lock keeps two rays from building
+				// the same mesh twice; builds are one-off per mesh revision.
+				const auto start = std::chrono::high_resolution_clock::now();
+				auto bvh = std::make_shared<RayMath::TriangleBVH>();
+				bvh->Build(triCount,
+					[&](size_t i) { return idx[i]; },
+					verts.size(),
+					[&](uint32_t vi) { const auto& p = verts[vi]._position; return math::Vector3(p.x, p.y, p.z); });
+				const float ms = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - start).count();
+				if (ms > 50.0f)
+				{
+					LOG_INFO("PhysUtils: built ray BVH for mesh '%s': %zu triangles, %zu nodes, %.1f MB in %.1f ms",
+						mesh->GetName().c_str(), bvh->TriangleCount(), bvh->NodeCount(), bvh->MemoryBytes() / (1024.0 * 1024.0), ms);
+				}
+
+				MeshBvhEntry entry;
+				entry.mesh = mesh;
+				entry.revision = revision;
+				entry.vertexCount = verts.size();
+				entry.indexCount = idx.size();
+				entry.bvh = bvh;
+				g_meshBvhCache[mesh.get()] = std::move(entry);
+
+				// Drop entries of meshes that have been freed.
+				if (++g_meshBvhInsertsSincePurge >= 64)
+				{
+					g_meshBvhInsertsSincePurge = 0;
+					for (auto purge = g_meshBvhCache.begin(); purge != g_meshBvhCache.end();)
+					{
+						if (purge->second.mesh.expired())
+							purge = g_meshBvhCache.erase(purge);
+						else
+							++purge;
+					}
+				}
+				return bvh;
+			}
+
+			struct SceneLockGuard
+			{
+				explicit SceneLockGuard(Scene* inScene) : scene(inScene) { scene->Lock(); }
+				~SceneLockGuard() { scene->Unlock(); }
+				SceneLockGuard(const SceneLockGuard&) = delete;
+				SceneLockGuard& operator=(const SceneLockGuard&) = delete;
+				Scene* scene;
+			};
+
+			// Entity-level filters shared by every hit source.
+			struct EntityFilter
+			{
+				const RayCastOptions& opt;
+
+				bool InSet(const std::unordered_set<Entity*>& set, Entity* e) const
+				{
+					for (Entity* x = e; x != nullptr; x = opt.hierarchical ? x->GetParent() : nullptr)
+					{
+						if (set.count(x) != 0)
+							return true;
+					}
+					return false;
+				}
+
+				bool Accept(Entity* e) const
+				{
+					// A collider with no owning entity has no layer and can't be in
+					// an ignore list; it can only fail an `only` filter.
+					if (e == nullptr)
+						return opt.only.empty();
+					if (e->IsPendingDeletion())
+						return false;
+					const uint32_t layer = static_cast<uint32_t>(e->GetLayer());
+					if (layer >= 32 || (opt.layerMask & (1u << layer)) == 0)
+						return false;
+					if (!opt.ignore.empty() && InSet(opt.ignore, e))
+						return false;
+					if (!opt.only.empty() && !InSet(opt.only, e))
+						return false;
+					return true;
+				}
+
+				static bool Thunk(Entity* e, void* context)
+				{
+					return static_cast<const EntityFilter*>(context)->Accept(e);
+				}
+			};
+
+			math::Vector3 ToVec3(const math::Vector4& v) { return math::Vector3(v.x, v.y, v.z); }
+
+			math::Vector3 SafeNormalized(math::Vector3 n, const math::Vector3& fallback)
+			{
+				const float len = n.Length();
+				if (!(len > 1e-30f) || !RayMath::IsFinite(len))
+					return fallback;
+				return n / len;
+			}
+
+			// Nearest triangle of one mesh entity, tested in object space. Fills
+			// `out` and returns true only for a hit nearer than `limit`.
+			bool RayCastMeshTriangles(Entity* entity, StaticMeshComponent* smc, const std::shared_ptr<Mesh>& meshPtr,
+				const math::Vector3& o, const math::Vector3& d, float limit, const RayCastOptions& opt, RayHit& out)
+			{
+				Mesh& mesh = *meshPtr;
+				const auto& verts = mesh.GetVertices();
+				const auto& idx = mesh.GetIndices();
+				const size_t triCount = std::min<size_t>(mesh.GetNumFaces(), idx.size() / 3);
+				if (verts.empty() || triCount == 0)
+					return false;
+
+				math::Matrix inv;
+				if (!RayMath::InvertWorld(entity->GetWorldTM(), inv))
+					return false;
+
+				const RayMath::ObjectRay ray = RayMath::ToObjectSpace(o, d, inv);
+				const bool slopeLimit = opt.minNormalY > -1.0f;
+
+				auto accept = [&](uint32_t, float, const math::Vector3& p0, const math::Vector3& p1, const math::Vector3& p2)
+				{
+					if (!slopeLimit)
+						return true;
+					const math::Vector3 n = RayMath::NormalToWorld(RayMath::FaceNormal(p0, p1, p2), inv);
+					return !RayMath::RejectsSlope(n, opt.minNormalY);
+				};
+
+				RayMath::TriangleHit tri;
+				std::shared_ptr<const RayMath::TriangleBVH> bvh;
+				if (phys_rayBvh._val.b && triCount >= std::max<uint32_t>(1u, phys_rayBvhMinTriangles._val.ui32))
+					bvh = GetMeshBvh(meshPtr, triCount);
+				if (bvh)
+				{
+					tri = bvh->Intersect(ray, limit, accept);
+				}
+				else
+				{
+					tri = RayMath::NearestTriangle(ray, triCount,
+						[&](size_t i) { return idx[i]; },
+						verts.size(),
+						[&](uint32_t vi) { return ToVec3(verts[vi]._position); },
+						limit,
+						accept);
+				}
+
+				if (!tri.hit)
+					return false;
+
+				const uint32_t i0 = idx[tri.triangle * 3 + 0];
+				const uint32_t i1 = idx[tri.triangle * 3 + 1];
+				const uint32_t i2 = idx[tri.triangle * 3 + 2];
+				const float w0 = 1.0f - tri.u - tri.v;
+
+				const math::Vector3 faceNormal = SafeNormalized(
+					RayMath::NormalToWorld(RayMath::FaceNormal(ToVec3(verts[i0]._position), ToVec3(verts[i1]._position), ToVec3(verts[i2]._position)), inv),
+					-d);
+				const math::Vector3 smooth = RayMath::NormalToWorld(
+					verts[i0]._normal * w0 + verts[i1]._normal * tri.u + verts[i2]._normal * tri.v, inv);
+
+				out = RayHit{};
+				out.start = o;
+				out.distance = tri.t;
+				out.position = o + d * tri.t;
+				out.entity = entity;
+				out.normal = faceNormal;
+				out.smoothNormal = SafeNormalized(smooth, faceNormal);
+				out.uv = verts[i0]._texcoord * w0 + verts[i1]._texcoord * tri.u + verts[i2]._texcoord * tri.v;
+				out.material = smc->GetMaterial();
+				out.source = RayHitSource::Mesh;
+				out.backFace = RayMath::IsBackFace(faceNormal, d);
+				out.triangleIndex = tri.triangle;
+				return true;
+			}
+
+			RayCastOptions LegacyOptions(float maxDistance, LayerMask mask, const std::vector<Entity*>& entsToIgnore)
+			{
+				RayCastOptions opt;
+				opt.maxDistance = maxDistance;
+				opt.layerMask = mask;
+				opt.meshes = true;
+				opt.rigidBodyColliders = true;
+				opt.physics = false; // legacy callers were never given scene colliders (CCT capsules etc.)
+				opt.includeHidden = false;
+				opt.hierarchical = true;
+				for (Entity* e : entsToIgnore)
+				{
+					if (e != nullptr)
+						opt.ignore.insert(e);
+				}
+				return opt;
+			}
+
+			std::shared_ptr<Scene> CurrentScene()
+			{
+				if (g_pEnv == nullptr || g_pEnv->_sceneManager == nullptr)
+					return nullptr;
+				return g_pEnv->_sceneManager->GetCurrentScene();
+			}
+		}
+
+		bool HEX_API RayCast(Scene* scene, const math::Vector3& origin, const math::Vector3& direction, const RayCastOptions& opt, RayHit* hitInfo)
+		{
+			if (scene == nullptr)
 				return false;
 
-			math::Ray ray;
-			ray.position = from;
-			ray.direction = direction;
+			const float dirLen = direction.Length();
+			if (!(dirLen > 1e-6f) || !RayMath::IsFinite(dirLen))
+				return false;
+			const math::Vector3 d = direction / dirLen;
+			const math::Vector3& o = origin;
 
-			return RayCast(ray, maxDistance, mask, hitInfo, entsToIgnore);
+			const float maxDist = (opt.maxDistance > 0.0f)
+				? std::min(opt.maxDistance, RayCastOptions::kUnlimitedDistance)
+				: RayCastOptions::kUnlimitedDistance;
+
+			SceneLockGuard sceneLock(scene);
+
+			const EntityFilter filter{ opt };
+			IPhysicsSystem* physicsSystem = g_pEnv != nullptr ? g_pEnv->_physicsSystem : nullptr;
+
+			RayHit best;
+			bool hasBest = false;
+			auto limit = [&]() { return hasBest ? best.distance : maxDist; };
+
+			if (opt.meshes)
+			{
+				const DirectX::XMVECTOR xo = DirectX::XMVectorSet(o.x, o.y, o.z, 1.0f);
+				const DirectX::XMVECTOR xd = DirectX::XMVectorSet(d.x, d.y, d.z, 0.0f);
+
+				// Broad phase: the scene's (loose) spatial grid, walking only the
+				// cells the ray segment passes through. Falls back to every
+				// static mesh component when the grid is off or unavailable.
+				std::vector<StaticMeshComponent*> meshComponents;
+				bool gathered = false;
+				if (phys_raySpatialGrid._val.b)
+				{
+					const math::Vector3 end = o + d * maxDist;
+					dx::BoundingBox segmentBounds;
+					dx::BoundingBox::CreateFromPoints(segmentBounds, o, end);
+					gathered = scene->QueryStaticMeshCullingCandidates(segmentBounds,
+						[&](const dx::BoundingBox& cell)
+						{
+							float cellDist = 0.0f;
+							return cell.Intersects(xo, xd, cellDist) && cellDist <= maxDist;
+						},
+						meshComponents);
+				}
+				if (!gathered)
+				{
+					meshComponents.clear();
+					scene->GetComponents<StaticMeshComponent>(meshComponents);
+				}
+
+				for (StaticMeshComponent* smc : meshComponents)
+				{
+					if (!(limit() > 0.0f))
+						break; // a hit at the origin can't be beaten
+
+					Entity* entity = smc != nullptr ? smc->GetEntity() : nullptr;
+					if (entity == nullptr)
+						continue;
+					if (!opt.includeHidden && entity->HasFlag(EntityFlags::DoNotRender))
+						continue;
+
+					// Broad phase. A ray starting INSIDE the box reports 0 and is
+					// kept (the old code dropped it, so nothing was ever hit from
+					// inside a building's bounds).
+					float boxDist = 0.0f;
+					if (!entity->GetWorldAABB().Intersects(xo, xd, boxDist))
+						continue;
+					if (boxDist > limit())
+						continue;
+
+					if (!filter.Accept(entity))
+						continue;
+
+					if (opt.rigidBodyColliders && physicsSystem != nullptr)
+					{
+						if (auto* rigidBody = entity->GetComponent<RigidBody>(); rigidBody != nullptr && rigidBody->GetIRigidBody() != nullptr)
+						{
+							RayHit h;
+							if (physicsSystem->RayCast(o, d, limit(), rigidBody->GetIRigidBody(), &h) == 0 || !(h.distance < limit()))
+								continue; // the collider IS this entity's shape for gameplay rays
+
+							h.normal = SafeNormalized(h.normal, -d);
+							if (!RayMath::RejectsSlope(h.normal, opt.minNormalY))
+							{
+								h.start = o;
+								h.entity = entity;
+								h.smoothNormal = h.normal;
+								h.uv = math::Vector2(0.0f, 0.0f);
+								h.material = smc->GetMaterial();
+								h.source = RayHitSource::Collider;
+								h.backFace = RayMath::IsBackFace(h.normal, d);
+								h.triangleIndex = UINT32_MAX;
+								best = h;
+								hasBest = true;
+								continue;
+							}
+							// Too steep: fall through to the triangles, which can
+							// see a flatter surface of the same entity behind it.
+						}
+					}
+
+					auto mesh = smc->GetMesh();
+					if (!mesh || mesh->HasAnimations())
+						continue;
+
+					RayHit h;
+					if (RayCastMeshTriangles(entity, smc, mesh, o, d, limit(), opt, h))
+					{
+						best = h;
+						hasBest = true;
+					}
+				}
+			}
+
+			if (opt.physics && physicsSystem != nullptr)
+			{
+				RaySceneFilter sceneFilter;
+				sceneFilter.acceptEntity = &EntityFilter::Thunk;
+				sceneFilter.context = const_cast<EntityFilter*>(&filter);
+				sceneFilter.minNormalY = opt.minNormalY;
+
+				RayHit h;
+				const float physLimit = limit();
+				if (physLimit > 0.0f &&
+					physicsSystem->RayCastSceneFiltered(o, d, physLimit, &h, sceneFilter) > 0 &&
+					h.distance < physLimit)
+				{
+					h.start = o;
+					h.normal = SafeNormalized(h.normal, -d);
+					h.smoothNormal = h.normal;
+					h.backFace = RayMath::IsBackFace(h.normal, d);
+					h.source = RayHitSource::PhysicsScene;
+					if (h.entity != nullptr)
+					{
+						if (auto* smc = h.entity->GetComponent<StaticMeshComponent>(); smc != nullptr)
+							h.material = smc->GetMaterial();
+					}
+					best = h;
+					hasBest = true;
+				}
+			}
+
+			if (hasBest && hitInfo != nullptr)
+				*hitInfo = best;
+			return hasBest;
+		}
+
+		bool HEX_API RayCast(const math::Vector3& from, const math::Vector3& to, LayerMask mask, RayHit* hitInfo, const std::vector<Entity*>& entsToIgnore)
+		{
+			const math::Vector3 delta = to - from;
+			const float distance = delta.Length();
+			if (!(distance > FLT_EPSILON))
+				return false;
+
+			auto scene = CurrentScene();
+			if (scene == nullptr)
+				return false;
+
+			return RayCast(scene.get(), from, delta, LegacyOptions(distance, mask, entsToIgnore), hitInfo);
 		}
 
 		bool HEX_API RayCast(const math::Ray& ray, float maxDistance, LayerMask mask, RayHit* hitInfo, const std::vector<Entity*>& entsToIgnore)
 		{
-			auto currentScene = g_pEnv->_sceneManager->GetCurrentScene();
-			if (currentScene == nullptr)
+			auto scene = CurrentScene();
+			if (scene == nullptr)
 				return false;
 
-			struct SceneRayCastLockGuard
-			{
-				explicit SceneRayCastLockGuard(const std::shared_ptr<Scene>& inScene) : scene(inScene)
-				{
-					if (scene != nullptr)
-						scene->Lock();
-				}
-
-				~SceneRayCastLockGuard()
-				{
-					if (scene != nullptr)
-						scene->Unlock();
-				}
-
-				std::shared_ptr<Scene> scene;
-			} sceneLockGuard(currentScene);
-
-			//PROFILE();
-
-			std::vector<RayHit> hits;
-
-			Entity* pickedEnt = nullptr;
-
-#if 0
-			if (g_pEnv->_chunkManager->HasActiveChunks())
-			{
-				auto chunk = g_pEnv->_chunkManager->GetChunkByPosition(ray.position);
-
-				if (chunk)
-				{
-					for (auto& entity : chunk->GetChunkChildren())
-					{
-						if ((mask & (1 << (uint32_t)entity->GetLayer())) == 0)
-							continue;
-
-						if (entity->IsPendingDeletion())
-							continue;
-
-						const auto& entityPosition = entity->GetComponent<Transform>()->GetPosition();
-
-						const auto& worldBB = entity->GetWorldAABB();
-
-						float dist = maxDistance;
-						float originalDist = dist;
-
-						if (ray.Intersects(worldBB, dist) && dist != 0.0f)
-							//if (traceRay.Intersects(worldBB, dist) && dist > 0.0f)
-						{
-							if (maxDistance != 0.0f)
-							{
-								if (dist > maxDistance)
-									continue;
-							}
-
-							// use new physx raycast instead of manually performing the trace
-
-							if (auto rigidBody = entity->GetComponent<RigidBody>(); rigidBody != nullptr)
-							{
-								RayHit tempHit;
-								if (g_pEnv->_physicsSystem->RayCast(ray.position, ray.direction, originalDist, rigidBody->GetIRigidBody(), &tempHit) > 0)
-								{
-									hits.push_back(tempHit);
-								}
-							}
-							else
-							{
-								// if it has a mesh renderer, perform a ray triangle intersection on the mesh to get correct hitpos
-								if (auto meshRenderer = entity->GetComponent<MeshRenderer>(); meshRenderer != nullptr)
-								{
-									for (auto& mesh : meshRenderer->GetMeshes())
-									{
-										auto& vertices = mesh->GetTransformedVertices();
-										auto& indices = mesh->GetIndices();
-
-										for (int i = 0; i < mesh->GetNumFaces(); ++i)
-										{
-											uint32_t i0 = indices[i * 3 + 0];
-											uint32_t i1 = indices[i * 3 + 1];
-											uint32_t i2 = indices[i * 3 + 2];
-
-											math::Vector4 v0 = vertices[i0]._position + entityPosition;
-											math::Vector4 v1 = vertices[i1]._position + entityPosition;
-											math::Vector4 v2 = vertices[i2]._position + entityPosition;
-
-											if (ray.Intersects(math::Vector3(v0), math::Vector3(v1), math::Vector3(v2), dist))
-											{
-												if (maxDistance != 0.0f)
-												{
-													if (dist > maxDistance)
-														continue;
-												}
-
-												RayHit tempHit;
-												tempHit.start = ray.position;
-												tempHit.distance = dist;
-												tempHit.position = ray.position + ray.direction * dist;
-												tempHit.entity = entity;
-												tempHit.normal = (vertices[i0]._normal + vertices[i1]._normal + vertices[i2]._normal) / 3.0f;
-												tempHit.normal.Normalize();
-
-												hits.push_back(tempHit);
-												break;
-											}
-										}
-									}
-								}
-								else
-								{
-									RayHit tempHit;
-									tempHit.start = ray.position;
-									tempHit.distance = dist;
-									tempHit.position = ray.position + ray.direction * dist;
-									tempHit.entity = entity;
-									tempHit.normal = math::Vector3::Up;
-
-									hits.push_back(tempHit);
-								}
-							}
-						}
-					}
-				}
-			}
-			else
-#endif
-			{
-				// use the list of renderables, because we know they have already been tested for visibility
-				//
-				std::vector<StaticMeshComponent*> entities;
-				currentScene->GetComponents<StaticMeshComponent>(entities);
-
-				for (auto&& component : entities)
-				{
-					auto entity = component->GetEntity();
-
-					if ((mask & (1 << (uint32_t)entity->GetLayer())) == 0)
-						continue;
-
-					if (entity->HasFlag(EntityFlags::DoNotRender))
-						continue;
-
-					bool skipThisEnt = false;
-
-					for (auto&& ignore : entsToIgnore)
-					{
-						if (entity == ignore)
-						{
-							skipThisEnt = true;
-							break;
-						}
-					}
-
-					if (skipThisEnt)
-						continue;
-
-					auto entityPosition = entity->GetComponent<Transform>()->GetPosition();
-
-					const auto& worldMatrix = entity->GetWorldTM();
-
-					const auto& worldBB = entity->GetWorldAABB();
-
-					float dist = maxDistance == 0.0f ? 1024.0f : maxDistance;
-					float originalDist = dist;
-
-					if (ray.Intersects(worldBB, dist) && dist != 0.0f)
-						//if (traceRay.Intersects(worldBB, dist) && dist > 0.0f)
-					{
-						if (maxDistance != 0.0f)
-						{
-							if (dist > maxDistance)
-								continue;
-						}
-
-						// use new physx raycast instead of manually performing the trace
-
-						if (auto rigidBody = entity->GetComponent<RigidBody>(); rigidBody != nullptr)
-						{
-							RayHit tempHit;
-							if (g_pEnv->_physicsSystem->RayCast(ray.position, ray.direction, originalDist, rigidBody->GetIRigidBody(), &tempHit) > 0)
-							{
-								tempHit.material = ((StaticMeshComponent*)component)->GetMaterial();
-
-								hits.push_back(tempHit);
-							}
-						}
-						else
-						{
-
-							// if it has a mesh renderer, perform a ray triangle intersection on the mesh to get correct hitpos
-							if (auto meshRenderer = (StaticMeshComponent*)component; meshRenderer != nullptr)
-							{
-								auto mesh = meshRenderer->GetMesh();
-								if(mesh)
-								{
-									if (mesh->HasAnimations())
-										continue;
-
-									auto& vertices = mesh->GetVertices();
-									auto& indices = mesh->GetIndices();
-
-									if (indices.size() < mesh->GetNumFaces() * 3)
-										continue;
-
-									for (uint32_t i = 0; i < mesh->GetNumFaces(); ++i)
-									{
-										uint32_t i0 = indices[i * 3 + 0];
-										uint32_t i1 = indices[i * 3 + 1];
-										uint32_t i2 = indices[i * 3 + 2];
-
-										math::Vector4 v0 = math::Vector4(vertices[i0]._position.x, vertices[i0]._position.y, vertices[i0]._position.z, 1.0f);
-										math::Vector4 v1 = math::Vector4(vertices[i1]._position.x, vertices[i1]._position.y, vertices[i1]._position.z, 1.0f);
-										math::Vector4 v2 = math::Vector4(vertices[i2]._position.x, vertices[i2]._position.y, vertices[i2]._position.z, 1.0f);
-
-										v0 = math::Vector4::Transform(v0, worldMatrix);
-										v1 = math::Vector4::Transform(v1, worldMatrix);
-										v2 = math::Vector4::Transform(v2, worldMatrix);
-
-										if (ray.Intersects(math::Vector3(v0), math::Vector3(v1), math::Vector3(v2), dist))
-										{
-											RayHit tempHit;
-											tempHit.start = ray.position;
-											tempHit.distance = dist;
-											tempHit.position = ray.position + ray.direction * dist;
-											tempHit.entity = entity;
-											tempHit.normal = (vertices[i0]._normal + vertices[i1]._normal + vertices[i2]._normal) / 3.0f;
-											tempHit.normal.Normalize();
-											tempHit.material = meshRenderer->GetMaterial();
-
-											// Barycentric interpolation of the hit UV so callers can sample
-											// per-region surface data (e.g. footstep surface-ID maps). Tri and
-											// hit point are both in world space here.
-											{
-												const math::Vector3 a(v0), b(v1), c(v2);
-												const math::Vector3 e0 = b - a, e1 = c - a, e2 = tempHit.position - a;
-												const float d00 = e0.Dot(e0);
-												const float d01 = e0.Dot(e1);
-												const float d11 = e1.Dot(e1);
-												const float d20 = e2.Dot(e0);
-												const float d21 = e2.Dot(e1);
-												const float denom = d00 * d11 - d01 * d01;
-												if (fabsf(denom) > 1e-12f)
-												{
-													const float vB = (d11 * d20 - d01 * d21) / denom;
-													const float wB = (d00 * d21 - d01 * d20) / denom;
-													const float uB = 1.0f - vB - wB;
-													tempHit.uv =
-														vertices[i0]._texcoord * uB +
-														vertices[i1]._texcoord * vB +
-														vertices[i2]._texcoord * wB;
-												}
-											}
-
-											hits.push_back(tempHit);
-											break;
-										}
-									}
-								}
-							}
-							else
-							{
-								RayHit tempHit;
-								tempHit.start = ray.position;
-								tempHit.distance = dist;
-								tempHit.position = ray.position + ray.direction * dist;
-								tempHit.entity = entity;
-								tempHit.normal = -ray.direction;
-
-								hits.push_back(tempHit);
-							}
-						}
-					}
-				}
-			}
-
-			std::sort(hits.begin(), hits.end(),
-				[](const RayHit& lhs, const RayHit& rhs) {
-					return fabs(lhs.distance) < fabs(rhs.distance);
-				});
-
-			if (hits.size() > 0)
-			{
-				*hitInfo = hits.at(0);
-				return true;
-			}
-
-			return false;
+			return RayCast(scene.get(), ray.position, ray.direction, LegacyOptions(maxDistance, mask, entsToIgnore), hitInfo);
 		}
-
-
-#if 0
-		bool Scene::CameraPickEntity(const math::Vector3& ray, RayHit& hit, uint32_t layerMask)
-		{
-			std::lock_guard<std::recursive_mutex> lock(_lock);
-
-			PROFILE();
-
-			if (auto camera = GetMainCamera(); camera != nullptr)
-			{
-				auto transform = camera->GetEntity()->GetComponent<Transform>();
-
-				auto startPos = transform->GetPosition();
-
-				//auto end			
-
-				std::vector<RayHit> pickedEntities;
-
-				Entity* pickedEnt = nullptr;
-
-				// use the list of renderables, because we know they have already been tested for visibility
-				//
-				for (auto&& renderable : _renderables[6])
-				{
-					for (auto&& pair : renderable.second)
-					{
-						auto entity = pair.second;
-
-						if (entity->IsPendingDeletion())
-							continue;
-
-						if (camera->GetEntity() == entity)
-							continue;
-
-						if ((layerMask & (1 << (uint32_t)entity->GetLayer())) == 0)
-							continue;
-
-						auto entityPosition = entity->GetComponent<Transform>()->GetPosition();
-
-						auto worldBB = entity->GetWorldAABB();
-
-						if (camera->IsVisibleInFrustum(worldBB))
-						{
-							math::Ray traceRay(startPos, ray);
-
-							float dist = 1024.0f;
-
-							if (worldBB.Intersects(startPos, ray, dist) && dist != 0.0f)
-								//if (traceRay.Intersects(worldBB, dist) && dist > 0.0f)
-							{
-								// if it has a mesh renderer, perform a ray triangle intersection on the mesh to get correct hitpos
-								if (auto meshRenderer = entity->GetComponent<MeshRenderer>(); meshRenderer != nullptr)
-								{
-									math::Ray meshRay;
-									meshRay.direction = ray;
-									meshRay.position = startPos;
-
-									for (auto& mesh : meshRenderer->GetMeshes())
-									{
-										auto& vertices = mesh->GetVertices();
-										auto& indices = mesh->GetIndices();
-
-										for (int i = 0; i < mesh->GetNumFaces(); ++i)
-										{
-											uint32_t i0 = indices[i * 3 + 0];
-											uint32_t i1 = indices[i * 3 + 1];
-											uint32_t i2 = indices[i * 3 + 2];
-
-											math::Vector4 v0 = vertices[i0]._position + entityPosition;
-											math::Vector4 v1 = vertices[i1]._position + entityPosition;
-											math::Vector4 v2 = vertices[i2]._position + entityPosition;
-
-											if (meshRay.Intersects(math::Vector3(v0), math::Vector3(v1), math::Vector3(v2), dist))
-											{
-												RayHit tempHit;
-												tempHit.start = startPos;
-												tempHit.distance = dist;
-												tempHit.position = startPos + ray * dist;
-												tempHit.entity = entity;
-												tempHit.normal = (vertices[i0]._normal + vertices[i1]._normal + vertices[i2]._normal) / 3.0f;
-												tempHit.normal.Normalize();
-
-												pickedEntities.push_back(tempHit);
-												break;
-											}
-										}
-									}
-								}
-								else
-								{
-									RayHit tempHit;
-									tempHit.start = startPos;
-									tempHit.distance = dist;
-									tempHit.position = startPos + ray * dist;
-									tempHit.entity = entity;
-									tempHit.normal = math::Vector3::Up;
-
-									pickedEntities.push_back(tempHit);
-								}
-							}
-						}
-					}
-				}
-
-				std::sort(pickedEntities.begin(), pickedEntities.end(),
-					[](const RayHit& lhs, const RayHit& rhs) {
-						return fabs(lhs.distance) < fabs(rhs.distance);
-					});
-
-				if (pickedEntities.size() > 0)
-				{
-					hit = pickedEntities.at(0);
-
-					_hasLastHit = true;
-					_lastHit = hit;
-
-					return true;
-				}
-			}
-
-			return false;
-		}
-
-		bool Scene::PickEntity(const math::Vector3& from, const math::Vector3& ray, RayHit& hit, uint32_t layerMask, float maxDistance /*= 0.0f*/)
-		{
-			std::lock_guard<std::recursive_mutex> lock(_lock);
-
-			PROFILE();
-
-			std::vector<RayHit> pickedEntities;
-
-			Entity* pickedEnt = nullptr;
-
-			if (g_pEnv->_chunkManager->HasActiveChunks())
-			{
-				auto chunk = g_pEnv->_chunkManager->GetChunkByPosition(from);
-
-				if (chunk)
-				{
-					for (auto& entity : chunk->GetChunkChildren())
-					{
-						if ((layerMask & (1 << (uint32_t)entity->GetLayer())) == 0)
-							continue;
-
-						if (entity->IsPendingDeletion())
-							continue;
-
-						const auto& entityPosition = entity->GetComponent<Transform>()->GetPosition();
-
-						const auto& worldBB = entity->GetWorldAABB();
-
-						float dist = maxDistance == 0.0f ? 1024.0f : maxDistance;
-						float originalDist = dist;
-
-						if (worldBB.Intersects(from, ray, dist) && dist != 0.0f)
-							//if (traceRay.Intersects(worldBB, dist) && dist > 0.0f)
-						{
-							if (maxDistance != 0.0f)
-							{
-								if (dist > maxDistance)
-									continue;
-							}
-
-#if 1
-							// use new physx raycast instead of manually performing the trace
-
-							if (auto rigidBody = entity->GetComponent<RigidBody>(); rigidBody != nullptr)
-							{
-								RayHit tempHit;
-								if (g_pEnv->_physicsSystem->RayCast(from, ray, originalDist, rigidBody->GetIRigidBody(), &tempHit) > 0)
-								{
-									pickedEntities.push_back(tempHit);
-								}
-							}
-
-
-#else
-							// if it has a mesh renderer, perform a ray triangle intersection on the mesh to get correct hitpos
-							if (auto meshRenderer = entity->GetComponent<MeshRenderer>(); meshRenderer != nullptr)
-							{
-								math::Ray meshRay;
-								meshRay.direction = ray;
-								meshRay.position = from;
-
-								for (auto& mesh : meshRenderer->GetMeshes())
-								{
-									auto& vertices = mesh->GetTransformedVertices();
-									auto& indices = mesh->GetIndices();
-
-									for (int i = 0; i < mesh->GetNumFaces(); ++i)
-									{
-										uint32_t i0 = indices[i * 3 + 0];
-										uint32_t i1 = indices[i * 3 + 1];
-										uint32_t i2 = indices[i * 3 + 2];
-
-										math::Vector4 v0 = vertices[i0]._position + entityPosition;
-										math::Vector4 v1 = vertices[i1]._position + entityPosition;
-										math::Vector4 v2 = vertices[i2]._position + entityPosition;
-
-										// calculate dot
-										auto dot = ray.Dot(math::Vector3(vertices[i0]._normal));
-
-										//if (dot > 0.0f)
-										//	continue;
-
-										if (meshRay.Intersects(math::Vector3(v0), math::Vector3(v1), math::Vector3(v2), dist))
-										{
-											if (maxDistance != 0.0f)
-											{
-												if (dist > maxDistance)
-													continue;
-											}
-
-											RayHit tempHit;
-											tempHit.start = from;
-											tempHit.distance = dist;
-											tempHit.position = from + ray * dist;
-											tempHit.entity = entity;
-											tempHit.normal = (vertices[i0]._normal + vertices[i1]._normal + vertices[i2]._normal) / 3.0f;
-											tempHit.normal.Normalize();
-
-											pickedEntities.push_back(tempHit);
-											break;
-										}
-									}
-								}
-							}
-#endif
-							else
-							{
-								RayHit tempHit;
-								tempHit.start = from;
-								tempHit.distance = dist;
-								tempHit.position = from + ray * dist;
-								tempHit.entity = entity;
-								tempHit.normal = math::Vector3::Up;
-
-								pickedEntities.push_back(tempHit);
-							}
-						}
-					}
-				}
-			}
-			else
-			{
-				// use the list of renderables, because we know they have already been tested for visibility
-				//
-				EntityComponentVector entities;
-				GetComponents(((ComponentSignature)1 << MeshRenderer::_GetComponentId()), entities);
-
-				for (auto&& component : entities)
-				{
-					auto entity = component->GetEntity();
-
-					if ((layerMask & (1 << (uint32_t)entity->GetLayer())) == 0)
-						continue;
-
-					auto entityPosition = entity->GetComponent<Transform>()->GetPosition();
-
-					const auto& worldMatrix = entity->GetWorldTM();
-
-					const auto& worldBB = entity->GetWorldAABB();
-
-					float dist = maxDistance == 0.0f ? 1024.0f : maxDistance;
-					float originalDist = dist;
-
-					if (worldBB.Intersects(from, ray, dist) && dist != 0.0f)
-						//if (traceRay.Intersects(worldBB, dist) && dist > 0.0f)
-					{
-						if (maxDistance != 0.0f)
-						{
-							if (dist > maxDistance)
-								continue;
-						}
-
-#if 1
-						// use new physx raycast instead of manually performing the trace
-
-						if (auto rigidBody = entity->GetComponent<RigidBody>(); rigidBody != nullptr)
-						{
-							RayHit tempHit;
-							if (g_pEnv->_physicsSystem->RayCast(from, ray, originalDist, rigidBody->GetIRigidBody(), &tempHit) > 0)
-							{
-								pickedEntities.push_back(tempHit);
-							}
-						}
-
-
-#else
-
-						// if it has a mesh renderer, perform a ray triangle intersection on the mesh to get correct hitpos
-						if (auto meshRenderer = (MeshRenderer*)component; meshRenderer != nullptr)
-						{
-							math::Ray meshRay;
-							meshRay.direction = ray;
-							meshRay.position = from;
-
-							for (auto& mesh : meshRenderer->GetMeshes())
-							{
-								auto& vertices = mesh->GetVertices();
-								auto& indices = mesh->GetIndices();
-
-								if (indices.size() < mesh->GetNumFaces() * 3)
-									continue;
-
-								for (int i = 0; i < mesh->GetNumFaces(); ++i)
-								{
-									uint32_t i0 = indices[i * 3 + 0];
-									uint32_t i1 = indices[i * 3 + 1];
-									uint32_t i2 = indices[i * 3 + 2];
-
-									math::Vector4 v0 = vertices[i0]._position; //+entityPosition;
-									math::Vector4 v1 = vertices[i1]._position; //+entityPosition;
-									math::Vector4 v2 = vertices[i2]._position; //+entityPosition;
-
-									v0 = math::Vector4::Transform(v0, worldMatrix);
-									v1 = math::Vector4::Transform(v1, worldMatrix);
-									v2 = math::Vector4::Transform(v2, worldMatrix);
-
-									if (meshRay.Intersects(math::Vector3(v0), math::Vector3(v1), math::Vector3(v2), dist))
-									{
-										RayHit tempHit;
-										tempHit.start = from;
-										tempHit.distance = dist;
-										tempHit.position = from + ray * dist;
-										tempHit.entity = entity;
-										tempHit.normal = (vertices[i0]._normal + vertices[i1]._normal + vertices[i2]._normal) / 3.0f;
-										tempHit.normal.Normalize();
-
-										pickedEntities.push_back(tempHit);
-										break;
-									}
-								}
-							}
-						}
-						else
-						{
-							RayHit tempHit;
-							tempHit.start = from;
-							tempHit.distance = dist;
-							tempHit.position = from + ray * dist;
-							tempHit.entity = entity;
-							tempHit.normal = math::Vector3::Up;
-
-							pickedEntities.push_back(tempHit);
-						}
-#endif
-					}
-				}
-			}
-
-			std::sort(pickedEntities.begin(), pickedEntities.end(),
-				[](const RayHit& lhs, const RayHit& rhs) {
-					return fabs(lhs.distance) < fabs(rhs.distance);
-				});
-
-			if (pickedEntities.size() > 0)
-			{
-				hit = pickedEntities.at(0);
-
-				_hasLastHit = true;
-				_lastHit = hit;
-
-				return true;
-			}
-
-			return false;
-		}
-
-		Entity* Scene::RayCast(const math::Ray& ray, float traceLength, math::Vector3& worldEndPos, uint32_t signature, Entity* ignore)
-		{
-			std::lock_guard<std::recursive_mutex> lock(_lock);
-
-			PROFILE();
-
-			auto startPos = ray.position;
-
-			std::vector<std::pair<Entity*, float>> pickedEntities;
-
-			Entity* pickedEnt = nullptr;
-
-			// Gather the chunks that this trace falls within
-			std::vector<Chunk*> traceChunks;
-
-			/*float chunkTraceDistRemaining = traceLength;
-			float traceCurrent = 0.0f;
-
-			while (chunkTraceDistRemaining > 0.0f)
-			{
-				auto chunk = g_pEnv->_chunkManager->GetChunkByPosition(ray.position + ray.direction * traceCurrent);
-
-				if (chunk)
-					traceChunks.push_back(chunk);
-				else
-					break;
-
-				float stepSize = chunkTraceDistRemaining;
-
-				if (stepSize > g_pEnv->_chunkManager->_chunkWidth)
-					stepSize = g_pEnv->_chunkManager->_chunkWidth;
-
-				traceCurrent += stepSize;
-				chunkTraceDistRemaining -= stepSize;
-			}*/
-
-			//for (auto& chunk : traceChunks)
-
-			EntityComponentVector components;
-
-			if (GetComponents(signature, components) == false)
-				return nullptr;
-
-			for (auto&& component : components)
-			{
-				Entity* entity = component->GetEntity();
-
-				if (entity == ignore)
-					continue;
-
-				if ((entity->GetPosition() - ray.position).Length() > traceLength + entity->GetBoundingSphere().Radius)
-					continue;
-
-				float dist = traceLength;
-
-				if (entity->GetWorldOBB().Intersects(ray.position, ray.direction, dist) && dist > 0.0f && dist <= traceLength)
-					//if (ray.Intersects(entity->GetWorldOBB()., dist) && dist > 0.0f && dist <= traceLength)
-				{
-					pickedEntities.push_back({ entity, dist });
-				}
-			}
-
-			std::sort(pickedEntities.begin(), pickedEntities.end(),
-				[](const std::pair<Entity*, float>& lhs, const std::pair<Entity*, float>& rhs) {
-					return lhs.second < rhs.second;
-				});
-
-			if (pickedEntities.size() > 0)
-			{
-				worldEndPos = startPos + ray.direction * pickedEntities.at(0).second;
-				return pickedEntities.at(0).first;
-			}
-
-			return nullptr;
-		}
-	}
-#endif
 	}
 }

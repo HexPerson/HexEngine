@@ -88,7 +88,7 @@ namespace HexEngine
 
 					float dir = _slowRandomPulseEffect.target > _slowRandomPulseEffect.current ? 1.0f : -1.0f;
 
-					_slowRandomPulseEffect.current += /*(_slowRandomPulseEffect.target - _slowRandomPulseEffect.current)*/dir * g_pEnv->_timeManager->GetFrameTime() * 1.4f;
+					_slowRandomPulseEffect.current += /*(_slowRandomPulseEffect.target - _slowRandomPulseEffect.current)*/dir * g_pEnv->_timeManager->GetGameFrameTime() * 1.4f;
 					_strength = std::clamp(_slowRandomPulseEffect.current, 0.0f, _originalStrength);
 					break;
 				}
@@ -222,7 +222,11 @@ namespace HexEngine
 	{
 		SERIALIZE_VALUE(_diffuseColour);
 		SERIALIZE_VALUE(_effect);
-		SERIALIZE_VALUE(_strength);
+		// While an effect animates _strength (e.g. SlowRandomPulse), the authored
+		// value is _originalStrength. Saving the animated value would bake in a
+		// random strength on every scene save / read-modify-write edit.
+		const float _strengthToSave = (_effect != LightingEffect::None) ? _originalStrength : _strength;
+		file->Serialize(data, "_strength", _strengthToSave);
 		SERIALIZE_VALUE(_radius);
 		SERIALIZE_VALUE(_doesCastShadows);
 		SERIALIZE_VALUE(_injectIntoGI);

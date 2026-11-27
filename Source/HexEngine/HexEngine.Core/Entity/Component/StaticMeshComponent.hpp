@@ -114,7 +114,18 @@ namespace HexEngine
 		// bleed into static surroundings. Unlike Material::AffectsGI (shared by
 		// every instance of that material) this is granular to the one entity.
 		void SetExcludeFromGI(bool value);
+		// Authored exclusion OR the runtime voxel-GI workaround below - what
+		// the voxel GI (and anything else that predates DDGI) should test.
 		bool GetExcludeFromGI() const;
+		// Authored "not GI geometry" only. DDGI tests this: it handles movers
+		// and material swaps natively, so the voxel workaround must not hide
+		// traffic / signals from its ray tracer.
+		bool GetExcludeFromGIAuthored() const { return _excludeFromGI; }
+		// Runtime-only (not serialised): keep this mesh out of the VOXEL GI
+		// for performance (spawned movers rebuilt clipmaps, lit-state material
+		// swaps invalidated them). DDGI still traces it.
+		void SetExcludeFromVoxelGI(bool value);
+		bool GetExcludeFromVoxelGI() const { return _excludeFromVoxelGI; }
 
 		// Runtime-only GI motion debounce (managed by Scene, never serialized): set
 		// true while this mesh is actively moving so it's dropped from the voxel
@@ -123,6 +134,11 @@ namespace HexEngine
 		// TransformChanged / Scene::UpdateGiMotionDebounce.
 		bool IsGiMotionExcluded() const { return _giMotionExcluded; }
 		void SetGiMotionExcluded(bool value) { _giMotionExcluded = value; }
+
+		// Whether this mesh is currently counted in the GI geometry revision (Scene
+		// resolves adds / flag changes once per frame - see Scene::ProcessPendingGiMeshes).
+		bool GetGiCounted() const { return _giCounted; }
+		void SetGiCounted(bool value) { _giCounted = value; }
 
 		const math::Vector3& GetOffsetPosition() const;
 		void SetOffsetPosition(const math::Vector3& offsetPosition);
@@ -146,7 +162,9 @@ namespace HexEngine
 		mutable std::recursive_mutex _lock;
 		bool _includeInGIWhenHidden = false;
 		bool _excludeFromGI = false;
+		bool _excludeFromVoxelGI = false;
 		bool _giMotionExcluded = false; // runtime-only; managed by Scene GI motion debounce
+		bool _giCounted = false;        // runtime-only; managed by Scene::ProcessPendingGiMeshes
 
 		math::Vector2 _uvScale;
 		math::Vector3 _offsetPosition;
@@ -169,6 +187,10 @@ namespace HexEngine
 		CullingMode _shadowCullingMode = CullingMode::FrontFace;
 
 		uint64_t _cachedRenderTransformVersion = 0;
+		// Frame the cached instance data's worldMatrixPrev belongs to. Several
+		// render lists (main PVS, each shadow cascade PVS) pull this cache in
+		// one frame; only a NEW frame with no movement may zero the velocity.
+		uint64_t _cachedRenderFrame = UINT64_MAX;
 		uint64_t _cachedRenderTransformVersionShadow = 0;
 		math::Vector4 _cachedRenderColour = math::Vector4::Zero;
 		math::Vector2 _cachedRenderUvScale = math::Vector2(0.0f, 0.0f);

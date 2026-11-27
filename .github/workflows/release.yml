@@ -1,0 +1,308 @@
+name: Release
+
+# Tag-driven Windows release. Pushing a tag vMAJOR.MINOR.PATCH builds HexEngine
+# Release|x64 with that version stamped into every binary, runs the unit tests,
+# stages exactly the files that ship (scripts/release/Stage-Release.ps1),
+# validates them, optionally code-signs them, and publishes a GitHub Release
+# with the installer and the portable ZIP. Nothing is published unless every
+# preceding step succeeds. See docs/RELEASING.md.
+#
+# Pull requests that touch the packaging, and manual runs, execute the whole
+# pipeline as a DRY RUN (build, stage, validate, ZIP, installer, silent
+# install/uninstall test) and upload the results as workflow artifacts - they
+# never create a release.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/release/**'
+      - 'installer/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to stamp for a dry run (MAJOR.MINOR.PATCH). No release is created.'
+        required: false
+        default: '0.0.0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build, stage and package (Release|x64)
+    runs-on: windows-2022
+    timeout-minutes: 300
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    env:
+      # Code signing is enabled only when these secrets exist (see RELEASING.md).
+      WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+      WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+      WINDOWS_SIGNING_TIMESTAMP_URL: ${{ secrets.WINDOWS_SIGNING_TIMESTAMP_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          lfs: false
+          submodules: recursive
+
+      # --- version: the tag is the single source of truth ---------------------
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.event_name }}' -eq 'push') {
+            ./scripts/release/Get-ReleaseVersion.ps1 -Tag '${{ github.ref_name }}'
+          } else {
+            $v = '${{ github.event.inputs.version }}'
+            if (-not $v) { $v = '0.0.0' }
+            ./scripts/release/Get-ReleaseVersion.ps1 -Tag "v$v"
+          }
+
+      # --- engine data from Git LFS (cached: LFS bandwidth is metered) ---------
+      - name: List LFS objects
+        shell: pwsh
+        run: git lfs ls-files --long | Out-File -Encoding utf8 .lfs-assets-id
+
+      - name: Restore LFS cache
+        uses: actions/cache@v6
+        with:
+          path: .git/lfs/objects
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+
+      - name: Pull LFS objects
+        run: git lfs pull
+
+      # --- dependencies (same caches as windows-modern-build.yml) --------------
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Restore built dependency libraries (Release)
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            Libs
+            Bin
+          key: hexdeps-${{ runner.os }}-release-${{ hashFiles('build/dependencies.lock.json') }}
+
+      - name: Bootstrap dependencies (Release)
+        run: python tools/deps/bootstrap.py --frozen bootstrap-minimal --configs Release
+
+      - name: Restore vcpkg manifest deps
+        uses: actions/cache/restore@v6
+        with:
+          path: vcpkg_installed
+          key: vcpkg-${{ runner.os }}-x64-windows-${{ hashFiles('vcpkg.json') }}
+
+      - name: vcpkg install manifest deps
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
+            --x-manifest-root="$env:GITHUB_WORKSPACE" `
+            --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed" `
+            --triplet x64-windows
+          if ($LASTEXITCODE -ne 0) { Write-Error "vcpkg install failed ($LASTEXITCODE)"; exit 1 }
+
+      - name: Prepare plugin output directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\Bin\x64\Release\Plugins" | Out-Null
+
+      # --- build ------------------------------------------------------------------
+      - name: Build HexEngine (Release|x64, version ${{ steps.version.outputs.version }})
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          & $msbuild "$env:GITHUB_WORKSPACE\Source\HexEngine\HexEngine-modern.slnf" `
+            /p:Configuration=Release /p:Platform=x64 `
+            /p:HexVersion=${{ steps.version.outputs.version }} /p:HexVersionIsRelease=true `
+            /m /nologo
+          if ($LASTEXITCODE -ne 0) { Write-Error "Build failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
+
+      # --- tests ------------------------------------------------------------------
+      - name: Build unit tests (Release|x64)
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          & $msbuild Source\HexEngine\HexEngine.Tests\HexEngine.Tests.vcxproj `
+            /p:Configuration=Release /p:Platform=x64 `
+            /p:SolutionDir=${{ github.workspace }}\Source\HexEngine\ `
+            /p:HexVersion=${{ steps.version.outputs.version }} /p:HexVersionIsRelease=true `
+            /m /nologo
+          if ($LASTEXITCODE -ne 0) { Write-Error "Test build failed ($LASTEXITCODE)"; exit 1 }
+
+      - name: Run unit tests
+        shell: pwsh
+        run: |
+          & Source\HexEngine\x64\Release\HexEngine.Tests.exe
+          if ($LASTEXITCODE -ne 0) { Write-Error "Unit tests FAILED (exit $LASTEXITCODE)"; exit 1 }
+
+      # --- stage, sign, validate ---------------------------------------------------
+      - name: Stage release (dist/HexEngine)
+        shell: pwsh
+        run: |
+          ./scripts/release/Stage-Release.ps1 -Version ${{ steps.version.outputs.version }} `
+            -SymbolsDir "$env:GITHUB_WORKSPACE\release-out\symbols"
+
+      - name: Validate staged release
+        shell: pwsh
+        run: ./scripts/release/Test-ReleaseStaging.ps1 -StagingDir dist/HexEngine -Version ${{ steps.version.outputs.version }}
+
+      - name: Code-sign binaries (skipped when no certificate is configured)
+        shell: pwsh
+        run: ./scripts/release/Invoke-CodeSigning.ps1 -Path dist/HexEngine
+
+      - name: Write plugin integrity manifest
+        shell: pwsh
+        run: ./scripts/release/New-PluginManifest.ps1 -StagingDir dist/HexEngine
+
+      - name: Validate signed release
+        shell: pwsh
+        run: ./scripts/release/Test-ReleaseStaging.ps1 -StagingDir dist/HexEngine -Version ${{ steps.version.outputs.version }} -RequirePluginManifest
+
+      # --- portable ZIP --------------------------------------------------------------
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          ./scripts/release/New-ReleaseZip.ps1 -SourceDir dist/HexEngine `
+            -DestinationPath "release-out/HexEngine-$v-Windows-x64.zip" -RootFolderName "HexEngine-$v"
+          ./scripts/release/New-ReleaseZip.ps1 -SourceDir release-out/symbols `
+            -DestinationPath "release-out/HexEngine-$v-Windows-x64-symbols.zip" -RootFolderName "HexEngine-$v-symbols"
+
+      # --- installer -------------------------------------------------------------------
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { Write-Error "Inno Setup install failed"; exit 1 }
+            $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { Write-Error "ISCC.exe not found after install"; exit 1 }
+          "ISCC=$iscc" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          & $iscc /? | Select-Object -First 1
+
+      - name: Locate VC++ Redistributable
+        shell: pwsh
+        run: |
+          # The redistributable that ships with the toolset that built the
+          # binaries (it must be at least that new).
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $redist = Get-ChildItem "$vs\VC\Redist\MSVC" -Directory |
+            Where-Object { $_.Name -match '^\d+\.\d+\.\d+$' } |
+            Sort-Object { [version]$_.Name } -Descending |
+            ForEach-Object { Join-Path $_.FullName 'vc_redist.x64.exe' } |
+            Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $redist) { Write-Error "vc_redist.x64.exe not found under $vs\VC\Redist\MSVC"; exit 1 }
+          $ver = (Get-Item $redist).VersionInfo.FileVersion -replace '^(\d+\.\d+\.\d+).*', '$1'
+          Write-Host "Bundling $redist ($ver)"
+          "VC_REDIST=$redist" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "VC_REDIST_VERSION=$ver" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          $isccArgs = @(
+            "/DAppVersion=$v",
+            "/DStagingDir=$env:GITHUB_WORKSPACE\dist\HexEngine",
+            "/DOutputDir=$env:GITHUB_WORKSPACE\release-out",
+            "/DVCRedist=$env:VC_REDIST",
+            "/DVCRedistVersion=$env:VC_REDIST_VERSION"
+          )
+          $signCmd = ./scripts/release/Invoke-CodeSigning.ps1 -EmitInnoSignToolCommand -Description 'HexEngine Setup'
+          if ($signCmd) {
+            $isccArgs += '/DSignToolName=hexsign'
+            $isccArgs += "/Shexsign=$signCmd"
+          }
+          & $env:ISCC @isccArgs "installer\HexEngine.iss"
+          $code = $LASTEXITCODE
+          Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $env:RUNNER_TEMP 'hexsign-inno.pfx')
+          if ($code -ne 0) { Write-Error "ISCC failed ($code)"; exit 1 }
+
+      - name: Verify release files
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          foreach ($f in "HexEngine-Setup-$v.exe", "HexEngine-$v-Windows-x64.zip") {
+            $p = "release-out/$f"
+            if (-not (Test-Path $p) -or (Get-Item $p).Length -eq 0) { Write-Error "Missing or empty: $p"; exit 1 }
+            Write-Host ("{0}  {1:N1} MB  sha256 {2}" -f $f, ((Get-Item $p).Length / 1MB), (Get-FileHash $p -Algorithm SHA256).Hash)
+          }
+
+      - name: Installer smoke test (silent install, check, uninstall)
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          $dir = Join-Path $env:RUNNER_TEMP 'HexEngineInstallTest'
+          $p = Start-Process "release-out/HexEngine-Setup-$v.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$dir", "/LOG=$env:RUNNER_TEMP\install.log" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\install.log" -Tail 40; Write-Error "Install failed ($($p.ExitCode))"; exit 1 }
+          foreach ($f in 'HexEngine.Editor.exe', 'HexEngine.Core.dll', 'HexEngine.installed', 'Plugins\plugins.json', 'Data\Shaders\Default.hcs', 'SDK\HexEngine.props') {
+            if (-not (Test-Path (Join-Path $dir $f))) { Write-Error "Installed tree is missing $f"; exit 1 }
+          }
+          $installedVersion = (Get-Item (Join-Path $dir 'HexEngine.Editor.exe')).VersionInfo.ProductVersion
+          if ($installedVersion -ne $v) { Write-Error "Installed editor reports $installedVersion, expected $v"; exit 1 }
+          $un = Start-Process (Join-Path $dir 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($un.ExitCode -ne 0) { Write-Error "Uninstall failed ($($un.ExitCode))"; exit 1 }
+          Start-Sleep -Seconds 3
+          if (Test-Path (Join-Path $dir 'HexEngine.Editor.exe')) { Write-Error "Uninstall left the editor behind"; exit 1 }
+          Write-Host "Installer install/uninstall round trip OK"
+
+      - name: Upload release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: hexengine-release-${{ steps.version.outputs.version }}
+          path: |
+            release-out/HexEngine-Setup-${{ steps.version.outputs.version }}.exe
+            release-out/HexEngine-${{ steps.version.outputs.version }}-Windows-x64.zip
+            release-out/HexEngine-${{ steps.version.outputs.version }}-Windows-x64-symbols.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    # Only a pushed version tag publishes; PRs and manual runs are dry runs.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@v8
+        with:
+          name: hexengine-release-${{ needs.build.outputs.version }}
+          path: release-out
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Fails (and publishes nothing) if a release for this tag already exists.
+          gh release create "$TAG" \
+            --verify-tag \
+            --title "HexEngine v$VERSION" \
+            --generate-notes \
+            "release-out/HexEngine-Setup-$VERSION.exe" \
+            "release-out/HexEngine-$VERSION-Windows-x64.zip" \
+            "release-out/HexEngine-$VERSION-Windows-x64-symbols.zip"

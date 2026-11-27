@@ -5,6 +5,18 @@
 
 namespace HexEngine
 {
+	void MotorComponent::Serialize(json& data, JsonFile* file)
+	{
+		SERIALIZE_VALUE(_speed);
+		SERIALIZE_VALUE(_direction);
+	}
+
+	void MotorComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
+	{
+		DESERIALIZE_VALUE(_speed);
+		DESERIALIZE_VALUE(_direction);
+	}
+
 	void MotorComponent::SetSpeed(float speed)
 	{
 		_speed = speed;

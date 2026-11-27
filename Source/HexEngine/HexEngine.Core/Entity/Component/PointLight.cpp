@@ -3,6 +3,7 @@
 #include "Transform.hpp"
 #include "../Entity.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
+#include "../../GUI/Elements/Checkbox.hpp"
 #include "../../GUI/Elements/ComponentWidget.hpp"
 
 namespace HexEngine
@@ -23,6 +24,13 @@ namespace HexEngine
 
 	PointLight::PointLight(Entity* entity, PointLight* clone) : Light(entity, clone)
 	{
+		if (clone != nullptr)
+		{
+			_roomClip = clone->_roomClip;
+			_roomClipMin = clone->_roomClipMin;
+			_roomClipMax = clone->_roomClipMax;
+			_fogScale = clone->_fogScale;
+		}
 		// The base clone ctor copied _doesCastShadows but NOT the per-side shadow
 		// cube maps - those are allocated lazily inside SetDoesCastShadows, which
 		// the clone path never runs. Without this, a cloned / prefab-spawned
@@ -48,16 +56,44 @@ namespace HexEngine
 	void PointLight::Serialize(json& data, JsonFile* file)
 	{		
 		Light::Serialize(data, file);
+		SERIALIZE_VALUE(_roomClip);
+		SERIALIZE_VALUE(_roomClipMin);
+		SERIALIZE_VALUE(_roomClipMax);
+		SERIALIZE_VALUE(_fogScale);
 	}
 
 	void PointLight::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
 		Light::Deserialize(data, file, mask);
+		DESERIALIZE_VALUE(_roomClip);
+		DESERIALIZE_VALUE(_roomClipMin);
+		DESERIALIZE_VALUE(_roomClipMax);
+		DESERIALIZE_VALUE(_fogScale);
 	}
 
 	void PointLight::SetDoesCastShadows(bool enabled)
 	{
-		if (enabled)
+		Light::SetDoesCastShadows(enabled);
+		// Dedicated cube maps are only needed by the LEGACY path (shadow atlas
+		// off / per-light sphere pass). They cost ~48 MB per light, so they are
+		// allocated on first legacy use (EnsureShadowMaps), not here. Turning
+		// shadows off still frees them.
+		if (!enabled)
+		{
+			for (auto i = 0; i < PointLightShadowSides_Count; ++i)
+				SAFE_DELETE(_shadowMaps[i]);
+		}
+	}
+
+	void PointLight::ReleaseDedicatedShadowMaps()
+	{
+		for (auto i = 0; i < PointLightShadowSides_Count; ++i)
+			SAFE_DELETE(_shadowMaps[i]);
+	}
+
+	void PointLight::EnsureShadowMaps()
+	{
+		if (_doesCastShadows)
 		{
 			for (auto i = 0; i < PointLightShadowSides_Count; ++i)
 			{
@@ -78,8 +114,6 @@ namespace HexEngine
 				SAFE_DELETE(_shadowMaps[i]);
 			}
 		}
-
-		Light::SetDoesCastShadows(enabled);
 	}
 
 	ShadowMap* PointLight::GetShadowMap(int32_t index) const
@@ -129,7 +163,8 @@ namespace HexEngine
 		if (!Light::CreateWidget(widget))
 			return false;
 
-		
+		new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Clip to room box when unshadowed", &_roomClip);
+		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Fog scale", &_fogScale, 0.0f, 1.0f, 0.01f, 2);
 
 		return true;
 	}

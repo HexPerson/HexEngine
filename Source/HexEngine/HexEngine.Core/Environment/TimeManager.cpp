@@ -4,6 +4,7 @@
 #include "LogFile.hpp"
 #include "IEnvironment.hpp"
 
+#include <algorithm>
 #include <time.h>
 #include <Windows.h>
 
@@ -94,7 +95,18 @@ namespace HexEngine
 
 		_accumulatedAverageFrameTimeMS += _frameTimeMS;
 
-		_accumulatedSimulationTime += _frameTime;
+		// Simulation control only applies to a running game; edit mode always
+		// runs at real time (see the members' comment in TimeManager.hpp).
+		if (g_pEnv == nullptr || !g_pEnv->IsGameRunning())
+		{
+			_simulationPaused = false;
+			_timeScale = 1.0f;
+			_pendingSimulationSteps = 0;
+		}
+		_gameFrameTime = _simulationPaused ? 0.0f : _frameTime * std::clamp(_timeScale, 0.0f, 100.0f);
+		_gameTime += _gameFrameTime;
+
+		_accumulatedSimulationTime += _gameFrameTime;
 
 		//if (g_pEnv->GetHasFocus() == false)
 		//{
